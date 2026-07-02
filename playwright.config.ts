@@ -10,9 +10,10 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], colorScheme: 'light' } },
     // Safari's engine: catches WebKit-only behavior like refusing Secure
     // cookies over plain http, which Chromium happily allows on localhost.
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    // Runs dark so both color schemes are covered (blueprint 03).
+    { name: 'webkit', use: { ...devices['Desktop Safari'], colorScheme: 'dark' } },
   ],
 });

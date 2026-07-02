@@ -9,7 +9,7 @@ import {
   setSessionCookie,
   verifyPassword,
 } from '../auth';
-import { db } from '../db';
+import { db, dbTransaction } from '../db';
 import { checkRateLimit, resetRateLimit } from '../rate-limit';
 import { publicProcedure, router } from '../trpc';
 
@@ -36,7 +36,12 @@ export const authRouter = router({
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid email or password.' });
     }
 
+    // A successful login clears both budgets: only FAILED attempts should
+    // accumulate toward the password-spraying limits. Legit users behind one
+    // NAT IP (or the e2e suite re-run against a live stack) must not lock the
+    // whole household out; an attacker can't reset without valid credentials.
     resetRateLimit(`login:email:${input.email}`);
+    resetRateLimit(`login:ip:${ctx.ip}`);
     await setSessionCookie(await createSession(user.id), ctx.secure);
     return { id: user.id, name: user.name };
   }),
@@ -68,7 +73,7 @@ export const authRouter = router({
       }
 
       const passwordHash = await hashPassword(input.password);
-      const user = await db.$transaction(async (tx) => {
+      const user = await dbTransaction(async (tx) => {
         const created = await tx.user.create({
           data: {
             name: input.name,

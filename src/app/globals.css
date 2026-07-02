@@ -1,26 +1,78 @@
 @import "tailwindcss";
 
+/* Raw tokens. Light on :root, dark via prefers-color-scheme. No toggle in v1. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --surface: #faf9f7;         /* page bg — warm off-white */
+  --surface-raised: #ffffff;  /* cards, inputs, tab bar */
+  --surface-sunken: #f0eeeb;  /* code chips, photo placeholders, pressed */
+  --border: #e7e5e4;          /* hairlines, dividers */
+  --border-strong: #a8a29e;   /* input borders, dashed empty-state */
+  --text: #1c1917;
+  --text-muted: #57534e;
+  --accent: #047857;          /* emerald-700: filled buttons, links, active tab */
+  --accent-strong: #065f46;   /* hover on accent; text on accent-soft */
+  --accent-contrast: #ffffff; /* text on accent */
+  --accent-soft: #d1fae5;     /* badge/tint bg */
+  --danger: #b91c1c;          /* danger text; destructive button bg */
+  --danger-contrast: #ffffff;
+  --danger-soft: #fee2e2;
+  --success: #166534;         /* positive money, success banner text */
+  --success-soft: #dcfce7;
+  --warn: #854d0e;
+  --warn-soft: #fef9c3;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --surface: #1c1917;         /* warm near-black, not #000 */
+    --surface-raised: #292524;
+    --surface-sunken: #141210;
+    --border: #44403c;
+    --border-strong: #79716b;
+    --text: #f5f5f4;
+    --text-muted: #a8a29e;
+    --accent: #34d399;          /* emerald-400 — white-on-emerald fails AA on dark, so flip */
+    --accent-strong: #6ee7b7;
+    --accent-contrast: #022c22; /* dark text on light-emerald buttons */
+    --accent-soft: #0f2e23;
+    --danger: #f87171;
+    --danger-contrast: #450a0a;
+    --danger-soft: #2c1515;
+    --success: #4ade80;
+    --success-soft: #14261c;
+    --warn: #facc15;
+    --warn-soft: #2a2410;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@theme inline {
+  --color-*: initial; /* delete Tailwind's palette: semantic names only */
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-contrast: var(--danger-contrast);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+@layer base {
+  body {
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
 }

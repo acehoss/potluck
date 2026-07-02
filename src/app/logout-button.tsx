@@ -22,7 +22,7 @@ export function LogoutButton() {
       type="button"
       onClick={() => logout.mutate()}
       disabled={logout.isPending}
-      className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-100 disabled:opacity-50"
+      className="rounded-lg border border-border-strong px-3 py-1.5 text-sm font-medium text-text transition-colors hover:bg-surface-sunken disabled:opacity-50"
     >
       Sign out
     </button>

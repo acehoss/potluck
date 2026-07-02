@@ -5,6 +5,7 @@ services:
       - "3000:3000"
     environment:
       DATABASE_URL: file:/data/coop.db
+      IMAGES_DIR: /data/images
       SEED_DEMO: ${SEED_DEMO:-0}
     volumes:
       - coop-data:/data

@@ -12,9 +12,10 @@ model Household {
   name      String
   createdAt DateTime @default(now())
 
-  members  User[]
-  pantries Pantry[]
-  invites  Invite[]
+  members   User[]
+  pantries  Pantry[]
+  invites   Invite[]
+  purchases Restock[] @relation("purchases")
 }
 
 model User {
@@ -25,9 +26,10 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
-  household      Household @relation(fields: [householdId], references: [id])
-  sessions       Session[]
-  invitesCreated Invite[]
+  household       Household @relation(fields: [householdId], references: [id])
+  sessions        Session[]
+  invitesCreated  Invite[]
+  restocksCreated Restock[]
 }
 
 model Session {
@@ -65,4 +67,96 @@ model Pantry {
   createdAt   DateTime @default(now())
 
   household Household @relation(fields: [householdId], references: [id])
+  restocks  Restock[]
+}
+
+// ---- slice 2: receiving (blueprint 01) ------------------------------------
+
+model Product {
+  id        String   @id @default(cuid())
+  name      String
+  // No unique: SKU merging is out of scope; the UI warns on dupes.
+  upc       String?
+  createdAt DateTime @default(now())
+
+  lots Lot[]
+
+  @@index([upc])
+}
+
+model Restock {
+  id                   String    @id @default(cuid())
+  pantryId             String
+  purchaserHouseholdId String
+  createdById          String // user who ran the receiving flow
+  retailer             String
+  purchasedAt          DateTime // receipt date; drives dateCode
+  status               String    @default("DRAFT") // "DRAFT" | "FINALIZED"
+  dateCode             String? // "260702", set at finalize
+  seq                  Int? // NN, 1-based; display code = `${dateCode}-${pad2(seq)}`
+  receiptTotalCents    Int?
+  varianceCents        Int? // receiptTotal − Σ lineTotal, set at finalize (D7)
+  finalizedAt          DateTime?
+  createdAt            DateTime  @default(now())
+
+  pantry             Pantry         @relation(fields: [pantryId], references: [id])
+  purchaserHousehold Household      @relation("purchases", fields: [purchaserHouseholdId], references: [id])
+  createdBy          User           @relation(fields: [createdById], references: [id])
+  images             RestockImage[]
+  lots               Lot[]
+
+  @@unique([dateCode, seq])
+  @@index([pantryId])
+}
+
+model RestockImage {
+  id        String @id @default(cuid())
+  restockId String
+  path      String // under IMAGES_DIR volume; retained permanently (SPEC §4)
+  position  Int
+
+  restock Restock @relation(fields: [restockId], references: [id], onDelete: Cascade)
+
+  @@unique([restockId, position])
+}
+
+// Pulled forward from the slice-3 plan: finalize must post the purchaser
+// credit (blueprint 01 D1, invariant 5), so the ledger table exists now.
+// Takes arrive in slice 3. Intentionally relation-free (blueprint 01).
+model LedgerEntry {
+  id                  String   @id @default(cuid())
+  type                String // "TAKE" | "RESTOCK_CREDIT" | "LOAN_FEE" | "SETTLEMENT" | "WRITE_OFF" | "ADJUSTMENT" | "REVERSAL"
+  creditorHouseholdId String // is owed amountCents…
+  debtorHouseholdId   String // …by this household. Always creditor ≠ debtor, amount > 0.
+  amountCents         Int
+  note                String?
+  createdById         String
+  createdAt           DateTime @default(now())
+  takeId              String?  @unique // set for TAKE (slice 3)
+  restockId           String? // set for RESTOCK_CREDIT and its correction entries
+  loanId              String?  @unique // set for LOAN_FEE (slice 6)
+  reversesId          String?  @unique // set for REVERSAL → the entry it cancels
+
+  @@index([creditorHouseholdId, debtorHouseholdId])
+  @@index([restockId])
+}
+
+model Lot {
+  id             String    @id @default(cuid())
+  restockId      String
+  productId      String
+  position       Int // line order on the receipt
+  purchasedCount Int // eaches bought (bulk packs pre-broken at entry)
+  receivedCount  Int // eaches into the pantry; 0..purchasedCount (hold-backs = difference)
+  lineTotalCents Int // as printed, covers all purchasedCount units
+  unitCostCents  Int? // frozen at finalize (D1); null while DRAFT
+  remainingCount Int       @default(0) // set to receivedCount at finalize (D3)
+  bestBy         DateTime?
+  unitPhotoPath  String?
+
+  restock Restock @relation(fields: [restockId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([restockId, position])
+  @@index([productId])
 }

@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
 const inputClass =
-  'rounded-lg border border-stone-300 bg-white px-3 py-2 text-base outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100';
+  'rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
 
 export function AcceptInviteForm({ token, defaultName }: { token: string; defaultName: string }) {
   const trpc = useTRPC();
@@ -68,17 +68,17 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
           onChange={(e) => setPassword(e.target.value)}
           className={inputClass}
         />
-        <span className="text-xs font-normal text-stone-400">At least 10 characters.</span>
+        <span className="text-xs font-normal text-text-muted">At least 10 characters.</span>
       </label>
       {accept.error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {accept.error.message}
         </p>
       )}
       <button
         type="submit"
         disabled={accept.isPending}
-        className="rounded-lg bg-emerald-700 px-4 py-2.5 font-medium text-white transition-colors hover:bg-emerald-800 disabled:opacity-50"
+        className="rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50"
       >
         {accept.isPending ? 'Creating account…' : 'Join household'}
       </button>

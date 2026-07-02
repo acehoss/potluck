@@ -2,18 +2,25 @@ import { expect, test } from '@playwright/test';
 
 /**
  * Slice 1 acceptance: auth, invite-only registration, and the household
- * dashboard, exercised against the real compose stack seeded with
- * SEED_DEMO=1 (see prisma/seed.ts for the fixtures).
+ * views, exercised against the real compose stack seeded with SEED_DEMO=1
+ * (see prisma/seed.ts for the fixtures). Updated for the slice-2 shell:
+ * the dashboard became the Pantries tab; members/invites live on /more.
  */
 
 const PASSWORD = 'demo-password';
+// Per-run token: registration emails must be fresh when the suite re-runs
+// against a still-running stack.
+const RUN = Date.now().toString(36);
 
 async function login(page: import('@playwright/test').Page, email: string) {
   await page.goto('/login');
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByText('your household')).toBeVisible();
+  // Wait for the actual navigation — 'your household' alone would match the
+  // login footer ("…a member of your household…") before the session lands.
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('tab-bar')).toBeVisible();
 }
 
 test('anonymous visitors are redirected to login', async ({ page }) => {
@@ -25,16 +32,18 @@ test('anonymous visitors are redirected to login', async ({ page }) => {
 test('a member signs in and sees every household and pantry', async ({ page }) => {
   await login(page, 'aaron@demo.coop');
 
-  const cards = page.getByTestId('household-card');
-  await expect(cards).toHaveCount(2);
-  await expect(page.getByRole('heading', { name: 'Heise' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'In-Laws' })).toBeVisible();
-  await expect(page.getByText('Basement Pantry')).toHaveCount(2);
+  // Pantries tab: both households' pantries, yours first (transparency).
+  const groups = page.getByTestId('pantry-group');
+  await expect(groups).toHaveCount(2);
+  await expect(groups.first()).toContainText('Heise');
+  await expect(groups.last()).toContainText('In-Laws');
+  await expect(page.getByTestId('pantry-row')).toHaveCount(2);
+
+  // Members moved to the More tab.
+  await page.goto('/more');
+  await expect(page.getByTestId('household-card')).toHaveCount(2);
   await expect(page.getByText('Aaron', { exact: true })).toBeVisible();
   await expect(page.getByText('Dana', { exact: true })).toBeVisible();
-
-  // The other household's card shows the ledger placeholder, not yours.
-  await expect(page.getByText('Net position:')).toHaveCount(1);
 });
 
 test('login rejects a wrong password', async ({ page }) => {
@@ -48,8 +57,9 @@ test('login rejects a wrong password', async ({ page }) => {
 
 test('a member invites someone, who registers and appears in the household', async ({ page }, testInfo) => {
   // Both browser projects share one database — keep invitees distinct.
-  const invitee = `Terry-${testInfo.project.name}`;
+  const invitee = `Terry-${testInfo.project.name}-${RUN}`;
   await login(page, 'aaron@demo.coop');
+  await page.goto('/more');
 
   await page.getByPlaceholder('Name (optional)').fill(invitee);
   await page.getByRole('button', { name: 'Invite a member' }).click();
@@ -62,25 +72,27 @@ test('a member invites someone, who registers and appears in the household', asy
   await expect(page.getByText('invited to join the Heise household')).toBeVisible();
   await expect(page.getByLabel('Your name')).toHaveValue(invitee);
 
-  await page.getByLabel('Email').fill(`terry-${testInfo.project.name}@demo.coop`);
+  await page.getByLabel('Email').fill(`terry-${testInfo.project.name}-${RUN}@demo.coop`);
   await page.getByLabel('Password').fill('terry-password-123');
   await page.getByRole('button', { name: 'Join household' }).click();
 
   await expect(page.getByText('your household')).toBeVisible();
+  await page.goto('/more');
   const heiseCard = page.getByTestId('household-card').filter({ hasText: 'Heise' });
   await expect(heiseCard.getByText(invitee, { exact: true })).toBeVisible();
 });
 
 test('an invite link cannot be used twice', async ({ page }, testInfo) => {
   await login(page, 'dana@demo.coop');
+  await page.goto('/more');
 
   await page.getByRole('button', { name: 'Invite a member' }).click();
   const inviteUrl = await page.getByTestId('invite-url').textContent();
 
   await page.context().clearCookies();
   await page.goto(inviteUrl!);
-  await page.getByLabel('Your name').fill(`Robin-${testInfo.project.name}`);
-  await page.getByLabel('Email').fill(`robin-${testInfo.project.name}@demo.coop`);
+  await page.getByLabel('Your name').fill(`Robin-${testInfo.project.name}-${RUN}`);
+  await page.getByLabel('Email').fill(`robin-${testInfo.project.name}-${RUN}@demo.coop`);
   await page.getByLabel('Password').fill('robin-password-123');
   await page.getByRole('button', { name: 'Join household' }).click();
   await expect(page.getByText('your household')).toBeVisible();
@@ -92,6 +104,7 @@ test('an invite link cannot be used twice', async ({ page }, testInfo) => {
 
 test('signing out ends the session', async ({ page }) => {
   await login(page, 'aaron@demo.coop');
+  await page.goto('/more');
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login$/);
 
