@@ -1,6 +1,8 @@
 /**
- * Demo/e2e fixtures: two households with one member and one pantry each.
- * Idempotent — safe to run repeatedly. Not for production data.
+ * Demo/e2e fixtures: two households with one pantry each — Heise with two
+ * members (the second exercises "the recorder's housemates still see new
+ * ledger entries"), In-Laws with one. Idempotent — safe to run repeatedly.
+ * Not for production data.
  */
 import 'dotenv/config';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
@@ -17,12 +19,15 @@ const FIXTURES = [
   {
     household: 'Heise',
     pantry: 'Basement Pantry',
-    user: { name: 'Aaron', email: 'aaron@demo.coop' },
+    users: [
+      { name: 'Aaron', email: 'aaron@demo.coop' },
+      { name: 'Marie', email: 'marie@demo.coop' },
+    ],
   },
   {
     household: 'In-Laws',
     pantry: 'Basement Pantry',
-    user: { name: 'Dana', email: 'dana@demo.coop' },
+    users: [{ name: 'Dana', email: 'dana@demo.coop' }],
   },
 ];
 
@@ -33,11 +38,13 @@ async function main() {
     let household = await db.household.findFirst({ where: { name: fixture.household } });
     household ??= await db.household.create({ data: { name: fixture.household } });
 
-    await db.user.upsert({
-      where: { email: fixture.user.email },
-      update: {},
-      create: { ...fixture.user, passwordHash, householdId: household.id },
-    });
+    for (const user of fixture.users) {
+      await db.user.upsert({
+        where: { email: user.email },
+        update: {},
+        create: { ...user, passwordHash, householdId: household.id },
+      });
+    }
 
     const pantry = await db.pantry.findFirst({
       where: { householdId: household.id, name: fixture.pantry },

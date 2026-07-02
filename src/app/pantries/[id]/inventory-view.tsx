@@ -3,7 +3,9 @@
 import { useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { newClientKey } from '@/lib/client-key';
+import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
 
@@ -20,27 +22,19 @@ export type ProductGroup = {
     unitCostCents: number;
     purchasedAt: string; // ISO
     bestBy: string | null; // ISO
+    unitPhotoPath: string | null;
   }[];
 };
 
 type Household = { id: string; name: string };
 
+/** A lot plus its product name, for the lot menu and adjustment sheets. */
+type LotRef = { lot: ProductGroup['lots'][number]; productName: string };
+
 function ageLabel(purchasedAt: string) {
   const days = Math.floor((Date.now() - new Date(purchasedAt).getTime()) / 86_400_000);
   if (days < 31) return `${days}d old`;
   return `${Math.floor(days / 30)}mo old`;
-}
-
-/**
- * Idempotency key for take.create, one per sheet open. crypto.randomUUID is
- * unavailable in non-secure contexts (slice-1 lesson: families hit LAN IPs
- * over plain http), hence the fallback.
- */
-function newClientKey() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random()
-    .toString(36)
-    .slice(2)}`;
 }
 
 function bestByBadge(bestBy: string | null) {
@@ -78,6 +72,9 @@ export function InventoryView({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [startOpen, setStartOpen] = useState(false);
   const [takeFor, setTakeFor] = useState<ProductGroup | null>(null);
+  const [lotMenu, setLotMenu] = useState<LotRef | null>(null);
+  const [recountFor, setRecountFor] = useState<LotRef | null>(null);
+  const [writeOffFor, setWriteOffFor] = useState<LotRef | null>(null);
   const [toast, setToast] = useState<{ takeId: string; label: string } | null>(null);
   const [toastError, setToastError] = useState<string | null>(null);
 
@@ -201,7 +198,7 @@ export function InventoryView({
                       return next;
                     })
                   }
-                  className="flex size-11 shrink-0 items-center justify-center text-xs text-text-muted"
+                  className="flex w-14 shrink-0 items-center justify-center self-stretch text-sm text-text-muted transition-colors hover:bg-surface-sunken"
                 >
                   {isExpanded ? '▾' : '▸'}
                 </button>
@@ -212,7 +209,7 @@ export function InventoryView({
                     <li
                       key={lot.id}
                       data-testid="lot-row"
-                      className="flex min-h-11 items-center justify-between gap-3 py-2"
+                      className="flex min-h-11 items-center justify-between gap-2 py-1"
                     >
                       <p className="text-sm text-text">
                         {/* Code links to the restock detail — that's also where
@@ -225,10 +222,21 @@ export function InventoryView({
                         </Link>{' '}
                         · {lot.remaining} left
                       </p>
-                      <p className="text-sm text-text-muted">
+                      <p className="min-w-0 flex-1 text-right text-sm text-text-muted">
                         {ageLabel(lot.purchasedAt)}
                         {lot.bestBy && <> · {bestByBadge(lot.bestBy)}</>}
                       </p>
+                      {isOwn && (
+                        <button
+                          type="button"
+                          data-testid="lot-menu"
+                          aria-label={`Lot ${lot.code} actions`}
+                          onClick={() => setLotMenu({ lot, productName: group.name })}
+                          className="-my-1 flex size-11 shrink-0 items-center justify-center rounded-lg text-base text-text-muted transition-colors hover:bg-surface-sunken"
+                        >
+                          ⋯
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -255,6 +263,47 @@ export function InventoryView({
           households={households}
           yourHouseholdId={yourHouseholdId}
           onClose={() => setStartOpen(false)}
+        />
+      )}
+
+      {lotMenu && (
+        <LotMenuSheet
+          lotRef={lotMenu}
+          onClose={() => setLotMenu(null)}
+          onRecount={() => {
+            setRecountFor(lotMenu);
+            setLotMenu(null);
+          }}
+          onWriteOff={() => {
+            setWriteOffFor(lotMenu);
+            setLotMenu(null);
+          }}
+          onPhotoSet={() => {
+            setLotMenu(null);
+            router.refresh();
+          }}
+        />
+      )}
+
+      {recountFor && (
+        <RecountSheet
+          lotRef={recountFor}
+          onClose={() => setRecountFor(null)}
+          onDone={() => {
+            setRecountFor(null);
+            router.refresh();
+          }}
+        />
+      )}
+
+      {writeOffFor && (
+        <WriteOffSheet
+          lotRef={writeOffFor}
+          onClose={() => setWriteOffFor(null)}
+          onDone={() => {
+            setWriteOffFor(null);
+            router.refresh();
+          }}
         />
       )}
 
@@ -433,6 +482,368 @@ function TakeSheet({
             className="min-h-11 flex-1 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50"
           >
             {take.isPending ? 'Taking…' : 'Take'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const sheetInputClass =
+  'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
+const sheetStepperBtn =
+  'flex size-11 items-center justify-center rounded-lg border border-border-strong text-lg font-medium text-text hover:bg-surface-sunken disabled:opacity-40';
+const sheetPrimaryBtn =
+  'min-h-11 flex-1 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50';
+const sheetSecondaryBtn =
+  'min-h-11 flex-1 rounded-lg border border-border-strong px-4 py-2.5 font-medium text-text transition-colors hover:bg-surface-sunken';
+
+/**
+ * Lot `⋯` menu (blueprint 02, slice 4): Recount / Write off / Add photo /
+ * View restock. Only rendered on the viewer's own household's pantries
+ * (authz matrix: recount/write-off are owner-household-only; the server
+ * gates too). The photo action is the "add photos later" path the receive
+ * wizard's skip copy promises (blueprint 02 receiving step 4) — it uploads a
+ * unit photo and attaches it via restock.setUnitPhoto, which stays open
+ * after finalize.
+ */
+function LotMenuSheet({
+  lotRef,
+  onClose,
+  onRecount,
+  onWriteOff,
+  onPhotoSet,
+}: {
+  lotRef: LotRef;
+  onClose: () => void;
+  onRecount: () => void;
+  onWriteOff: () => void;
+  onPhotoSet: () => void;
+}) {
+  const trpc = useTRPC();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setUnitPhoto = useMutation(trpc.restock.setUnitPhoto.mutationOptions());
+
+  async function handleFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const jpeg = await downscaleToJpeg(file);
+      const path = await uploadImage('units', jpeg);
+      await setUnitPhoto.mutateAsync({ lotId: lotRef.lot.id, path });
+      onPhotoSet();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed.');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  const itemClass =
+    'flex min-h-12 w-full items-center rounded-lg px-3 text-left text-base font-medium text-text transition-colors hover:bg-surface-sunken disabled:opacity-50';
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="lot-menu-sheet"
+        className="flex w-full max-w-md flex-col gap-2 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <h2 className="text-lg font-semibold">
+          <span className="font-mono">{lotRef.lot.code}</span> · {lotRef.productName}
+        </h2>
+        <p className="text-sm text-text-muted">{lotRef.lot.remaining} left</p>
+        <button type="button" data-testid="menu-recount" onClick={onRecount} className={itemClass}>
+          Recount
+        </button>
+        <button
+          type="button"
+          data-testid="menu-writeoff"
+          onClick={onWriteOff}
+          className={itemClass}
+        >
+          Write off
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          data-testid="menu-photo-input"
+          onChange={(e) => handleFile(e.target.files)}
+          className="hidden"
+        />
+        <button
+          type="button"
+          data-testid="menu-photo"
+          disabled={uploading}
+          onClick={() => fileRef.current?.click()}
+          className={itemClass}
+        >
+          {uploading
+            ? 'Uploading…'
+            : lotRef.lot.unitPhotoPath
+              ? 'Replace unit photo'
+              : 'Add unit photo'}
+        </button>
+        <Link
+          href={`/restocks/${lotRef.lot.restockId}`}
+          data-testid="menu-view-restock"
+          className={itemClass}
+        >
+          View restock
+        </Link>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+        <button type="button" onClick={onClose} className={sheetSecondaryBtn}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Recount sheet (blueprint 02): "Counted how many? (app says N)". The client
+ * sends the target count ONLY — the server reads countBefore in-transaction
+ * and writes via a guarded updateMany (blueprint 01 D3/B3). No ledger effect
+ * in v1: the owner eats count drift.
+ */
+function RecountSheet({
+  lotRef,
+  onClose,
+  onDone,
+}: {
+  lotRef: LotRef;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const trpc = useTRPC();
+  // One idempotency key per sheet open — a double-tap replays as the same
+  // adjustment instead of recording twice.
+  const [clientKey] = useState(newClientKey);
+  const [count, setCount] = useState(lotRef.lot.remaining);
+  const [error, setError] = useState<string | null>(null);
+
+  const recount = useMutation(
+    trpc.adjustment.recount.mutationOptions({
+      onSuccess: onDone,
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="recount-sheet"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <h2 className="text-lg font-semibold">Recount: {lotRef.productName}</h2>
+        <p className="text-sm text-text-muted">
+          Lot <span className="font-mono">{lotRef.lot.code}</span>
+          {' — '}fix count drift by entering what&apos;s physically on the shelf. Spoiled or
+          damaged units should be a{' '}
+          <span className="font-medium text-text">write-off</span> instead.
+        </p>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-text">
+            Counted how many?{' '}
+            <span className="font-normal text-text-muted">(app says {lotRef.lot.remaining})</span>
+          </span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Fewer"
+              disabled={count <= 0}
+              onClick={() => setCount((c) => Math.max(0, c - 1))}
+              className={sheetStepperBtn}
+            >
+              −
+            </button>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={10_000}
+              data-testid="recount-count"
+              aria-label="Counted units"
+              value={count}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setCount(Number.isInteger(n) && n >= 0 ? Math.min(n, 10_000) : 0);
+              }}
+              className={`${sheetInputClass} w-20 text-center font-mono tabular-nums`}
+            />
+            <button
+              type="button"
+              aria-label="More"
+              disabled={count >= 10_000}
+              onClick={() => setCount((c) => Math.min(10_000, c + 1))}
+              className={sheetStepperBtn}
+            >
+              +
+            </button>
+          </div>
+        </div>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={sheetSecondaryBtn}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="recount-submit"
+            disabled={recount.isPending}
+            onClick={() => recount.mutate({ lotId: lotRef.lot.id, countAfter: count, clientKey })}
+            className={sheetPrimaryBtn}
+          >
+            {recount.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const WRITE_OFF_REASONS = ['Expired', 'Damaged', 'Other'] as const;
+
+/**
+ * Write-off sheet (blueprint 02): count (default all remaining) + required
+ * reason. Decrements inventory; the owner household eats the cost in v1
+ * (blueprint 01 invariant 8) — no ledger entry.
+ */
+function WriteOffSheet({
+  lotRef,
+  onClose,
+  onDone,
+}: {
+  lotRef: LotRef;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const trpc = useTRPC();
+  // One idempotency key per sheet open: write-offs are CUMULATIVE, so a
+  // double-tap without this would decrement the lot twice.
+  const [clientKey] = useState(newClientKey);
+  const [count, setCount] = useState(Math.max(1, lotRef.lot.remaining));
+  const [reason, setReason] = useState<(typeof WRITE_OFF_REASONS)[number]>('Expired');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const writeOff = useMutation(
+    trpc.adjustment.writeOff.mutationOptions({
+      onSuccess: onDone,
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="writeoff-sheet"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <h2 className="text-lg font-semibold">Write off: {lotRef.productName}</h2>
+        <p className="text-sm text-text-muted">
+          Lot <span className="font-mono">{lotRef.lot.code}</span> — for expired, spoiled, or
+          damaged units. Your household eats the cost. If the shelf count is just off, use{' '}
+          <span className="font-medium text-text">Recount</span> instead.
+        </p>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-text">
+            Units{' '}
+            <span className="font-normal text-text-muted">of {lotRef.lot.remaining} left</span>
+          </span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Fewer"
+              disabled={count <= 1}
+              onClick={() => setCount((c) => Math.max(1, c - 1))}
+              className={sheetStepperBtn}
+            >
+              −
+            </button>
+            <span data-testid="writeoff-count" className="w-8 text-center font-mono tabular-nums">
+              {count}
+            </span>
+            <button
+              type="button"
+              aria-label="More"
+              disabled={count >= lotRef.lot.remaining}
+              onClick={() => setCount((c) => Math.min(lotRef.lot.remaining, c + 1))}
+              className={sheetStepperBtn}
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1 text-sm font-medium text-text">
+          Reason
+          <div className="flex gap-2" role="radiogroup" aria-label="Reason">
+            {WRITE_OFF_REASONS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                role="radio"
+                aria-checked={reason === r}
+                onClick={() => setReason(r)}
+                className={`min-h-11 flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  reason === r
+                    ? 'bg-accent text-accent-contrast'
+                    : 'border border-border-strong text-text hover:bg-surface-sunken'
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Note (optional)
+          <input
+            type="text"
+            data-testid="writeoff-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Freezer failure"
+            className={sheetInputClass}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={sheetSecondaryBtn}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="writeoff-submit"
+            disabled={writeOff.isPending || lotRef.lot.remaining === 0}
+            onClick={() =>
+              writeOff.mutate({
+                lotId: lotRef.lot.id,
+                count,
+                reason: [reason, note.trim()].filter(Boolean).join(' — '),
+                clientKey,
+              })
+            }
+            className={sheetPrimaryBtn}
+          >
+            {writeOff.isPending ? 'Writing off…' : 'Write off'}
           </button>
         </div>
       </div>

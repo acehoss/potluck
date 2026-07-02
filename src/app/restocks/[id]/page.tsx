@@ -5,6 +5,7 @@ import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
 import { db } from '@/server/db';
 import { getActiveRestockCredit } from '@/server/ledger';
+import { AdjustmentsList, type AdjustmentRow } from './adjustments-list';
 import { TakesList, type TakeRow } from './takes-list';
 
 /** Restock detail (blueprint 02): code, photos, lines, credit. */
@@ -53,6 +54,32 @@ export default async function RestockDetailPage({
     reversed: t.reversedAt !== null,
     canUndo: t.reversedAt === null && t.taker.householdId === user.householdId,
   }));
+  // Adjustment history (slice 4): recounts and write-offs against this
+  // restock's lots, newest first. Relation-free createdById → names by hand.
+  const adjustments = await db.adjustment.findMany({
+    where: { lot: { restockId: restock.id } },
+    orderBy: { createdAt: 'desc' },
+    include: { lot: { select: { product: { select: { name: true } } } } },
+  });
+  const adjusterById = new Map(
+    (
+      await db.user.findMany({
+        where: { id: { in: [...new Set(adjustments.map((a) => a.createdById))] } },
+        select: { id: true, name: true },
+      })
+    ).map((u) => [u.id, u.name]),
+  );
+  const adjustmentRows: AdjustmentRow[] = adjustments.map((a) => ({
+    id: a.id,
+    type: a.type === 'RECOUNT' ? 'RECOUNT' : 'WRITE_OFF',
+    countBefore: a.countBefore,
+    countAfter: a.countAfter,
+    note: a.note,
+    productName: a.lot.product.name,
+    createdByName: adjusterById.get(a.createdById) ?? 'someone',
+    createdAt: a.createdAt.toISOString(),
+  }));
+
   const lineSum = restock.lots.reduce((s, l) => s + l.lineTotalCents, 0);
   const code =
     restock.dateCode && restock.seq !== null
@@ -61,21 +88,29 @@ export default async function RestockDetailPage({
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24">
-      <header className="flex items-center gap-3">
+      {/* shrink-0 arrow + min-w-0 text column: at 390px the long subtitle
+          used to push the arrow onto its own wrapped line under the big code;
+          nowrap spans make the subtitle break at the separators, never
+          mid-parenthetical. */}
+      <header className="flex items-start gap-3">
         <Link
           href={`/pantries/${restock.pantryId}`}
           aria-label="Back to pantry"
-          className="text-lg text-text-muted"
+          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-lg text-text-muted transition-colors hover:bg-surface-sunken"
         >
           ←
         </Link>
-        <div>
+        <div className="min-w-0 flex-1 py-1">
           <h1 className="font-mono text-xl font-semibold tracking-widest" data-testid="restock-code">
             {code}
           </h1>
           <p className="text-sm text-text-muted">
-            {restock.retailer} · {restock.purchasedAt.toISOString().slice(0, 10)} · into{' '}
-            {restock.pantry.name} ({restock.pantry.household.name})
+            <span className="whitespace-nowrap">
+              {restock.retailer} · {restock.purchasedAt.toISOString().slice(0, 10)}
+            </span>{' '}
+            <span className="whitespace-nowrap">
+              · into {restock.pantry.name} ({restock.pantry.household.name})
+            </span>
           </p>
         </div>
       </header>
@@ -163,6 +198,7 @@ export default async function RestockDetailPage({
         </section>
 
         <TakesList takes={takeRows} />
+        <AdjustmentsList adjustments={adjustmentRows} />
       </main>
     </div>
   );

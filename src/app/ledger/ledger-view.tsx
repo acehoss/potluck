@@ -1,10 +1,11 @@
 'use client';
 
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { formatCents } from '@/lib/money';
+import { useEffect, useState } from 'react';
+import { newClientKey } from '@/lib/client-key';
+import { centsToDollarsString, formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
 
 export type LedgerRow = {
@@ -17,6 +18,8 @@ export type LedgerRow = {
   createdByName: string;
   restockId: string | null;
   take: { id: string; reversed: boolean; canUndo: boolean } | null;
+  /** Created since this viewer last saw this pair's ledger, by someone else. */
+  isNew: boolean;
 };
 
 type Household = { id: string; name: string };
@@ -52,24 +55,55 @@ function localDateParts(iso: string) {
   return { short, full };
 }
 
+const inputClass =
+  'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
+const primaryBtn =
+  'min-h-11 flex-1 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50';
+const secondaryBtn =
+  'min-h-11 flex-1 rounded-lg border border-border-strong px-4 py-2.5 font-medium text-text transition-colors hover:bg-surface-sunken';
+
 export function LedgerView({
   other,
   others,
   yourName,
+  yourHouseholdId,
   netCents,
   rows,
+  renderedAt,
 }: {
   other: Household;
   others: Household[];
   yourName: string;
+  yourHouseholdId: string;
   netCents: number;
   rows: LedgerRow[];
+  /** Server render timestamp (epoch ms) — echoed to markSeen, see below. */
+  renderedAt: number;
 }) {
   const trpc = useTRPC();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [chip, setChip] = useState<(typeof CHIPS)[number]['key']>('all');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [settleOpen, setSettleOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+
+  // Viewing the ledger IS the acknowledgment (blueprint 01 slice 4): mark
+  // this pair seen so the tab dot clears. The rows' "new" highlight came from
+  // the previous watermark, so it stays visible for this visit. The write is
+  // the page's RENDER timestamp, not now(): an entry created between the
+  // render and this mutation was never on screen and must stay flagged.
+  const { mutate: markSeen } = useMutation(
+    trpc.ledger.markSeen.mutationOptions({
+      onSuccess: () =>
+        queryClient.invalidateQueries({ queryKey: trpc.ledger.hasNew.queryKey() }),
+    }),
+  );
+  useEffect(() => {
+    markSeen({ counterpartyHouseholdId: other.id, renderedAt });
+  }, [markSeen, other.id, renderedAt]);
 
   const undo = useMutation(
     trpc.take.undo.mutationOptions({
@@ -87,7 +121,35 @@ export function LedgerView({
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex items-center justify-between gap-4">
         <h1 className="text-xl font-semibold tracking-tight">Ledger</h1>
-        <p className="text-sm text-text-muted">{yourName}</p>
+        <div className="relative flex items-center gap-2">
+          <p className="text-sm text-text-muted">{yourName}</p>
+          {/* Blueprint 02: "⋯ in the ledger header → Manual adjustment". */}
+          <button
+            type="button"
+            data-testid="ledger-menu"
+            aria-label="Ledger actions"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="flex size-11 items-center justify-center rounded-lg text-lg text-text-muted transition-colors hover:bg-surface-sunken"
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-full z-10 mt-1 w-max rounded-lg border border-border bg-surface-raised py-1 shadow-sm">
+              <button
+                type="button"
+                data-testid="open-adjust"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setAdjustOpen(true);
+                }}
+                className="flex min-h-11 w-full items-center px-4 text-sm font-medium text-text hover:bg-surface-sunken"
+              >
+                Manual adjustment
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       {/* Pair picker only when there are >2 households (blueprint 02). */}
@@ -124,9 +186,9 @@ export function LedgerView({
         <p className="text-sm text-text-muted">with {other.name}</p>
         <button
           type="button"
-          disabled
-          title="arrives in slice 4"
-          className="min-h-11 rounded-lg border border-border bg-surface-sunken px-4 py-2.5 font-medium text-text-muted"
+          data-testid="settle-up"
+          onClick={() => setSettleOpen(true)}
+          className="min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
         >
           Settle up
         </button>
@@ -168,7 +230,7 @@ export function LedgerView({
             const isOpen = expanded === row.id;
             const date = localDateParts(row.createdAt);
             return (
-              <li key={row.id} data-testid="ledger-row">
+              <li key={row.id} data-testid="ledger-row" data-new={row.isNew || undefined}>
                 <button
                   type="button"
                   onClick={() => setExpanded(isOpen ? null : row.id)}
@@ -178,6 +240,14 @@ export function LedgerView({
                     {date.short}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm text-text">
+                    {/* Subtle "new since you looked" marker (blueprint 02). */}
+                    {row.isNew && (
+                      <span
+                        data-testid="ledger-row-new"
+                        title="New since you last looked"
+                        className="mr-1.5 inline-block size-2 rounded-full bg-accent align-middle"
+                      />
+                    )}
                     {row.label}
                     {row.take?.reversed && (
                       <span className="ml-2 rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-text-muted">
@@ -231,6 +301,298 @@ export function LedgerView({
           })}
         </ul>
       </main>
+
+      {settleOpen && (
+        <SettleSheet
+          other={other}
+          yourHouseholdId={yourHouseholdId}
+          netCents={netCents}
+          onClose={() => setSettleOpen(false)}
+          onDone={() => {
+            setSettleOpen(false);
+            router.refresh();
+          }}
+        />
+      )}
+      {adjustOpen && (
+        <AdjustSheet
+          other={other}
+          yourHouseholdId={yourHouseholdId}
+          onClose={() => setAdjustOpen(false)}
+          onDone={() => {
+            setAdjustOpen(false);
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const METHODS = ['Cash', 'Venmo', 'Other'] as const;
+
+/**
+ * Settle sheet (blueprint 02): amount prefilled to bring the pair to zero,
+ * direction prefilled toward zero (payer = whoever owes), method chips plus
+ * an optional note. Posts a SETTLEMENT entry with payer = creditor (01 D5);
+ * both households' members (except the recorder) see it flagged "new" until
+ * they look (blueprint 02).
+ */
+function SettleSheet({
+  other,
+  yourHouseholdId,
+  netCents,
+  onClose,
+  onDone,
+}: {
+  other: Household;
+  yourHouseholdId: string;
+  netCents: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const trpc = useTRPC();
+  // One idempotency key per sheet open: a double-tap on "Record payment"
+  // (dispatched before isPending re-renders the disabled attribute) or a
+  // retry after a lost response replays as the SAME settlement server-side
+  // instead of posting a second immutable entry.
+  const [clientKey] = useState(newClientKey);
+  const [amount, setAmount] = useState(() =>
+    netCents === 0 ? '' : centsToDollarsString(Math.abs(netCents)),
+  );
+  // Payer = whoever owes: net > 0 means they owe you, so they pay.
+  const [payer, setPayer] = useState<'them' | 'us'>(netCents > 0 ? 'them' : 'us');
+  const [method, setMethod] = useState<(typeof METHODS)[number]>('Cash');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const settle = useMutation(
+    trpc.ledger.settle.mutationOptions({
+      onSuccess: onDone,
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <form
+        data-testid="settle-sheet"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const cents = parseDollarsToCents(amount);
+          if (cents === null || cents <= 0) {
+            setError('Amount must look like 12.40');
+            return;
+          }
+          settle.mutate({
+            payerHouseholdId: payer === 'them' ? other.id : yourHouseholdId,
+            payeeHouseholdId: payer === 'them' ? yourHouseholdId : other.id,
+            amountCents: cents,
+            note: [method, note.trim()].filter(Boolean).join(' — '),
+            clientKey,
+          });
+        }}
+      >
+        <h2 className="text-lg font-semibold">Settle up</h2>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Amount
+          <input
+            type="text"
+            inputMode="decimal"
+            required
+            data-testid="settle-amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="12.40"
+            className={inputClass}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Who paid
+          <select
+            data-testid="settle-direction"
+            value={payer}
+            onChange={(e) => setPayer(e.target.value as 'them' | 'us')}
+            className={inputClass}
+          >
+            <option value="them">{other.name} paid us</option>
+            <option value="us">We paid {other.name}</option>
+          </select>
+        </label>
+        <div className="flex flex-col gap-1 text-sm font-medium text-text">
+          Method
+          <div className="flex gap-2" role="radiogroup" aria-label="Method">
+            {METHODS.map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={method === m}
+                onClick={() => setMethod(m)}
+                className={`min-h-11 flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  method === m
+                    ? 'bg-accent text-accent-contrast'
+                    : 'border border-border-strong text-text hover:bg-surface-sunken'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Note (optional)
+          <input
+            type="text"
+            data-testid="settle-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="July groceries"
+            className={inputClass}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={secondaryBtn}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            data-testid="settle-submit"
+            disabled={settle.isPending}
+            className={primaryBtn}
+          >
+            {settle.isPending ? 'Recording…' : 'Record payment'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Manual ledger adjustment (blueprint 02's repair sheet): amount, direction,
+ * REQUIRED note. Posts an ADJUSTMENT entry; the counterparty household sees
+ * the in-app "new" marker (push arrives in slice 7). Wrong restock credits
+ * are corrected via the linked correct-credit op, not here.
+ */
+function AdjustSheet({
+  other,
+  yourHouseholdId,
+  onClose,
+  onDone,
+}: {
+  other: Household;
+  yourHouseholdId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const trpc = useTRPC();
+  // One idempotency key per sheet open — a double-tap must not post the
+  // adjustment twice (same guard as the settle sheet).
+  const [clientKey] = useState(newClientKey);
+  const [amount, setAmount] = useState('');
+  const [direction, setDirection] = useState<'they-owe' | 'we-owe'>('they-owe');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const adjust = useMutation(
+    trpc.ledger.adjust.mutationOptions({
+      onSuccess: onDone,
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <form
+        data-testid="adjust-sheet"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const cents = parseDollarsToCents(amount);
+          if (cents === null || cents <= 0) {
+            setError('Amount must look like 12.40');
+            return;
+          }
+          if (!note.trim()) {
+            setError('A note explaining the adjustment is required.');
+            return;
+          }
+          adjust.mutate({
+            creditorHouseholdId: direction === 'they-owe' ? yourHouseholdId : other.id,
+            debtorHouseholdId: direction === 'they-owe' ? other.id : yourHouseholdId,
+            amountCents: cents,
+            note: note.trim(),
+            clientKey,
+          });
+        }}
+      >
+        <h2 className="text-lg font-semibold">Manual adjustment</h2>
+        <p className="text-sm text-text-muted">
+          For odd repairs only — members of {other.name} will see it flagged as new.
+        </p>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Amount
+          <input
+            type="text"
+            inputMode="decimal"
+            required
+            data-testid="adjust-amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="4.50"
+            className={inputClass}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Direction
+          <select
+            data-testid="adjust-direction"
+            value={direction}
+            onChange={(e) => setDirection(e.target.value as 'they-owe' | 'we-owe')}
+            className={inputClass}
+          >
+            <option value="they-owe">{other.name} owes us</option>
+            <option value="we-owe">We owe {other.name}</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Note (required)
+          <input
+            type="text"
+            required
+            data-testid="adjust-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Why this adjustment exists"
+            className={inputClass}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={secondaryBtn}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            data-testid="adjust-submit"
+            disabled={adjust.isPending}
+            className={primaryBtn}
+          >
+            {adjust.isPending ? 'Posting…' : 'Post adjustment'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

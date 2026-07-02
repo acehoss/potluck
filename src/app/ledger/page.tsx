@@ -6,6 +6,20 @@ import { netByCounterparty } from '@/server/ledger';
 import { LedgerView, type LedgerRow } from './ledger-view';
 
 /**
+ * The render timestamp plus this viewer's per-pair "seen" watermark. A loader
+ * (not inline render code) so Date.now() stays out of the component body
+ * (react-hooks/purity); callers must invoke it BEFORE snapshotting the entry
+ * list so markSeen can never cover an entry the page didn't show.
+ */
+async function loadSeenWatermark(userId: string, counterpartyHouseholdId: string) {
+  const renderedAt = Date.now();
+  const seen = await db.ledgerSeen.findUnique({
+    where: { userId_counterpartyHouseholdId: { userId, counterpartyHouseholdId } },
+  });
+  return { renderedAt, seenAt: seen?.seenAt ?? null };
+}
+
+/**
  * Ledger tab (blueprint 02): one net number per household pair, hero first,
  * then the append-only entry list newest-first. Server component reading
  * Prisma directly (slice-1 convention); undo goes through tRPC.
@@ -37,6 +51,12 @@ export default async function LedgerPage({
       </div>
     );
   }
+
+  // Loaded BEFORE the entry list is snapshotted: renderedAt is what the
+  // client echoes to markSeen, so an entry created after this moment (and
+  // therefore possibly absent from the rendered rows) can never be marked
+  // seen by this visit.
+  const { renderedAt, seenAt } = await loadSeenWatermark(user.id, other.id);
 
   const entries = await db.ledgerEntry.findMany({
     where: {
@@ -75,10 +95,19 @@ export default async function LedgerPage({
 
   const creators = await db.user.findMany({
     where: { id: { in: [...new Set(entries.map((e) => e.createdById))] } },
-    select: { id: true, name: true },
+    select: { id: true, name: true, householdId: true },
   });
-  const creatorById = new Map(creators.map((u) => [u.id, u.name]));
+  const creatorById = new Map(creators.map((u) => [u.id, u]));
   const entryById = new Map(entries.map((e) => [e.id, e]));
+
+  // "New since viewed" (blueprint 01 slice 4): created after this viewer's
+  // last look at THIS pair's ledger, by anyone but the viewer — blueprint 02
+  // flags a settlement for BOTH households until viewed, so the recorder's
+  // housemates see it too; only the creating user is excluded. Computed
+  // against the per-pair watermark from BEFORE this render — the client marks
+  // seen after mount, so the highlight survives the visit it's first shown on.
+  const isNewEntry = (entry: { createdAt: Date; createdById: string }) =>
+    (seenAt === null || entry.createdAt > seenAt) && entry.createdById !== user.id;
 
   const rows: LedgerRow[] = entries.map((entry) => {
     let label: string;
@@ -127,11 +156,13 @@ export default async function LedgerPage({
         break;
       }
       case 'SETTLEMENT':
-        label = 'Settlement';
+        // Blueprint 02 sketch: "06/28 Settlement Venmo -$40" — method inline.
+        label = entry.note ? `Settlement · ${entry.note}` : 'Settlement';
         filterGroup = 'payment';
         break;
       case 'ADJUSTMENT':
         label = 'Manual adjustment';
+        filterGroup = 'payment';
         break;
       default:
         label = entry.type;
@@ -145,9 +176,10 @@ export default async function LedgerPage({
       label,
       filterGroup,
       note: entry.note,
-      createdByName: creatorById.get(entry.createdById) ?? 'someone',
+      createdByName: creatorById.get(entry.createdById)?.name ?? 'someone',
       restockId,
       take,
+      isNew: isNewEntry(entry),
     };
   });
 
@@ -156,8 +188,10 @@ export default async function LedgerPage({
       other={other}
       others={others}
       yourName={user.name}
+      yourHouseholdId={me}
       netCents={netCents}
       rows={rows}
+      renderedAt={renderedAt}
     />
   );
 }

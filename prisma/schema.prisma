@@ -26,11 +26,29 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
-  household       Household @relation(fields: [householdId], references: [id])
+  household       Household    @relation(fields: [householdId], references: [id])
   sessions        Session[]
   invitesCreated  Invite[]
   restocksCreated Restock[]
   takes           Take[]
+  ledgerSeen      LedgerSeen[]
+}
+
+// Per-pair "last looked at the ledger" watermark (blueprint 01 slice 4): an
+// entry between this user's household and the counterparty, created after
+// seenAt by someone other than this user, carries the "new" marker. Per-pair
+// (not one user-wide stamp) so that with >2 households, viewing one pair
+// never swallows another pair's unseen entries. seenAt is the ledger page's
+// RENDER timestamp, never mutation-time now() — entries created between the
+// render and the markSeen write stay unseen.
+model LedgerSeen {
+  userId                  String
+  counterpartyHouseholdId String
+  seenAt                  DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, counterpartyHouseholdId])
 }
 
 model Session {
@@ -147,6 +165,9 @@ model Take {
 // Takes arrive in slice 3. Intentionally relation-free (blueprint 01).
 model LedgerEntry {
   id                  String   @id @default(cuid())
+  // Idempotency key for the user-authored money entries (settle/adjust): a
+  // replayed mutation returns the original entry instead of double-posting.
+  clientKey           String?  @unique
   type                String // "TAKE" | "RESTOCK_CREDIT" | "LOAN_FEE" | "SETTLEMENT" | "WRITE_OFF" | "ADJUSTMENT" | "REVERSAL"
   creditorHouseholdId String // is owed amountCents…
   debtorHouseholdId   String // …by this household. Always creditor ≠ debtor, amount > 0.
@@ -176,10 +197,34 @@ model Lot {
   bestBy         DateTime?
   unitPhotoPath  String?
 
-  restock Restock @relation(fields: [restockId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id])
-  takes   Take[]
+  restock     Restock      @relation(fields: [restockId], references: [id], onDelete: Cascade)
+  product     Product      @relation(fields: [productId], references: [id])
+  takes       Take[]
+  adjustments Adjustment[]
 
   @@unique([restockId, position])
   @@index([productId])
+}
+
+// ---- slice 4: adjustments (settlement is a LedgerEntry, blueprint 01 D5) ----
+
+// Recount (set a lot's physical count) or write-off (expired/damaged).
+// Amountless by construction: neither touches the ledger in v1 — the owner
+// household eats the drift/cost (blueprint 01 invariant 8). Rows immutable.
+model Adjustment {
+  id          String   @id @default(cuid())
+  // Idempotency key: write-offs are cumulative (a double-tap would decrement
+  // twice), so a replay returns the original adjustment instead.
+  clientKey   String?  @unique
+  lotId       String
+  type        String // "RECOUNT" | "WRITE_OFF"
+  countBefore Int // read by the SERVER inside the tx — never client-supplied
+  countAfter  Int // RECOUNT: the physical count (≥ 0); WRITE_OFF: before − writtenOff
+  note        String?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  lot Lot @relation(fields: [lotId], references: [id])
+
+  @@index([lotId])
 }

@@ -62,6 +62,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       unitCostCents: lot.unitCostCents!,
       purchasedAt: lot.restock.purchasedAt.toISOString(),
       bestBy: lot.bestBy?.toISOString() ?? null,
+      unitPhotoPath: lot.unitPhotoPath,
     });
   }
   const productGroups = [...groups.values()]
