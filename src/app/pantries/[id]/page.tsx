@@ -55,8 +55,11 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
     group.total += lot.remainingCount;
     group.lots.push({
       id: lot.id,
+      restockId: lot.restockId,
       code: restockCode(lot.restock.dateCode!, lot.restock.seq!),
       remaining: lot.remainingCount,
+      // FINALIZED lots always have a frozen unit cost (blueprint 01 D1).
+      unitCostCents: lot.unitCostCents!,
       purchasedAt: lot.restock.purchasedAt.toISOString(),
       bestBy: lot.bestBy?.toISOString() ?? null,
     });

@@ -30,6 +30,7 @@ model User {
   sessions        Session[]
   invitesCreated  Invite[]
   restocksCreated Restock[]
+  takes           Take[]
 }
 
 model Session {
@@ -120,6 +121,27 @@ model RestockImage {
   @@unique([restockId, position])
 }
 
+// ---- slice 3: takes & ledger -----------------------------------------------
+
+// Append-only (blueprint 01 D2): a Take row is immutable; undo sets
+// reversedAt and posts a swapped-party REVERSAL ledger entry.
+model Take {
+  id           String    @id @default(cuid())
+  clientKey    String?   @unique // idempotency key: a replayed create returns this take instead of double-taking
+  lotId        String
+  takerId      String // user; household derived via taker
+  quantity     Int // > 0
+  costCents    Int // quantity × lot.unitCostCents; 0 when own-household
+  takenAt      DateTime  @default(now())
+  reversedAt   DateTime?
+  reversedById String?
+
+  lot   Lot  @relation(fields: [lotId], references: [id])
+  taker User @relation(fields: [takerId], references: [id])
+
+  @@index([lotId])
+}
+
 // Pulled forward from the slice-3 plan: finalize must post the purchaser
 // credit (blueprint 01 D1, invariant 5), so the ledger table exists now.
 // Takes arrive in slice 3. Intentionally relation-free (blueprint 01).
@@ -156,6 +178,7 @@ model Lot {
 
   restock Restock @relation(fields: [restockId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
+  takes   Take[]
 
   @@unique([restockId, position])
   @@index([productId])

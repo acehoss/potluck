@@ -3,8 +3,8 @@
 import { useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { parseDollarsToCents } from '@/lib/money';
+import { useEffect, useState } from 'react';
+import { formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
 
 export type ProductGroup = {
@@ -14,8 +14,10 @@ export type ProductGroup = {
   total: number;
   lots: {
     id: string;
+    restockId: string;
     code: string;
     remaining: number;
+    unitCostCents: number;
     purchasedAt: string; // ISO
     bestBy: string | null; // ISO
   }[];
@@ -27,6 +29,18 @@ function ageLabel(purchasedAt: string) {
   const days = Math.floor((Date.now() - new Date(purchasedAt).getTime()) / 86_400_000);
   if (days < 31) return `${days}d old`;
   return `${Math.floor(days / 30)}mo old`;
+}
+
+/**
+ * Idempotency key for take.create, one per sheet open. crypto.randomUUID is
+ * unavailable in non-secure contexts (slice-1 lesson: families hit LAN IPs
+ * over plain http), hence the fallback.
+ */
+function newClientKey() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
 }
 
 function bestByBadge(bestBy: string | null) {
@@ -58,9 +72,33 @@ export function InventoryView({
   households: Household[];
   yourHouseholdId: string;
 }) {
+  const router = useRouter();
+  const trpc = useTRPC();
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [startOpen, setStartOpen] = useState(false);
+  const [takeFor, setTakeFor] = useState<ProductGroup | null>(null);
+  const [toast, setToast] = useState<{ takeId: string; label: string } | null>(null);
+  const [toastError, setToastError] = useState<string | null>(null);
+
+  // The undo affordance lives 10s (blueprint 02); the take itself stays
+  // undoable from the ledger detail afterwards (cross-household).
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 10_000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const undo = useMutation(
+    trpc.take.undo.mutationOptions({
+      onSuccess: () => {
+        setToast(null);
+        setToastError(null);
+        router.refresh();
+      },
+      onError: (e) => setToastError(e.message),
+    }),
+  );
 
   const visible = groups.filter((g) => g.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -123,36 +161,51 @@ export function InventoryView({
               data-testid="product-row"
               className="rounded-xl border border-border bg-surface-raised shadow-sm"
             >
-              <button
-                type="button"
-                onClick={() =>
-                  setExpanded((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(group.productId)) next.delete(group.productId);
-                    else next.add(group.productId);
-                    return next;
-                  })
-                }
-                className="flex min-h-14 w-full items-center gap-3 p-3 text-left"
-              >
-                {group.photoPath ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`/api/images/${group.photoPath}`}
-                    alt=""
-                    className="size-10 shrink-0 rounded-lg border border-border object-cover"
-                  />
-                ) : (
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-text-muted">
-                    🖼
+              {/* Row tap opens the take sheet (blueprint 02); expanding lots
+                  is the other affordance — chevron only. */}
+              <div className="flex min-h-14 w-full items-center">
+                <button
+                  type="button"
+                  onClick={() => setTakeFor(group)}
+                  className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left"
+                >
+                  {group.photoPath ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/images/${group.photoPath}`}
+                      alt=""
+                      className="size-10 shrink-0 rounded-lg border border-border object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-text-muted">
+                      🖼
+                    </span>
+                  )}
+                  <p className="min-w-0 flex-1 truncate text-base text-text">{group.name}</p>
+                  <span
+                    data-testid="product-total"
+                    className="shrink-0 font-mono text-sm tabular-nums text-text-muted"
+                  >
+                    {group.total}
                   </span>
-                )}
-                <p className="min-w-0 flex-1 truncate text-base text-text">{group.name}</p>
-                <span className="shrink-0 font-mono text-sm tabular-nums text-text-muted">
-                  {group.total}
-                </span>
-                <span className="shrink-0 text-xs text-text-muted">{isExpanded ? '▾' : '▸'}</span>
-              </button>
+                </button>
+                <button
+                  type="button"
+                  data-testid="product-expand"
+                  aria-label={isExpanded ? `Hide ${group.name} lots` : `Show ${group.name} lots`}
+                  onClick={() =>
+                    setExpanded((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(group.productId)) next.delete(group.productId);
+                      else next.add(group.productId);
+                      return next;
+                    })
+                  }
+                  className="flex size-11 shrink-0 items-center justify-center text-xs text-text-muted"
+                >
+                  {isExpanded ? '▾' : '▸'}
+                </button>
+              </div>
               {isExpanded && (
                 <ul className="divide-y divide-border border-t border-border px-3">
                   {group.lots.map((lot) => (
@@ -162,7 +215,15 @@ export function InventoryView({
                       className="flex min-h-11 items-center justify-between gap-3 py-2"
                     >
                       <p className="text-sm text-text">
-                        <span className="font-mono">{lot.code}</span> · {lot.remaining} left
+                        {/* Code links to the restock detail — that's also where
+                            own-household takes can be undone after the toast. */}
+                        <Link
+                          href={`/restocks/${lot.restockId}`}
+                          className="font-mono text-accent underline-offset-2 hover:underline"
+                        >
+                          {lot.code}
+                        </Link>{' '}
+                        · {lot.remaining} left
                       </p>
                       <p className="text-sm text-text-muted">
                         {ageLabel(lot.purchasedAt)}
@@ -196,6 +257,185 @@ export function InventoryView({
           onClose={() => setStartOpen(false)}
         />
       )}
+
+      {takeFor && (
+        <TakeSheet
+          group={takeFor}
+          ownerName={pantry.householdName}
+          isOwn={isOwn}
+          onClose={() => setTakeFor(null)}
+          onTaken={(t) => {
+            setTakeFor(null);
+            setToastError(null);
+            setToast({ takeId: t.takeId, label: `Took ${t.quantity} × ${t.productName}` });
+            router.refresh();
+          }}
+        />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          data-testid="take-toast"
+          data-take-id={toast.takeId}
+          className="fixed inset-x-4 bottom-16 z-30 mx-auto flex max-w-md items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised px-4 py-3 shadow-sm"
+        >
+          <p className="min-w-0 truncate text-sm text-text">{toastError ?? toast.label}</p>
+          <button
+            type="button"
+            data-testid="toast-undo"
+            disabled={undo.isPending}
+            onClick={() => undo.mutate({ takeId: toast.takeId })}
+            className="shrink-0 text-sm font-medium text-accent disabled:opacity-50"
+          >
+            {undo.isPending ? 'Undoing…' : 'Undo'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Take sheet (blueprint 02): two taps for the common case. Oldest lot
+ * preselected with a FIFO badge — suggested, never enforced; overtake is
+ * blocked at the stepper (and again by the server's conditional decrement).
+ */
+function TakeSheet({
+  group,
+  ownerName,
+  isOwn,
+  onClose,
+  onTaken,
+}: {
+  group: ProductGroup;
+  ownerName: string;
+  isOwn: boolean;
+  onClose: () => void;
+  onTaken: (t: { takeId: string; quantity: number; productName: string }) => void;
+}) {
+  const trpc = useTRPC();
+  // One idempotency key per sheet open: a double-tap on Take (dispatched
+  // before isPending re-renders the disabled attribute) replays as the same
+  // take server-side instead of decrementing twice.
+  const [clientKey] = useState(newClientKey);
+  // Lots arrive oldest-first (FIFO order); index 0 is the suggestion.
+  const [lotId, setLotId] = useState(group.lots[0].id);
+  const [qty, setQty] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const lot = group.lots.find((l) => l.id === lotId) ?? group.lots[0];
+  const isFifo = lot.id === group.lots[0].id;
+  const costCents = qty * lot.unitCostCents;
+
+  const take = useMutation(
+    trpc.take.create.mutationOptions({
+      onSuccess: (t) => onTaken(t),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  const stepperBtn =
+    'flex size-11 items-center justify-center rounded-lg border border-border-strong text-lg font-medium text-text hover:bg-surface-sunken disabled:opacity-40';
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="take-sheet"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <h2 className="text-lg font-semibold">Take: {group.name}</h2>
+
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          <span className="flex items-center gap-2">
+            Lot
+            {isFifo && (
+              <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
+                FIFO ✓
+              </span>
+            )}
+          </span>
+          <select
+            data-testid="take-lot"
+            value={lotId}
+            onChange={(e) => {
+              setLotId(e.target.value);
+              setQty(1);
+            }}
+            className="min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+          >
+            {group.lots.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.code} · {l.remaining} left
+              </option>
+            ))}
+          </select>
+          <span className="text-xs font-normal text-text-muted">
+            {lot.remaining} left
+            {lot.bestBy && <> · {bestByBadge(lot.bestBy)}</>}
+          </span>
+        </label>
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-text">
+            Qty{' '}
+            <span className="font-normal text-text-muted">
+              {formatCents(lot.unitCostCents)}/u
+            </span>
+          </span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Take fewer"
+              disabled={qty <= 1}
+              onClick={() => setQty((q) => Math.max(1, q - 1))}
+              className={stepperBtn}
+            >
+              −
+            </button>
+            <span data-testid="take-qty" className="w-8 text-center font-mono tabular-nums">
+              {qty}
+            </span>
+            <button
+              type="button"
+              aria-label="Take more"
+              disabled={qty >= lot.remaining}
+              onClick={() => setQty((q) => Math.min(lot.remaining, q + 1))}
+              className={stepperBtn}
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <p data-testid="take-cost" className="text-sm font-medium text-text">
+          {isOwn ? 'No charge — your pantry' : <>You&apos;ll owe {ownerName} {formatCents(costCents)}</>}
+        </p>
+
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-11 flex-1 rounded-lg border border-border-strong px-4 py-2.5 font-medium text-text transition-colors hover:bg-surface-sunken"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="take-submit"
+            disabled={take.isPending}
+            onClick={() => take.mutate({ lotId: lot.id, quantity: qty, clientKey })}
+            className="min-h-11 flex-1 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50"
+          >
+            {take.isPending ? 'Taking…' : 'Take'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -239,7 +479,7 @@ function StartRestockSheet({
     'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
 
   return (
-    <div className="fixed inset-0 z-20 flex items-end justify-center bg-text/40 sm:items-center">
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
         <h2 className="text-lg font-semibold">New restock</h2>
         <form

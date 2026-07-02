@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
 import { db } from '@/server/db';
+import { netByCounterparty } from '@/server/ledger';
 
 /**
  * Pantries tab (blueprint 02): every pantry across all households —
@@ -34,6 +36,10 @@ export default async function PantriesPage() {
     unitsByPantry.set(pantryId, (unitsByPantry.get(pantryId) ?? 0) + (r._sum.remainingCount ?? 0));
   }
 
+  // The net number is the product (SPEC §2): one strip per counterparty.
+  const net = await netByCounterparty(user.householdId);
+  const others = households.filter((h) => h.id !== user.householdId);
+
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex items-center justify-between gap-4">
@@ -42,6 +48,36 @@ export default async function PantriesPage() {
       </header>
 
       <main className="flex flex-col gap-6">
+        {others.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {others.map((h) => {
+              const n = net.get(h.id) ?? 0;
+              return (
+                <Link
+                  key={h.id}
+                  data-testid="net-strip"
+                  href={`/ledger?with=${h.id}`}
+                  className="rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-medium shadow-sm"
+                >
+                  {n > 0 && (
+                    <span className="text-success">
+                      You&apos;re up {formatCents(n)} with {h.name}
+                    </span>
+                  )}
+                  {n < 0 && (
+                    <span className="text-danger">
+                      You&apos;re down {formatCents(-n)} with {h.name}
+                    </span>
+                  )}
+                  {n === 0 && (
+                    <span className="text-text-muted">You&apos;re even with {h.name}</span>
+                  )}
+                  <span className="float-right text-text-muted">→</span>
+                </Link>
+              );
+            })}
+          </div>
+        )}
         {households.map((household) => {
           const isYours = household.id === user.householdId;
           return (

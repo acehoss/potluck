@@ -4,6 +4,7 @@ import { householdRouter } from './household';
 import { inviteRouter } from './invite';
 import { productRouter } from './product';
 import { restockRouter } from './restock';
+import { takeRouter } from './take';
 
 export const appRouter = router({
   auth: authRouter,
@@ -11,6 +12,7 @@ export const appRouter = router({
   invite: inviteRouter,
   product: productRouter,
   restock: restockRouter,
+  take: takeRouter,
 });
 
 export type AppRouter = typeof appRouter;

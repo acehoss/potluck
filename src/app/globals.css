@@ -20,6 +20,7 @@
   --success-soft: #dcfce7;
   --warn: #854d0e;
   --warn-soft: #fef9c3;
+  --scrim: rgb(28 25 23 / 0.45); /* modal backdrop — always darkens */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,6 +43,7 @@
     --success-soft: #14261c;
     --warn: #facc15;
     --warn-soft: #2a2410;
+    --scrim: rgb(0 0 0 / 0.6); /* darker still on dark surfaces */
   }
 }
 
@@ -65,6 +67,7 @@
   --color-success-soft: var(--success-soft);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  --color-scrim: var(--scrim);
   --font-sans: var(--font-geist-sans), system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }

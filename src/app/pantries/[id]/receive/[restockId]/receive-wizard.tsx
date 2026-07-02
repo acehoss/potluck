@@ -196,7 +196,7 @@ function EditDetailsSheet({
   );
 
   return (
-    <div className="fixed inset-0 z-20 flex items-end justify-center bg-text/40 sm:items-center">
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
         <h2 className="text-lg font-semibold">Edit details</h2>
         <form
@@ -557,9 +557,16 @@ function LineSheet({
     ),
   );
 
+  const queryClient = useQueryClient();
   const saveLine = useMutation(
     trpc.restock.saveLine.mutationOptions({
-      onSuccess: () => onClose(true),
+      onSuccess: () => {
+        // The save may have created a Product; cached search results from
+        // before it existed (30s staleTime) would hide it from the next
+        // line's picker — or the next restock's, in the same session.
+        void queryClient.invalidateQueries(trpc.product.search.pathFilter());
+        onClose(true);
+      },
       onError: (e) => setError(e.message),
     }),
   );
@@ -600,7 +607,7 @@ function LineSheet({
     'flex size-11 items-center justify-center rounded-lg border border-border-strong text-lg font-medium text-text hover:bg-surface-sunken disabled:opacity-40';
 
   return (
-    <div className="fixed inset-0 z-20 flex items-end justify-center bg-text/40 sm:items-center">
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
         <h2 className="text-lg font-semibold">{line ? 'Edit line' : 'Add line'}</h2>
 

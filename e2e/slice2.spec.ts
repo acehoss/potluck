@@ -139,7 +139,8 @@ test('full receive wizard: photos, lines with hold-back, unit photo, reconcile, 
     .getByTestId('product-row')
     .filter({ hasText: uniq('Diced Tomatoes', P) });
   await expect(productRow).toContainText('8');
-  await productRow.getByRole('button').first().click();
+  // Row tap opens the take sheet since slice 3 — lots expand via the chevron.
+  await productRow.getByTestId('product-expand').click();
   await expect(productRow.getByTestId('lot-row')).toContainText(`${code} · 8 left`);
   await expect(page.getByText(uniq('Olive Oil', P))).toHaveCount(0);
 });
@@ -157,8 +158,12 @@ test('cross-household purchaser is credited at cost for received units', async (
   // 3 units at $10.00 → unit cost $3.33; credit = 3 × $3.33 = $9.99,
   // not the $10.00 line total (D1: all money moves as count × unitCost).
   await addLine(page, { product: uniq('Tomato Flat', P), units: 3, total: '10.00' });
+  // Each step has a "Next" — wait for the next step's heading, or a fast
+  // second click lands on the previous step's still-mounted button.
   await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Unit photos' })).toBeVisible();
   await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Reconcile' })).toBeVisible();
 
   await expect(page.getByText('Heise will be credited at cost')).toBeVisible();
   const finalize = page.getByTestId('finalize');
@@ -188,11 +193,15 @@ test('a draft survives refresh, resumes from the pantry, and can be abandoned', 
   await banner.click();
   await expect(page.getByRole('heading', { name: 'Receipt photos' })).toBeVisible();
 
-  // ✕ abandons after confirm and deletes the draft.
+  // ✕ abandons after confirm and deletes the draft. Assert on THIS draft's
+  // retailer, not banner count — a crashed earlier run can leave an unrelated
+  // draft behind, and the banner shows whichever is newest.
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByLabel('Abandon restock').click();
   await expect(page).toHaveURL(pantryUrl);
-  await expect(page.getByTestId('resume-draft')).toHaveCount(0);
+  await expect(
+    page.getByTestId('resume-draft').filter({ hasText: `Resume-${P}-${RUN}` }),
+  ).toHaveCount(0);
 });
 
 test('draft lines, photos, and header details stay editable until finalize', async ({ page }, testInfo) => {
@@ -245,7 +254,9 @@ test('draft lines, photos, and header details stay editable until finalize', asy
 
   // Variance is now zero → reconciled, single-tap finalize.
   await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Unit photos' })).toBeVisible();
   await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Reconcile' })).toBeVisible();
   const finalize = page.getByTestId('finalize');
   await expect(finalize).toHaveText('Finalize');
   await finalize.click();
@@ -288,7 +299,9 @@ test('the server rejects a missing or stale variance acknowledgment', async ({ p
   // The rejected attempts left the draft intact; the UI's two-tap confirm
   // echoes the variance it actually displays and succeeds.
   await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Unit photos' })).toBeVisible();
   await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Reconcile' })).toBeVisible();
   const finalize = page.getByTestId('finalize');
   await expect(finalize).toHaveText('Finalize');
   await finalize.click();

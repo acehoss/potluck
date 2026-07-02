@@ -5,6 +5,7 @@ import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
 import { db } from '@/server/db';
 import { getActiveRestockCredit } from '@/server/ledger';
+import { TakesList, type TakeRow } from './takes-list';
 
 /** Restock detail (blueprint 02): code, photos, lines, credit. */
 export default async function RestockDetailPage({
@@ -32,6 +33,26 @@ export default async function RestockDetailPage({
   if (!restock) notFound();
 
   const credit = await getActiveRestockCredit(restock.id);
+  // Takes against this restock's lots — the persistent undo path for
+  // own-household takes (no ledger row exists to undo them from).
+  const takes = await db.take.findMany({
+    where: { lot: { restockId: restock.id } },
+    orderBy: { takenAt: 'desc' },
+    include: {
+      taker: { select: { name: true, householdId: true } },
+      lot: { select: { product: { select: { name: true } } } },
+    },
+  });
+  const takeRows: TakeRow[] = takes.map((t) => ({
+    id: t.id,
+    quantity: t.quantity,
+    productName: t.lot.product.name,
+    takerName: t.taker.name,
+    takenAt: t.takenAt.toISOString(),
+    costCents: t.costCents,
+    reversed: t.reversedAt !== null,
+    canUndo: t.reversedAt === null && t.taker.householdId === user.householdId,
+  }));
   const lineSum = restock.lots.reduce((s, l) => s + l.lineTotalCents, 0);
   const code =
     restock.dateCode && restock.seq !== null
@@ -140,6 +161,8 @@ export default async function RestockDetailPage({
             })}
           </ul>
         </section>
+
+        <TakesList takes={takeRows} />
       </main>
     </div>
   );
