@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+data
+*.db
+.env
+.env.*
+test-results
+playwright-report
+e2e
+src/generated
+Dockerfile
+docker-compose.yml

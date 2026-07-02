@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Household {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  members  User[]
+  pantries Pantry[]
+  invites  Invite[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  householdId  String
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  household      Household @relation(fields: [householdId], references: [id])
+  sessions       Session[]
+  invitesCreated Invite[]
+}
+
+model Session {
+  // sha256 hex of the session token; the raw token lives only in the cookie
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  // sha256 hex of the invite token; the raw token lives only in the shared link
+  tokenHash   String    @unique
+  householdId String
+  createdById String
+  invitedName String?
+  expiresAt   DateTime
+  usedAt      DateTime?
+  usedById    String?
+  createdAt   DateTime  @default(now())
+
+  household Household @relation(fields: [householdId], references: [id])
+  createdBy User      @relation(fields: [createdById], references: [id])
+}
+
+model Pantry {
+  id          String   @id @default(cuid())
+  householdId String
+  name        String
+  createdAt   DateTime @default(now())
+
+  household Household @relation(fields: [householdId], references: [id])
+}
