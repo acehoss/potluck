@@ -6,12 +6,23 @@ export type Context = {
   user: Awaited<ReturnType<typeof getSessionUser>>;
   /** Best-effort client IP for rate limiting (first x-forwarded-for hop). */
   ip: string;
+  /**
+   * Whether the request arrived over https (directly or via a TLS-terminating
+   * proxy). Drives the cookie Secure flag: Safari drops Secure cookies over
+   * plain http — localhost included — so it must reflect the real protocol,
+   * not NODE_ENV.
+   */
+  secure: boolean;
 };
 
 export async function createContext(req: Request): Promise<Context> {
+  const proto =
+    req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() ??
+    new URL(req.url).protocol.replace(':', '');
   return {
     user: await getSessionUser(),
     ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local',
+    secure: proto === 'https',
   };
 }
 

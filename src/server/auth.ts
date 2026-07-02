@@ -42,11 +42,11 @@ export async function createSession(userId: string) {
   return token;
 }
 
-export async function setSessionCookie(token: string) {
+export async function setSessionCookie(token: string, secure: boolean) {
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure,
     path: '/',
     maxAge: SESSION_TTL_MS / 1000,
   });

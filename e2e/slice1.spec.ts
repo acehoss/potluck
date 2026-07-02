@@ -46,10 +46,12 @@ test('login rejects a wrong password', async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test('a member invites someone, who registers and appears in the household', async ({ page }) => {
+test('a member invites someone, who registers and appears in the household', async ({ page }, testInfo) => {
+  // Both browser projects share one database — keep invitees distinct.
+  const invitee = `Terry-${testInfo.project.name}`;
   await login(page, 'aaron@demo.coop');
 
-  await page.getByPlaceholder('Name (optional)').fill('Terry');
+  await page.getByPlaceholder('Name (optional)').fill(invitee);
   await page.getByRole('button', { name: 'Invite a member' }).click();
   const inviteUrl = await page.getByTestId('invite-url').textContent();
   expect(inviteUrl).toContain('/invite/');
@@ -58,18 +60,18 @@ test('a member invites someone, who registers and appears in the household', asy
   await page.context().clearCookies();
   await page.goto(inviteUrl!);
   await expect(page.getByText('invited to join the Heise household')).toBeVisible();
-  await expect(page.getByLabel('Your name')).toHaveValue('Terry');
+  await expect(page.getByLabel('Your name')).toHaveValue(invitee);
 
-  await page.getByLabel('Email').fill('terry@demo.coop');
+  await page.getByLabel('Email').fill(`terry-${testInfo.project.name}@demo.coop`);
   await page.getByLabel('Password').fill('terry-password-123');
   await page.getByRole('button', { name: 'Join household' }).click();
 
   await expect(page.getByText('your household')).toBeVisible();
   const heiseCard = page.getByTestId('household-card').filter({ hasText: 'Heise' });
-  await expect(heiseCard.getByText('Terry', { exact: true })).toBeVisible();
+  await expect(heiseCard.getByText(invitee, { exact: true })).toBeVisible();
 });
 
-test('an invite link cannot be used twice', async ({ page }) => {
+test('an invite link cannot be used twice', async ({ page }, testInfo) => {
   await login(page, 'dana@demo.coop');
 
   await page.getByRole('button', { name: 'Invite a member' }).click();
@@ -77,8 +79,8 @@ test('an invite link cannot be used twice', async ({ page }) => {
 
   await page.context().clearCookies();
   await page.goto(inviteUrl!);
-  await page.getByLabel('Your name').fill('Robin');
-  await page.getByLabel('Email').fill('robin@demo.coop');
+  await page.getByLabel('Your name').fill(`Robin-${testInfo.project.name}`);
+  await page.getByLabel('Email').fill(`robin-${testInfo.project.name}@demo.coop`);
   await page.getByLabel('Password').fill('robin-password-123');
   await page.getByRole('button', { name: 'Join household' }).click();
   await expect(page.getByText('your household')).toBeVisible();

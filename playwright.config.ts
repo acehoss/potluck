@@ -9,5 +9,10 @@ export default defineConfig({
     baseURL: process.env.BASE_URL ?? 'http://localhost:3000',
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Safari's engine: catches WebKit-only behavior like refusing Secure
+    // cookies over plain http, which Chromium happily allows on localhost.
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  ],
 });

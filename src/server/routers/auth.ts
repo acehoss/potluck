@@ -37,7 +37,7 @@ export const authRouter = router({
     }
 
     resetRateLimit(`login:email:${input.email}`);
-    await setSessionCookie(await createSession(user.id));
+    await setSessionCookie(await createSession(user.id), ctx.secure);
     return { id: user.id, name: user.name };
   }),
 
@@ -55,7 +55,7 @@ export const authRouter = router({
         password: z.string().min(10, 'Password must be at least 10 characters.').max(256),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const invite = await db.invite.findUnique({ where: { tokenHash: hashToken(input.token) } });
       if (!invite || invite.usedAt || invite.expiresAt.getTime() < Date.now()) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite is invalid or expired.' });
@@ -87,7 +87,7 @@ export const authRouter = router({
         return created;
       });
 
-      await setSessionCookie(await createSession(user.id));
+      await setSessionCookie(await createSession(user.id), ctx.secure);
       return { id: user.id, name: user.name };
     }),
 });
