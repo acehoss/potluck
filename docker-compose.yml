@@ -1,6 +1,9 @@
 services:
   app:
     build: .
+    # Survive host reboots, OOM kills, and crashes on the home server — the
+    # healthcheck only marks the container unhealthy; this is what acts on it.
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:

@@ -22,6 +22,34 @@ export function verifyPassword(passwordHash: string, password: string) {
   return argon2Verify(passwordHash, password);
 }
 
+/**
+ * Global cap on CONCURRENT argon2 verifications. Each verify allocates ~19 MB
+ * (memoryCost) plus CPU, and login runs one on every attempt — including
+ * nonexistent emails, via DUMMY_HASH. Without a ceiling, a burst of login
+ * POSTs allocates multiple GB and saturates the single home-server container
+ * (2–10 households). The per-IP/-email rate limits bound a persistent attacker,
+ * but this bounds the instantaneous memory/CPU spike. Legit concurrency here is
+ * a handful; the default (12) is generous. `'busy'` maps to 429 at the caller.
+ */
+const MAX_CONCURRENT_VERIFY = Math.max(
+  1,
+  Number(process.env.MAX_PASSWORD_VERIFY_CONCURRENCY ?? '12') || 12,
+);
+let activeVerifications = 0;
+
+export async function verifyPasswordLimited(
+  passwordHash: string,
+  password: string,
+): Promise<boolean | 'busy'> {
+  if (activeVerifications >= MAX_CONCURRENT_VERIFY) return 'busy';
+  activeVerifications += 1;
+  try {
+    return await argon2Verify(passwordHash, password);
+  } finally {
+    activeVerifications -= 1;
+  }
+}
+
 export function generateToken() {
   return randomBytes(32).toString('base64url');
 }

@@ -676,3 +676,89 @@ test('backup.sh tars images before the DB snapshot and cleans up its temp files'
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * The correct-credit op (blueprint 01 Immutability + invariant 5): the only
+ * auditable fix for a RESTOCK_CREDIT posted against a wrong receivedCount
+ * caught after finalize. A REVERSAL of the old credit (same restockId) plus a
+ * corrected RESTOCK_CREDIT, gated to the purchaser or pantry-owning household.
+ * Built entirely through the API (the op has no dedicated UI in v1); nets to
+ * zero on the pair so it doesn't skew the delta-based tests above.
+ */
+test('correct-credit reverses a wrong restock credit and reposts the right amount', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  await login(page, 'aaron@demo.coop');
+
+  const ov = (await (await page.request.get('/api/trpc/household.overview')).json()).result.data as {
+    yourHouseholdId: string;
+    households: { id: string; pantries: { id: string }[] }[];
+  };
+  const mine = ov.yourHouseholdId;
+  const heise = ov.households.find((h) => h.id === mine)!;
+  const inLaws = ov.households.find((h) => h.id !== mine)!;
+  const pantryId = heise.pantries[0].id;
+
+  // In-Laws paid for Aaron's (Heise) pantry. receivedCount typo'd to 24 when
+  // only 12 arrived; unitCost = 100¢ → credit posts at 2400¢.
+  const create = await page.request.post('/api/trpc/restock.create', {
+    data: {
+      pantryId,
+      retailer: `S4cc-${P}-${RUN}`,
+      purchasedAt: new Date().toISOString().slice(0, 10),
+      purchaserHouseholdId: inLaws.id,
+      receiptTotalCents: null,
+    },
+  });
+  const restockId = (await create.json()).result.data.id as string;
+  const line = await page.request.post('/api/trpc/restock.saveLine', {
+    data: {
+      restockId,
+      newProductName: `CC Beans ${P}-${RUN}`,
+      purchasedCount: 24,
+      receivedCount: 24,
+      lineTotalCents: 2400,
+      bestBy: null,
+    },
+  });
+  const lotId = (await line.json()).result.data.lotId as string;
+  const fin = await page.request.post('/api/trpc/restock.finalize', {
+    data: { restockId, acknowledgedVarianceCents: null },
+  });
+  expect((await fin.json()).result.data.creditCents).toBe(2400);
+
+  const creditNow = async () => {
+    const res = await page.request.get(
+      `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
+    );
+    return (await res.json()).result.data.credit as { amountCents: number } | null;
+  };
+  expect((await creditNow())!.amountCents).toBe(2400);
+
+  // Correct to 12 received → the live credit becomes 1200; the reversed
+  // original stays for the audit trail but no longer reads as active.
+  const cc = await page.request.post('/api/trpc/restock.correctCredit', {
+    data: { restockId, corrections: [{ lotId, receivedCount: 12 }] },
+  });
+  expect(cc.ok()).toBe(true);
+  const ccData = (await cc.json()).result.data as { previousCents: number; creditCents: number };
+  expect(ccData.previousCents).toBe(2400);
+  expect(ccData.creditCents).toBe(1200);
+  expect((await creditNow())!.amountCents).toBe(1200);
+
+  // Correcting to the same value again is a no-op guarded at 412.
+  const again = await page.request.post('/api/trpc/restock.correctCredit', {
+    data: { restockId, corrections: [{ lotId, receivedCount: 12 }] },
+  });
+  expect(again.status()).toBe(412);
+
+  // Correct down to 0 received → the credit is reversed with no replacement
+  // (invariant 5: none when the purchaser is owed nothing), netting the pair
+  // back to where it started.
+  const zero = await page.request.post('/api/trpc/restock.correctCredit', {
+    data: { restockId, corrections: [{ lotId, receivedCount: 0 }] },
+  });
+  expect((await zero.json()).result.data.creditCents).toBe(0);
+  expect(await creditNow()).toBeNull();
+});

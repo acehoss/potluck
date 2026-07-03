@@ -12,7 +12,7 @@ import {
   type ExtractionImage,
 } from '../extraction';
 import { deleteImageFile, imageFileExists, isStoredImagePath, readImageFile } from '../images';
-import { getActiveRestockCredit } from '../ledger';
+import { getActiveRestockCredit, pickActiveRestockCredit } from '../ledger';
 import { checkRateLimit } from '../rate-limit';
 import { protectedProcedure, router } from '../trpc';
 
@@ -639,6 +639,142 @@ export const restockRouter = router({
           throw err;
         }
       }
+    }),
+
+  /**
+   * The correct-credit op (blueprint 01 Immutability + invariant 5): the only
+   * auditable fix for a RESTOCK_CREDIT posted against a wrong `receivedCount`
+   * caught AFTER finalize. FINALIZED is terminal and a free-form manual
+   * ADJUSTMENT is explicitly NOT the fix path (it carries no `restockId` and
+   * severs restock↔ledger auditability), so this is the escape hatch.
+   *
+   * One transaction, gated to a member of the purchaser OR pantry-owning
+   * household (authz matrix, "Correct a RESTOCK_CREDIT"): the operator supplies
+   * the corrected received count per affected lot; the server recomputes the
+   * credit as Σ(receivedCount × unitCostCents) — never a client-supplied dollar
+   * figure (D1) — then REVERSES the old credit (swapped parties, same amount,
+   * `reversesId`, same `restockId`) and posts the corrected RESTOCK_CREDIT
+   * (also linked to the restock). Both survive for the audit trail; the
+   * reversed-credit dedup in `pickActiveRestockCredit` keeps every display read
+   * on the live one.
+   *
+   * `receivedCount` is the money basis and is persisted here so invariant 5
+   * stays literally true — this is the sanctioned exception to its post-finalize
+   * immutability (like `Take.reversedAt`). It does NOT touch `remainingCount`:
+   * physical inventory drift is corrected independently by the owner's recount
+   * (invariant 9), and double-correcting here would desync the two.
+   */
+  correctCredit: protectedProcedure
+    .input(
+      z.object({
+        restockId: z.string().min(1),
+        // Corrected received count per affected lot; omitted lots keep theirs.
+        corrections: z
+          .array(
+            z.object({
+              lotId: z.string().min(1),
+              receivedCount: z.number().int().min(0).max(10_000),
+            }),
+          )
+          .min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return dbTransaction(async (tx) => {
+        const restock = await tx.restock.findUnique({
+          where: { id: input.restockId },
+          include: { pantry: { select: { householdId: true } }, lots: true },
+        });
+        if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (restock.status !== 'FINALIZED') {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Only a finalized restock has a credit to correct.',
+          });
+        }
+        // Authz: purchaser or pantry-owning household (blueprint 01 matrix).
+        if (
+          restock.purchaserHouseholdId !== ctx.user.householdId &&
+          restock.pantry.householdId !== ctx.user.householdId
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the purchaser or pantry-owning household can correct this credit.',
+          });
+        }
+        if (restock.purchaserHouseholdId === restock.pantry.householdId) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'An own-pantry restock posts no credit to correct.',
+          });
+        }
+
+        // Validate every correction targets a lot of THIS restock and stays in
+        // range, then fold the corrected counts over the frozen unit costs.
+        const byId = new Map(restock.lots.map((l) => [l.id, l]));
+        const corrected = new Map<string, number>();
+        for (const c of input.corrections) {
+          const lot = byId.get(c.lotId);
+          if (!lot) throw new TRPCError({ code: 'NOT_FOUND', message: 'Lot not found on this restock.' });
+          if (c.receivedCount > lot.purchasedCount) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Received count cannot exceed purchased count.',
+            });
+          }
+          corrected.set(c.lotId, c.receivedCount);
+        }
+        let newCreditCents = 0;
+        for (const lot of restock.lots) {
+          const received = corrected.get(lot.id) ?? lot.receivedCount;
+          newCreditCents += received * (lot.unitCostCents ?? 0);
+        }
+
+        const entries = await tx.ledgerEntry.findMany({ where: { restockId: restock.id } });
+        const active = pickActiveRestockCredit(entries);
+        const previousCents = active?.amountCents ?? 0;
+        if (newCreditCents === previousCents) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'The corrected credit matches the current one — nothing to change.',
+          });
+        }
+
+        // Persist the corrected money basis (the sanctioned receivedCount edit).
+        for (const [lotId, received] of corrected) {
+          await tx.lot.update({ where: { id: lotId }, data: { receivedCount: received } });
+        }
+        // Reverse the old credit (if one is live). The unique `reversesId` is a
+        // hard backstop against reversing the same entry twice concurrently.
+        if (active) {
+          await tx.ledgerEntry.create({
+            data: {
+              type: 'REVERSAL',
+              reversesId: active.id,
+              restockId: restock.id,
+              creditorHouseholdId: active.debtorHouseholdId,
+              debtorHouseholdId: active.creditorHouseholdId,
+              amountCents: active.amountCents,
+              createdById: ctx.user.id,
+            },
+          });
+        }
+        // Post the corrected credit — unless it nets to zero (invariant 5:
+        // none when purchaser owes nothing for received units).
+        if (newCreditCents > 0) {
+          await tx.ledgerEntry.create({
+            data: {
+              type: 'RESTOCK_CREDIT',
+              restockId: restock.id,
+              creditorHouseholdId: restock.purchaserHouseholdId,
+              debtorHouseholdId: restock.pantry.householdId,
+              amountCents: newCreditCents,
+              createdById: ctx.user.id,
+            },
+          });
+        }
+        return { creditCents: newCreditCents, previousCents };
+      });
     }),
 
   /** ✕ abandon: DRAFT only; removes the row, its lots, and all photo files. */

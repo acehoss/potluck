@@ -31,6 +31,93 @@ npm run e2e:off
 
 Demo logins (only when seeded): `aaron@demo.coop` / `dana@demo.coop`, password `demo-password`.
 
+## Go live (real deployment)
+
+This app faces the public internet with production-grade, invite-only auth
+(SPEC §4/§6). A real deployment differs from the demo in three ways: it starts
+with an **empty** database (no `SEED_DEMO`), it runs **behind TLS**, and the
+first account is created by hand (registration is invite-only, so there's a
+chicken-and-egg for user #1). The container already sets `restart:
+unless-stopped`, so it survives host reboots and crashes.
+
+### 1. Bootstrap the first household + user
+
+A fresh DB has zero users and no open signup, so no invite can be minted yet.
+Create the first household/owner directly against the running container:
+
+```bash
+docker compose up -d --wait      # empty DB, no SEED_DEMO
+docker compose exec app npx tsx scripts/bootstrap.ts \
+  "Heise" "Aaron" "aaron@example.com" "a-strong-password" "Basement Pantry"
+```
+
+That owner logs in and invites the rest of their household from the app (**More
+→ invite**); a second household's first member is added by running `bootstrap`
+again with a new household name. Everyone else joins by invite — never re-run
+`bootstrap` for an existing person.
+
+### 2. Reset / recover a password
+
+There is no self-service email reset in v1. To set a password (forgotten, or
+initial hand-off), run against the container:
+
+```bash
+docker compose exec app npx tsx scripts/set-password.ts aaron@example.com "new-password"
+```
+
+It rewrites the argon2 hash in place (existing sessions are not revoked).
+
+### 3. Put TLS in front (reverse proxy)
+
+Camera barcode scanning and web push require a **secure context**, login
+credentials must not cross the wire in plaintext, and the session cookie only
+gets its `Secure` flag when the app sees an https request — so a TLS-terminating
+reverse proxy is mandatory in production. The app reads the real scheme and
+client IP from the proxy's `X-Forwarded-Proto` / `X-Forwarded-For` headers,
+trusting **one** proxy hop by default (override with `TRUSTED_PROXY_HOPS` if you
+chain more). Do **not** publish port 3000 to the internet — bind it to the proxy
+only.
+
+**Caddy** (automatic Let's Encrypt certs — simplest). `Caddyfile`:
+
+```
+coop.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Caddy sets `X-Forwarded-Proto`/`X-Forwarded-For` correctly out of the box.
+
+**nginx** (bring your own certs / certbot):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name coop.example.com;
+    ssl_certificate     /etc/letsencrypt/live/coop.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/coop.example.com/privkey.pem;
+
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Forwarded-Proto $scheme;                  # drives the Secure cookie
+        proxy_set_header   X-Forwarded-For  $proxy_add_x_forwarded_for; # appends the real peer
+    }
+}
+```
+
+`$proxy_add_x_forwarded_for` **appends** the real client IP to the right, which
+is exactly the hop the rate limiter trusts — never let the proxy pass a
+client-supplied `X-Forwarded-For` through unmodified.
+
+### 4. Rotate secrets
+
+- **`ANTHROPIC_API_KEY`** — the key that shipped in `.env` at hand-off is
+  compromised; rotate it in the Anthropic console. Only needed for
+  `EXTRACTION_MODE=live`; pass it through the host env, never commit it.
+- **VAPID keys** — generate your own (below); the committed dev pair is public
+  and the entrypoint refuses to start a non-demo stack configured with it.
+
 ## Receipt extraction (VLM)
 
 The receiving wizard can prefill receipt lines from the photos via Claude.

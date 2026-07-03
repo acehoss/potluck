@@ -7,7 +7,7 @@ import {
   hashPassword,
   hashToken,
   setSessionCookie,
-  verifyPassword,
+  verifyPasswordLimited,
 } from '../auth';
 import { db, dbTransaction } from '../db';
 import { checkRateLimit, resetRateLimit } from '../rate-limit';
@@ -31,7 +31,15 @@ export const authRouter = router({
     }
 
     const user = await db.user.findUnique({ where: { email: input.email } });
-    const valid = await verifyPassword(user?.passwordHash ?? DUMMY_HASH, input.password);
+    // Bounded-concurrency verify (argon2 is memory-hungry). Still runs against
+    // DUMMY_HASH for a missing user so timing never reveals which emails exist.
+    const valid = await verifyPasswordLimited(user?.passwordHash ?? DUMMY_HASH, input.password);
+    if (valid === 'busy') {
+      throw new TRPCError({
+        code: 'TOO_MANY_REQUESTS',
+        message: 'Server is busy — try again in a moment.',
+      });
+    }
     if (!user || !valid) {
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid email or password.' });
     }

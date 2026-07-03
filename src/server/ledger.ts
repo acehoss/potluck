@@ -22,14 +22,17 @@ export async function netByCounterparty(me: string) {
 }
 
 /**
- * The live RESTOCK_CREDIT for a restock. Once the slice-3/4 correct-credit op
- * exists, a corrected restock carries the reversed original credit plus its
- * replacement — both with the same `restockId` (blueprint 01, invariant 5) —
- * so display reads must pick the unreversed entry, never "whichever row
- * SQLite yields first".
+ * The unreversed RESTOCK_CREDIT among a restock's ledger rows, or null. A
+ * restock corrected by the correct-credit op (blueprint 01 Immutability +
+ * invariant 5) carries the reversed original credit AND its replacement —
+ * both with the same `restockId` for the audit trail — so any read of "the
+ * live credit" must pick the entry no REVERSAL points at, never "whichever
+ * row SQLite yields first". Pure so both the global-`db` reader below and the
+ * in-transaction correct-credit path (`restock.correctCredit`) share it.
  */
-export async function getActiveRestockCredit(restockId: string) {
-  const entries = await db.ledgerEntry.findMany({ where: { restockId } });
+export function pickActiveRestockCredit<
+  T extends { id: string; type: string; reversesId: string | null; createdAt: Date },
+>(entries: T[]): T | null {
   const reversedIds = new Set(
     entries.filter((e) => e.type === 'REVERSAL' && e.reversesId).map((e) => e.reversesId),
   );
@@ -38,4 +41,10 @@ export async function getActiveRestockCredit(restockId: string) {
       .filter((e) => e.type === 'RESTOCK_CREDIT' && !reversedIds.has(e.id))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null
   );
+}
+
+/** Convenience reader for display paths (restock.get, etc.). */
+export async function getActiveRestockCredit(restockId: string) {
+  const entries = await db.ledgerEntry.findMany({ where: { restockId } });
+  return pickActiveRestockCredit(entries);
 }
