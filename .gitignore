@@ -57,3 +57,8 @@ next-env.d.ts
 # prisma generated client
 /src/generated/
 .playwright-mcp/
+
+# real receipt photos (PII: EXIF GPS, member/card numbers) must never enter
+# git history — only generated fixtures (scripts/generate-receipt-fixture.ts)
+# are tracked under e2e/fixtures/
+/e2e/fixtures/receipt-daves-real.jpeg

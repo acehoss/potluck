@@ -3,12 +3,43 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { dateCodeFor, restockCode, unitCostCents, varianceAutoPasses } from '@/lib/domain';
 import { db, dbTransaction } from '../db';
-import { deleteImageFile, imageFileExists, isStoredImagePath } from '../images';
+import {
+  extractReceipt,
+  extractionMode,
+  parseResolvedIndices,
+  parseStoredExtraction,
+  type ExtractionImage,
+} from '../extraction';
+import { deleteImageFile, imageFileExists, isStoredImagePath, readImageFile } from '../images';
 import { getActiveRestockCredit } from '../ledger';
+import { checkRateLimit } from '../rate-limit';
 import { protectedProcedure, router } from '../trpc';
 
 /** Upper bound for money inputs: keeps values inside Prisma's Int range. */
 const MAX_CENTS = 100_000_000; // $1,000,000
+
+/**
+ * Extractions per user per 15-minute window. A receiving session is one or
+ * two extract calls (initial + maybe a retry); this bounds runaway API spend
+ * from a stuck client or a stolen session. Fixture/off modes spend nothing
+ * (no API call is ever made), so they get a roomy budget that keeps the
+ * limiter exercised end-to-end without repeated e2e runs poisoning each
+ * other through the shared in-memory window.
+ */
+function extractsPerWindow() {
+  return extractionMode() === 'live' ? 20 : 200;
+}
+
+/**
+ * Memory caps for the extract endpoint (same threat as the rate limit: a
+ * malicious member or stolen session). Without them, every RestockImage of a
+ * draft is buffered fully into memory and then base64-expanded (+33%) into
+ * one API request — 120 uploads × 8MB would materialize ~2GB and OOM the
+ * single self-hosted container. Receipts are 1–3 pages in practice; stored
+ * pages are client-downscaled to well under 1MB each.
+ */
+const MAX_EXTRACT_PAGES = 8;
+const MAX_EXTRACT_TOTAL_BYTES = 24 * 1024 * 1024;
 
 /**
  * Date-only input (receipt date, best-by), stored as UTC midnight. The
@@ -173,9 +204,20 @@ export const restockRouter = router({
     if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
 
     const credit = await getActiveRestockCredit(restock.id);
+    const extraction = parseStoredExtraction(restock.extractionJson);
     return {
       id: restock.id,
       status: restock.status,
+      // Drives the "Extract from receipt" affordance; the UI never offers
+      // extraction when the mode is off (blueprint 04 §3).
+      extractionEnabled: extractionMode() !== 'off',
+      extractedAt: restock.extractedAt?.toISOString() ?? null,
+      // Proposal state is server-derived (blueprint 02: the wizard survives
+      // refresh, tab-kill, and step changes): the stored extraction lines
+      // plus the indices the user already confirmed/dismissed. The client
+      // renders lines minus resolved minus lines matching existing lots.
+      extractionLines: extraction?.lines ?? null,
+      extractionResolved: parseResolvedIndices(restock.extractionResolved),
       retailer: restock.retailer,
       purchasedAt: restock.purchasedAt.toISOString().slice(0, 10),
       receiptTotalCents: restock.receiptTotalCents,
@@ -207,7 +249,19 @@ export const restockRouter = router({
 
   /** Step 2: attach an uploaded receipt photo. Append-only once finalized. */
   addImage: protectedProcedure
-    .input(z.object({ restockId: z.string().min(1), path: z.string().min(1).max(300) }))
+    .input(
+      z.object({
+        restockId: z.string().min(1),
+        path: z.string().min(1).max(300),
+        // sha256 of the ORIGINAL selected file (pre-downscale), sent with the
+        // upload and persisted here so fixture-mode extraction keys on it and
+        // drafts survive refresh (blueprint 04 §3). Advisory metadata only.
+        originalSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .nullish(),
+      }),
+    )
     .mutation(async ({ input }) => {
       const image = await dbTransaction(async (tx) => {
         await assertFreshUpload(tx, 'receipts', input.path);
@@ -224,10 +278,111 @@ export const restockRouter = router({
             restockId: input.restockId,
             path: input.path,
             position: (last?.position ?? 0) + 1,
+            originalSha256: input.originalSha256 ?? null,
           },
         });
       });
       return { id: image.id };
+    }),
+
+  /**
+   * VLM extraction over ALL of the draft's receipt images, in position order
+   * (blueprint 04 §3, SPEC §4). ADVISORY: proposed lines are returned to the
+   * client and never written to the DB — the user materializes only the
+   * lines they confirm, through the normal saveLine flow. Gated like other
+   * draft edits (any coop member may edit a draft); rate-limited per user.
+   * Failures come back as { status: 'unavailable' } with a friendly,
+   * retriable message — extraction never blocks the wizard.
+   */
+  extract: protectedProcedure
+    .input(z.object({ restockId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const restock = await db.restock.findUnique({
+        where: { id: input.restockId },
+        include: { images: { orderBy: { position: 'asc' } } },
+      });
+      if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (restock.status !== 'DRAFT') {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restock is already finalized.' });
+      }
+      if (!checkRateLimit(`extract:${ctx.user.id}`, extractsPerWindow())) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many extractions — wait a few minutes, or enter lines manually.',
+        });
+      }
+
+      // Cap pages and total bytes BEFORE buffering (mirrors the upload
+      // route's pre-buffer length check): first pages win, extras are simply
+      // not sent — advisory extraction degrades, it never 500s or OOMs.
+      const images: ExtractionImage[] = [];
+      let totalBytes = 0;
+      for (const image of restock.images.slice(0, MAX_EXTRACT_PAGES)) {
+        const jpeg = await readImageFile(image.path);
+        if (!jpeg) continue;
+        if (totalBytes + jpeg.length > MAX_EXTRACT_TOTAL_BYTES) {
+          console.warn(
+            `[extraction] restock ${restock.id}: payload cap hit at page ${image.position}; later pages skipped`,
+          );
+          break;
+        }
+        totalBytes += jpeg.length;
+        images.push({ jpeg, originalSha256: image.originalSha256 });
+      }
+
+      // The API call runs OUTSIDE any transaction/lock — it can take tens of
+      // seconds and must never stall the app-wide DB lock.
+      const result = await extractReceipt(images);
+      if (result.status === 'unavailable') return result;
+
+      // Audit metadata + the proposal source of truth (blueprint 01 slice-5
+      // columns); status-guarded so a finalize that landed during the API
+      // call is left untouched. A fresh extraction resets the resolved set —
+      // the client dedupes re-proposed lines against already-confirmed lots.
+      await db.restock.updateMany({
+        where: { id: restock.id, status: 'DRAFT' },
+        data: {
+          extractedAt: new Date(),
+          extractionModel: result.model,
+          extractionJson: JSON.stringify(result.data),
+          extractionResolved: '[]',
+        },
+      });
+
+      return {
+        status: 'ok' as const,
+        lines: result.data.lines,
+        retailer: result.data.retailer,
+        purchasedAt: result.data.purchasedAt,
+        receiptTotalCents: result.data.receiptTotalCents,
+      };
+    }),
+
+  /**
+   * Mark one extraction line as resolved — confirmed into a lot or dismissed
+   * — so it is never re-proposed after a refresh, tab-kill, or step change
+   * (blueprint 02's survival contract). Idempotent; gated like other draft
+   * edits.
+   */
+  resolveProposal: protectedProcedure
+    .input(z.object({ restockId: z.string().min(1), index: z.number().int().min(0) }))
+    .mutation(async ({ input }) => {
+      await dbTransaction(async (tx) => {
+        const restock = await getDraftOrThrow(tx, input.restockId);
+        const lines = parseStoredExtraction(restock.extractionJson)?.lines;
+        if (!lines || input.index >= lines.length) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'No such proposed line.' });
+        }
+        const resolved = parseResolvedIndices(restock.extractionResolved);
+        if (!resolved.includes(input.index)) {
+          resolved.push(input.index);
+          await tx.restock.update({
+            where: { id: restock.id },
+            data: { extractionResolved: JSON.stringify(resolved) },
+          });
+        }
+      });
+      return { ok: true };
     }),
 
   /**

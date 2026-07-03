@@ -7,6 +7,12 @@ services:
       DATABASE_URL: file:/data/coop.db
       IMAGES_DIR: /data/images
       SEED_DEMO: ${SEED_DEMO:-0}
+      # VLM extraction (blueprint 04 §3): off | fixture | live. e2e runs with
+      # EXTRACTION_MODE=fixture; the API key is passed through the host env at
+      # runtime and is never baked into the image.
+      EXTRACTION_MODE: ${EXTRACTION_MODE:-off}
+      EXTRACTION_MODEL: ${EXTRACTION_MODEL:-claude-opus-4-8}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - coop-data:/data
     healthcheck:

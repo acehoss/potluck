@@ -37,8 +37,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ kind: s
   }
   if (declared > MAX_BYTES + 64 * 1024) return new Response('too large', { status: 413 });
 
-  const file = (await req.formData()).get('file');
+  const form = await req.formData();
+  const file = form.get('file');
   if (!(file instanceof File)) return new Response('no file', { status: 400 });
+
+  // Optional sha256 (hex) of the ORIGINAL selected file, hashed client-side
+  // before the downscale re-encode (blueprint 04 §3). Validated here, echoed
+  // back, and persisted onto RestockImage when the client attaches the photo
+  // — it keys fixture-mode extraction deterministically.
+  const shaField = form.get('originalSha256');
+  let originalSha256: string | null = null;
+  if (typeof shaField === 'string' && shaField !== '') {
+    if (!/^[0-9a-f]{64}$/.test(shaField)) return new Response('bad sha256', { status: 400 });
+    originalSha256 = shaField;
+  }
 
   const buf = Buffer.from(await file.arrayBuffer());
   if (buf.length > MAX_BYTES) return new Response('too large', { status: 413 });
@@ -48,5 +60,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ kind: s
   await fs.mkdir(path.join(IMAGES_DIR, kind), { recursive: true });
   await fs.writeFile(path.join(IMAGES_DIR, kind, name), buf);
 
-  return Response.json({ path: `${kind}/${name}` });
+  return Response.json({ path: `${kind}/${name}`, originalSha256 });
 }

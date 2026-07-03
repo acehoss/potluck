@@ -1,0 +1,37 @@
+{
+  "lines": [
+    {
+      "description": "ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRES",
+      "unitCount": 2,
+      "lineTotalCents": 1499,
+      "confidence": 0.41
+    },
+    {
+      "description": "ZERO COUNT ITEM",
+      "unitCount": 0,
+      "lineTotalCents": 399,
+      "confidence": 0.5
+    },
+    {
+      "description": "MEGA PACK NAPKINS",
+      "unitCount": 50000,
+      "lineTotalCents": 2599,
+      "confidence": 0.6
+    },
+    {
+      "description": "1234 INSTANT SVG",
+      "unitCount": 1,
+      "lineTotalCents": -300,
+      "confidence": 0.9
+    },
+    {
+      "description": "FREE PROMO ITEM",
+      "unitCount": 1,
+      "lineTotalCents": 0,
+      "confidence": 0.8
+    }
+  ],
+  "receiptTotalCents": null,
+  "retailer": "Edge Mart",
+  "purchasedAt": null
+}

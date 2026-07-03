@@ -33,6 +33,13 @@ export async function imageFileExists(rel: string) {
   );
 }
 
+/** Read a stored image file, or null when missing/out-of-root (extraction). */
+export async function readImageFile(rel: string): Promise<Buffer | null> {
+  const abs = resolveImagePath(rel);
+  if (!abs) return null;
+  return fs.readFile(abs).catch(() => null);
+}
+
 /** Best-effort delete of a stored image file (draft abandon / photo removal). */
 export async function deleteImageFile(rel: string) {
   const abs = resolveImagePath(rel);

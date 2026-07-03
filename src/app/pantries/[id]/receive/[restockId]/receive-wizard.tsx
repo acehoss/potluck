@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { restockCode, unitCostCents, varianceAutoPasses } from '@/lib/domain';
-import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
+import { downscaleToJpeg, sha256HexOfFile, uploadImage } from '@/lib/downscale';
 import { centsToDollarsString, formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers';
@@ -315,9 +315,17 @@ function PhotosStep({
     setError(null);
     try {
       for (const file of Array.from(files)) {
+        // Hash the ORIGINAL bytes before the downscale re-encode — the sha
+        // keys fixture-mode extraction (blueprint 04 §3). Null is fine
+        // (non-secure contexts); live extraction never needs it.
+        const originalSha256 = await sha256HexOfFile(file);
         const jpeg = await downscaleToJpeg(file);
-        const path = await uploadImage('receipts', jpeg);
-        await addImage.mutateAsync({ restockId: restock.id, path });
+        const uploaded = await uploadImage('receipts', jpeg, originalSha256);
+        await addImage.mutateAsync({
+          restockId: restock.id,
+          path: uploaded.path,
+          originalSha256: uploaded.originalSha256,
+        });
       }
       await refetch();
     } catch (e) {
@@ -428,6 +436,221 @@ function VarianceBanner({ restock }: { restock: Restock }) {
   );
 }
 
+// ---- slice 5: VLM proposals (advisory — derived from server state) ----------
+//
+// Proposals are DERIVED, never duplicated client state: restock.get returns
+// the stored extraction lines plus the indices already resolved (confirmed or
+// dismissed, persisted via restock.resolveProposal), so the pending list
+// survives refresh, tab-kill, and step changes (blueprint 02) without ever
+// writing unconfirmed lines to the draft.
+
+type ProposedLine = {
+  index: number; // position in Restock.extractionJson.lines — the resolve key
+  description: string;
+  unitCount: number;
+  lineTotalCents: number;
+  confidence: number | null;
+};
+
+/**
+ * Suggestion query for product.search: the longest plain word of the receipt
+ * description (Costco prints "KS DICED TOMATOES 8CT"; "TOMATOES" is what a
+ * product name will contain). Digit-bearing tokens (2L, 8CT) and brand
+ * prefixes never match product names, so they're skipped.
+ */
+const SUGGESTION_STOP_WORDS = new Set(['KIRKLAND', 'SIGNATURE']);
+function suggestionQueryFor(description: string) {
+  const tokens = description
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter((t) => t.length >= 4 && !/\d/.test(t) && !SUGGESTION_STOP_WORDS.has(t));
+  return tokens.reduce((a, b) => (b.length > a.length ? b : a), '');
+}
+
+const clampInt = (n: number, min: number, max: number) =>
+  Math.min(Math.max(Math.round(n), min), max);
+
+/**
+ * Sanitize one model-proposed line into saveLine's accepted ranges — model
+ * output is untrusted input. Non-positive totals (a discount the model
+ * disobediently emitted as its own line, or a free promo) are DROPPED, never
+ * clamped to $0.00: the prompt nets item discounts into the item, and a
+ * surviving $0.00 row would overstate what the purchaser paid elsewhere.
+ */
+function sanitizeProposal(
+  line: { description: string; unitCount: number; lineTotalCents: number; confidence: number | null },
+  index: number,
+): ProposedLine | null {
+  const lineTotalCents = Math.round(line.lineTotalCents);
+  if (!Number.isFinite(lineTotalCents) || lineTotalCents <= 0) return null;
+  return {
+    index,
+    // saveLine's newProductName schema is .max(200).
+    description: (line.description.trim() || 'Unlabeled item').slice(0, 200),
+    unitCount: clampInt(line.unitCount, 1, 10_000),
+    lineTotalCents: Math.min(lineTotalCents, 100_000_000),
+    confidence: line.confidence,
+  };
+}
+
+/**
+ * The pending proposals: stored extraction lines, minus resolved indices,
+ * minus lines that already exist as draft lots. The lot dedupe covers
+ * re-extraction (which resets the resolved set and re-proposes everything):
+ * each lot consumes at most one proposal — exact name+units+total match
+ * first, then units+total only (a confirm that matched an existing product
+ * keeps the product's name, not the receipt description). The fallback can
+ * suppress an unconfirmed proposal that coincidentally shares units+total
+ * with a manual line — the safe direction (re-add manually) versus
+ * double-counting money into the purchaser credit.
+ */
+function pendingProposals(restock: Restock): ProposedLine[] {
+  if (!restock.extractionLines) return [];
+  const resolved = new Set(restock.extractionResolved);
+  const pending = restock.extractionLines
+    .map((line, index) => (resolved.has(index) ? null : sanitizeProposal(line, index)))
+    .filter((p): p is ProposedLine => p !== null);
+
+  const lots = restock.lots.map((l) => ({
+    name: l.product.name.toUpperCase(),
+    key: `${l.purchasedCount}|${l.lineTotalCents}`,
+    used: false,
+  }));
+  const hidden = new Set<number>();
+  for (const exactName of [true, false]) {
+    for (const p of pending) {
+      if (hidden.has(p.index)) continue;
+      const key = `${p.unitCount}|${p.lineTotalCents}`;
+      const lot = lots.find(
+        (l) => !l.used && l.key === key && (!exactName || l.name === p.description.toUpperCase()),
+      );
+      if (lot) {
+        lot.used = true;
+        hidden.add(p.index);
+      }
+    }
+  }
+  return pending.filter((p) => !hidden.has(p.index));
+}
+
+function ProposalRow({
+  restockId,
+  proposal,
+  onConsumed,
+  onEdit,
+}: {
+  restockId: string;
+  proposal: ProposedLine;
+  onConsumed: () => void;
+  onEdit: (suggested: { id: string; name: string } | null) => void;
+}) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const suggestionQuery = suggestionQueryFor(proposal.description);
+  const search = useQuery(
+    trpc.product.search.queryOptions(
+      { query: suggestionQuery },
+      { enabled: suggestionQuery.length > 0 },
+    ),
+  );
+  const suggested = search.data?.[0] ?? null;
+
+  const saveLine = useMutation(
+    trpc.restock.saveLine.mutationOptions({
+      onSuccess: () => {
+        void queryClient.invalidateQueries(trpc.product.search.pathFilter());
+        // Persist the resolution (and refetch) — the row disappears once the
+        // server confirms; a lost resolve still hides it via the lot dedupe.
+        onConsumed();
+      },
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  // The 1-tap confirm (blueprint 02): the normal saveLine flow, prefilled.
+  // Matched → the suggested product; unmatched → create-new with the
+  // proposed description. All units received by default; hold-backs via Edit.
+  function confirm() {
+    saveLine.mutate({
+      restockId,
+      productId: suggested?.id,
+      newProductName: suggested ? undefined : proposal.description,
+      purchasedCount: proposal.unitCount,
+      receivedCount: proposal.unitCount,
+      lineTotalCents: proposal.lineTotalCents,
+      bestBy: null,
+    });
+  }
+
+  const unitCost = unitCostCents(proposal.lineTotalCents, proposal.unitCount);
+  const smallBtn =
+    'min-h-11 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50';
+
+  return (
+    <li
+      data-testid="proposed-row"
+      className="flex flex-col gap-2 rounded-xl border border-accent/40 bg-surface-raised p-3 shadow-sm"
+    >
+      <div className="min-w-0">
+        <p className="text-base text-text">
+          <span aria-hidden className="mr-1.5 text-accent">
+            ●
+          </span>
+          {proposal.description}
+        </p>
+        <p className="text-sm text-text-muted">
+          {proposal.unitCount} {proposal.unitCount === 1 ? 'unit' : 'units'} ·{' '}
+          {formatCents(proposal.lineTotalCents)}
+          {proposal.unitCount > 1 && <> → {formatCents(unitCost)}/u</>}
+        </p>
+        <p data-testid="proposed-match" className="text-sm text-text-muted">
+          {suggested ? (
+            <>
+              matches <span className="font-medium text-text">{suggested.name}</span>
+            </>
+          ) : (
+            <>new product</>
+          )}
+        </p>
+      </div>
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          data-testid="proposed-confirm"
+          onClick={confirm}
+          disabled={saveLine.isPending || (suggestionQuery.length > 0 && search.isLoading)}
+          className={`${smallBtn} flex-1 bg-accent text-accent-contrast hover:bg-accent-strong`}
+        >
+          {saveLine.isPending ? 'Saving…' : 'Confirm'}
+        </button>
+        <button
+          type="button"
+          data-testid="proposed-edit"
+          onClick={() => onEdit(suggested)}
+          className={`${smallBtn} border border-border-strong text-text hover:bg-surface-sunken`}
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          data-testid="proposed-dismiss"
+          onClick={onConsumed}
+          className={`${smallBtn} border border-border-strong text-text hover:bg-surface-sunken`}
+        >
+          Dismiss
+        </button>
+      </div>
+    </li>
+  );
+}
+
 function LinesStep({
   restock,
   refetch,
@@ -439,21 +662,130 @@ function LinesStep({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const [sheet, setSheet] = useState<{ open: boolean; line: Line | null }>({
-    open: false,
-    line: null,
-  });
+  const trpc = useTRPC();
+  const [sheet, setSheet] = useState<{
+    open: boolean;
+    line: Line | null;
+    proposal: (ProposedLine & { suggested: { id: string; name: string } | null }) | null;
+  }>({ open: false, line: null, proposal: null });
+  const [extractError, setExtractError] = useState<string | null>(null);
+
+  // Pending proposals are derived from the query data — nothing to lose on
+  // refresh/step-back, and nothing to re-spend an API call rehydrating.
+  const proposals = pendingProposals(restock);
+
+  const extract = useMutation(
+    trpc.restock.extract.mutationOptions({
+      onSuccess: async (res) => {
+        if (res.status !== 'ok') {
+          setExtractError(res.reason);
+          return;
+        }
+        setExtractError(
+          res.lines.length === 0 ? 'No lines found on the receipt — enter them manually.' : null,
+        );
+        await refetch(); // the server stored the extraction; proposals derive from it
+      },
+      onError: (e) => setExtractError(e.message),
+    }),
+  );
+
+  // Confirm/dismiss/edit-save all resolve the line server-side so it never
+  // comes back; refetch on settle updates both the lot list and proposals.
+  const resolve = useMutation(
+    trpc.restock.resolveProposal.mutationOptions({ onSettled: refetch }),
+  );
+  const consumeProposal = (index: number) => resolve.mutate({ restockId: restock.id, index });
+
+  const canExtract =
+    restock.extractionEnabled && restock.status === 'DRAFT' && restock.images.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
       <VarianceBanner restock={restock} />
 
-      {restock.lots.length === 0 && (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
-          <p className="text-sm font-medium text-text">No lines yet.</p>
-          <p className="text-sm text-text-muted">Add each receipt line — it becomes a lot.</p>
+      {canExtract && !extract.isPending && (
+        <button
+          type="button"
+          data-testid="extract"
+          onClick={() => extract.mutate({ restockId: restock.id })}
+          className={secondaryBtn}
+        >
+          ✨ {restock.extractedAt !== null ? 'Re-extract from receipt' : 'Extract from receipt'}
+        </button>
+      )}
+
+      {extract.isPending && (
+        <div data-testid="extract-pending" className="flex flex-col gap-2" aria-busy="true">
+          <p className="text-sm text-text-muted">Reading the receipt…</p>
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-16 animate-pulse rounded-xl border border-border bg-surface-sunken"
+            />
+          ))}
         </div>
       )}
+
+      {extractError && !extract.isPending && (
+        <div
+          role="status"
+          data-testid="extract-error"
+          className="flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn-soft px-4 py-3 text-sm font-medium text-warn"
+        >
+          <p>{extractError}</p>
+          {/* Dismissible per blueprint 04 §3; both controls at the 44px
+              minimum tap target (blueprint 03 §4). */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              data-testid="extract-retry"
+              onClick={() => extract.mutate({ restockId: restock.id })}
+              className="min-h-11 rounded-lg border border-warn/40 px-3 py-2 text-sm font-medium text-warn hover:bg-warn/10"
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              data-testid="extract-error-dismiss"
+              onClick={() => setExtractError(null)}
+              className="min-h-11 rounded-lg px-3 py-2 text-sm font-medium text-warn hover:bg-warn/10"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!extract.isPending && proposals.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
+            Proposed from receipt — confirm, edit, or dismiss each
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {proposals.map((proposal) => (
+              <ProposalRow
+                key={proposal.index}
+                restockId={restock.id}
+                proposal={proposal}
+                onConsumed={() => consumeProposal(proposal.index)}
+                onEdit={(suggested) =>
+                  setSheet({ open: true, line: null, proposal: { ...proposal, suggested } })
+                }
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {restock.lots.length === 0 &&
+        !extract.isPending &&
+        proposals.length === 0 && (
+          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
+            <p className="text-sm font-medium text-text">No lines yet.</p>
+            <p className="text-sm text-text-muted">Add each receipt line — it becomes a lot.</p>
+          </div>
+        )}
 
       <ul className="flex flex-col gap-2">
         {restock.lots.map((lot) => {
@@ -464,7 +796,7 @@ function LinesStep({
               <button
                 type="button"
                 data-testid="line-row"
-                onClick={() => setSheet({ open: true, line: lot })}
+                onClick={() => setSheet({ open: true, line: lot, proposal: null })}
                 className="flex w-full flex-col gap-0.5 rounded-xl border border-border bg-surface-raised p-3 text-left shadow-sm"
               >
                 <p className="text-base text-text">{lot.product.name}</p>
@@ -491,7 +823,7 @@ function LinesStep({
       <button
         type="button"
         data-testid="add-line"
-        onClick={() => setSheet({ open: true, line: null })}
+        onClick={() => setSheet({ open: true, line: null, proposal: null })}
         className={secondaryBtn}
       >
         + Add line
@@ -515,9 +847,13 @@ function LinesStep({
         <LineSheet
           restockId={restock.id}
           line={sheet.line}
+          proposal={sheet.proposal}
           onClose={async (changed) => {
-            if (changed) await refetch();
-            setSheet({ open: false, line: null });
+            // A saved proposal-edit consumes its proposal, like Confirm
+            // (consumeProposal refetches when it settles).
+            if (changed && sheet.proposal) consumeProposal(sheet.proposal.index);
+            else if (changed) await refetch();
+            setSheet({ open: false, line: null, proposal: null });
           }}
         />
       )}
@@ -528,20 +864,31 @@ function LinesStep({
 function LineSheet({
   restockId,
   line,
+  proposal,
   onClose,
 }: {
   restockId: string;
   line: Line | null;
+  /** VLM proposal prefill (slice 5): editing a proposed line opens the normal sheet, prefilled. */
+  proposal?: (ProposedLine & { suggested: { id: string; name: string } | null }) | null;
   onClose: (changed: boolean) => void;
 }) {
   const trpc = useTRPC();
   const [productQuery, setProductQuery] = useState('');
   const [product, setProduct] = useState<{ id: string | null; name: string } | null>(
-    line ? { id: line.product.id, name: line.product.name } : null,
+    line
+      ? { id: line.product.id, name: line.product.name }
+      : proposal
+        ? (proposal.suggested ?? { id: null, name: proposal.description })
+        : null,
   );
-  const [units, setUnits] = useState(line?.purchasedCount ?? 1);
+  const [units, setUnits] = useState(line?.purchasedCount ?? proposal?.unitCount ?? 1);
   const [lineTotal, setLineTotal] = useState(
-    line ? centsToDollarsString(line.lineTotalCents) : '',
+    line
+      ? centsToDollarsString(line.lineTotalCents)
+      : proposal
+        ? centsToDollarsString(proposal.lineTotalCents)
+        : '',
   );
   const [received, setReceived] = useState(line?.receivedCount ?? 1);
   const [receivedTouched, setReceivedTouched] = useState(
@@ -609,7 +956,9 @@ function LineSheet({
   return (
     <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
-        <h2 className="text-lg font-semibold">{line ? 'Edit line' : 'Add line'}</h2>
+        <h2 className="text-lg font-semibold">
+          {line ? 'Edit line' : proposal ? 'Edit proposed line' : 'Add line'}
+        </h2>
 
         {/* Product picker: search-as-you-type, create inline (blueprint 02). */}
         {product ? (
@@ -822,7 +1171,7 @@ function UnitPhotoCard({
     setUploading(true);
     try {
       const jpeg = await downscaleToJpeg(file);
-      const path = await uploadImage('units', jpeg);
+      const { path } = await uploadImage('units', jpeg);
       await setUnitPhoto.mutateAsync({ lotId: lot.id, path });
       await refetch();
     } finally {

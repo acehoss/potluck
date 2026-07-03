@@ -18,11 +18,34 @@ npm run dev
 docker compose up -d --wait                # empty database
 SEED_DEMO=1 docker compose up -d --wait    # with demo fixtures
 
-# End-to-end tests (against the seeded compose stack)
+# End-to-end tests (against the seeded compose stack; extraction fixtures on)
+SEED_DEMO=1 EXTRACTION_MODE=fixture docker compose up -d --wait
 npm run e2e
+
+# Extraction unit tests (live error mapping, stored-JSON parsing; no network)
+npm run test:unit
+
+# Off-mode extraction e2e (boots its own EXTRACTION_MODE=off stack, then downs it)
+npm run e2e:off
 ```
 
 Demo logins (only when seeded): `aaron@demo.coop` / `dana@demo.coop`, password `demo-password`.
+
+## Receipt extraction (VLM)
+
+The receiving wizard can prefill receipt lines from the photos via Claude.
+Controlled by `EXTRACTION_MODE` (default `off` — manual entry only):
+
+- `off` — the UI never offers extraction.
+- `fixture` — deterministic committed fixtures for e2e; no network, no key.
+- `live` — the Anthropic API. Requires `ANTHROPIC_API_KEY` in the container
+  environment (`ANTHROPIC_API_KEY=… EXTRACTION_MODE=live docker compose up -d`).
+  **Never bake the key into the image or commit it** — compose passes it
+  through from the host environment at runtime. `EXTRACTION_MODEL` overrides
+  the default model (`claude-opus-4-8`).
+
+Extraction is advisory: proposed lines land on the review screen for per-line
+confirm/edit/dismiss, and any failure degrades to manual entry.
 
 ## Backups
 

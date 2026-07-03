@@ -533,7 +533,7 @@ function LotMenuSheet({
     setError(null);
     try {
       const jpeg = await downscaleToJpeg(file);
-      const path = await uploadImage('units', jpeg);
+      const { path } = await uploadImage('units', jpeg);
       await setUnitPhoto.mutateAsync({ lotId: lotRef.lot.id, path });
       onPhotoSet();
     } catch (e) {

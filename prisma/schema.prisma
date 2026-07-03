@@ -115,6 +115,19 @@ model Restock {
   seq                  Int? // NN, 1-based; display code = `${dateCode}-${pad2(seq)}`
   receiptTotalCents    Int?
   varianceCents        Int? // receiptTotal − Σ lineTotal, set at finalize (D7)
+  // ---- slice 5: VLM extraction (blueprint 01/04 §3). Advisory only — the
+  // raw result is stored for audit/re-extraction; lines materialize solely
+  // through user-confirmed saveLine calls. Editable even after finalize
+  // (blueprint 01 immutability: "frozen except the slice-5 extraction
+  // columns"), though v1 only extracts while DRAFT.
+  extractedAt          DateTime?
+  extractionModel      String?
+  extractionJson       String?
+  // JSON array of extractionJson line indices the user has resolved
+  // (confirmed into a lot or dismissed). Kept server-side so proposals
+  // survive refresh/tab-kill/step-back (blueprint 02) and a resolved line is
+  // never re-proposed. Reset whenever a new extraction is stored.
+  extractionResolved   String?
   finalizedAt          DateTime?
   createdAt            DateTime  @default(now())
 
@@ -133,6 +146,11 @@ model RestockImage {
   restockId String
   path      String // under IMAGES_DIR volume; retained permanently (SPEC §4)
   position  Int
+  // sha256 (hex) of the ORIGINAL selected file, computed client-side before
+  // the canvas downscale (which re-encodes browser-dependently). Keys
+  // fixture-mode extraction deterministically (blueprint 04 §3); null when
+  // the client couldn't hash (non-secure context) — live/off modes ignore it.
+  originalSha256 String?
 
   restock Restock @relation(fields: [restockId], references: [id], onDelete: Cascade)
 

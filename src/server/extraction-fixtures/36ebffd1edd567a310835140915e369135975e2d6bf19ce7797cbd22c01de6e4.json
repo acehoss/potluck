@@ -1,0 +1,79 @@
+{
+  "lines": [
+    {
+      "description": "KS ORG EVOO 2L",
+      "unitCount": 1,
+      "lineTotalCents": 1749,
+      "confidence": 0.97
+    },
+    {
+      "description": "KS MARINARA 3CT",
+      "unitCount": 3,
+      "lineTotalCents": 899,
+      "confidence": 0.97
+    },
+    {
+      "description": "ROTISSERIE CHICKEN",
+      "unitCount": 1,
+      "lineTotalCents": 499,
+      "confidence": 0.97
+    },
+    {
+      "description": "KS BATH TISSUE 30CT",
+      "unitCount": 30,
+      "lineTotalCents": 2299,
+      "confidence": 0.97
+    },
+    {
+      "description": "KS PAPER TOWELS 12CT",
+      "unitCount": 12,
+      "lineTotalCents": 1949,
+      "confidence": 0.97
+    },
+    {
+      "description": "ORG BANANAS 3LB",
+      "unitCount": 1,
+      "lineTotalCents": 249,
+      "confidence": 0.97
+    },
+    {
+      "description": "KS ALMOND BUTTER",
+      "unitCount": 1,
+      "lineTotalCents": 799,
+      "confidence": 0.97
+    },
+    {
+      "description": "CAGE FREE EGGS 24CT",
+      "unitCount": 24,
+      "lineTotalCents": 679,
+      "confidence": 0.97
+    },
+    {
+      "description": "KS SPARKLING WATER 35CT",
+      "unitCount": 35,
+      "lineTotalCents": 1299,
+      "confidence": 0.97
+    },
+    {
+      "description": "FROZEN BLUEBERRIES 4LB",
+      "unitCount": 1,
+      "lineTotalCents": 1099,
+      "confidence": 0.97
+    },
+    {
+      "description": "KS BEEF BROTH 6CT",
+      "unitCount": 6,
+      "lineTotalCents": 999,
+      "confidence": 0.97
+    },
+    {
+      "description": "TORTILLA CHIPS 2LB",
+      "unitCount": 1,
+      "lineTotalCents": 549,
+      "confidence": 0.97
+    }
+  ],
+  "receiptTotalCents": 13355,
+  "retailer": "Costco",
+  "purchasedAt": "2026-06-28"
+}
