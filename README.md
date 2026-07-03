@@ -112,9 +112,11 @@ client-supplied `X-Forwarded-For` through unmodified.
 
 ### 4. Rotate secrets
 
-- **`ANTHROPIC_API_KEY`** — the key that shipped in `.env` at hand-off is
-  compromised; rotate it in the Anthropic console. Only needed for
-  `EXTRACTION_MODE=live`; pass it through the host env, never commit it.
+- **`ANTHROPIC_API_KEY`** — only needed for `EXTRACTION_MODE=live`. `.env` is
+  gitignored (never committed); the key currently there was used for local
+  extraction testing and has been shared in plaintext, so rotate it in the
+  Anthropic console before any public deployment and pass the new key through
+  the host env.
 - **VAPID keys** — generate your own (below); the committed dev pair is public
   and the entrypoint refuses to start a non-demo stack configured with it.
 

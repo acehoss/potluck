@@ -24,7 +24,21 @@ Tracks slice status and progress notes. The scope contract is [SPEC.md](./SPEC.m
 - **Password reset shipped (ops/spec, major).** PLAN slice-1 claimed "reset via CLI"; no such CLI existed. Added `scripts/set-password.ts` (argon2id rewrite in place), documented in README.
 - **TLS / reverse-proxy runbook (ops/spec, major).** README "Go live" now has the missing production recipe: Caddy (auto-TLS) and nginx examples, the required `X-Forwarded-Proto`/`X-Forwarded-For` header wiring (which the Secure cookie and rate-limit IP depend on), `TRUSTED_PROXY_HOPS`, and "don't publish :3000."
 - **Compose survives reboots (ops, major).** Added `restart: unless-stopped` to the app service — the healthcheck only flagged unhealthy; nothing acted on it.
-- **Leaked API key removed (ops, major).** The live `ANTHROPIC_API_KEY` sitting in the working-tree `.env` was blanked with a rotate-me note; README "Go live" calls out rotating it (it is compromised by having been in the tree). Only needed for `EXTRACTION_MODE=live`, passed via host env.
+- **Leaked API key removed (ops, major).** The live `ANTHROPIC_API_KEY` sitting in the working-tree `.env` was blanked with a rotate-me note; README "Go live" calls out rotating it. *(Superseded 2026-07-03: Aaron intentionally added the key for local live-extraction testing, and `.env` is gitignored — never a commit risk. The key was restored to `.env`. It has been shared in plaintext in-session, so rotating before a real deployment is still prudent, but that is Aaron's call, not a blocker.)*
+
+## Outstanding / next — UX polish (v1 build complete)
+
+The build and correctness work is done; what remains is making the app feel warm and legible to a non-technical family member. Source: the final-review "fresh-eyes Dana" usability drive (a not-very-technical in-law opening the app cold). Ranked by how much a real family would feel it. **Do these with Aaron in the loop — they're product/copy judgment, not mechanical fixes.**
+
+1. **Empty first-run reads as broken (make-or-break).** A fresh install shows empty pantries, empty items, and "Nothing here yet" everywhere; Dana's honest reaction was "this is broken / my sibling didn't finish setting it up" and she'd close the app. The whole value (browse the other family's pantry, grab something) is impossible until someone completes a multi-step receive. Options to weigh: a warmer first-run/onboarding state, a guided "stock your first item" nudge, or a starter seed at bootstrap. Highest-leverage item.
+2. **De-jargon the core flows.** "lot", "FIFO ✓", the crate-labeling code, and the lot-picker dropdown speak warehouse, not family. The take sheet already auto-selects the right lot — consider hiding the lot/FIFO machinery behind that default for the common case (grabbing food), surfacing it only when someone wants it. The receive wizard's language ("every lot lands here", "it becomes a lot") wants a plainer pass too.
+3. **Copy bugs — space-jamming after inline `</span>`.** Recurring class (hand-fixed in slice 4 recount, slice 7 iOS-install, and the ledger possessive): a space next to a bolded/`<span>` word gets dropped in render. Known remaining: `"The Heise­haven't stocked this pantry yet."` (pantries empty state — the Items page gets the same sentence right, so it's inconsistent) and `"Olive Oil­new"` (the "new" product badge jammed against the name in the receive line review). Grep for adjacent `</span>` + word boundaries and normalize with explicit `{' '}`.
+4. **Push toggle can wedge on "Turning on…"** on a real device if `serviceWorker.ready` or subscribe stalls (a 10s timeout was added at handoff, so it now surfaces an error instead of hanging forever — verify on a real phone).
+5. **Minor mobile 390px ragged wraps** (restock-detail best-by date wraps mid-token; expired-lot meta pushes the ⋯ menu; take-history product names truncate hard while the amount column has slack). Cosmetic; batch into the polish pass.
+
+Screenshots from the drive: `.playwright-mcp/usability/`; the full slice galleries are in `.playwright-mcp/slice{2..7}/`.
+
+**Owner tasks (real-device, can't be done in headless CI):** install the PWA on an iPhone and an Android via the /more card; confirm icon/splash; turn on notifications and confirm a settlement push arrives with the app closed and deep-links to /ledger; scan a real UPC-A barcode in the receive line sheet (torch toggle on Android). Rotate the `ANTHROPIC_API_KEY` and generate real VAPID keys before any public deployment.
 
 ## Progress notes
 
