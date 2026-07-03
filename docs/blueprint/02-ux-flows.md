@@ -5,8 +5,9 @@ Sheets = bottom sheets on mobile, centered modals ≥sm. All money rendered from
 
 ## Navigation shell (lands with slice 2, grows a tab per slice)
 
-Bottom tab bar, fixed, 4 tabs — `▣ Pantries · ◫ Ledger · ⛏ Items · ☰ More` — hidden
-inside the receive wizard (full-screen flow).
+Bottom tab bar, fixed — `▣ Pantries · ▤ Orders · ◫ Ledger · ⛏ Items · ☰ More` — hidden
+inside the receive wizard (full-screen flow). *(**Orders** added 2026-07-03 → 5 tabs;
+`/orders` list + `/orders/[id]` detail — see the Order flow section below.)*
 
 - **Pantries** `/` — the old dashboard route becomes this tab: every pantry across all
   households (transparency principle), each row → pantry inventory.
@@ -142,6 +143,11 @@ Code also permanently visible on restock detail (`/restocks/[id]`: photos, lines
 
 ## Take flow (slice 3) — 2 taps
 
+> **Superseded 2026-07-03 by Orders (below).** Everything is now a request — the instant
+> take sheet is gone (tapping a product opens **Add to order** instead; `take.create`
+> removed). The sketch below is retained for history. A take now materialises only at
+> order pickup (D9); `take.undo` remains the return path.
+
 From pantry inventory, tap a **product row** → take sheet (expanding lots is the *other*
 affordance: chevron only). Oldest lot preselected with a `FIFO` badge; qty 1.
 
@@ -156,6 +162,26 @@ affordance: chevron only). Oldest lot preselected with a `FIFO` badge; qty 1.
 
 Tap product (1) → `Take` (2). Confirmation toast with `Undo` (10s) → same edit/undo path as
 ledger entry edit. Overtake (qty > remaining) blocked at the stepper.
+
+## Order flow (2026-07-03) — request → fulfil → pickup
+
+Units leave a pantry only through an **Order** (blueprint 01 D9). Availability shown
+everywhere is `remaining − reserved`.
+
+- **Build (requester).** Pantry inventory: tapping a product opens the **Add to order**
+  sheet (same lot-select + FIFO badge + qty stepper as the old take sheet; capped at
+  availability). Adds to a DRAFT cart for that pantry; a **cart bar** at the bottom → the
+  order. Own-pantry orders run the same flow.
+- **`/orders`** — a new tab. Two lists: **your orders** (DRAFT resumable, plus active/past)
+  and, for a pantry owner, **incoming requests**.
+- **`/orders/[id]`** — the shared hub; visible actions switch on `status × role`:
+  - Requester, DRAFT/REQUESTED: qty steppers (edit until picking), **Request**, Cancel.
+  - Owner, REQUESTED → **Start picking** (locks edits) → PICKING → **Mark ready** → READY.
+  - READY: either household → **Mark picked up** (money posts here).
+  - PICKED_UP shows the receipt/cost; CANCELED notes nothing was charged.
+
+Lifecycle `DRAFT → REQUESTED(reserve) → PICKING(lock) → READY → PICKED_UP(money) /
+CANCELED(release)`. Money posts append-only at pickup only; cancel touches nothing.
 
 ## Ledger `/ledger` (slice 3) + Settle (slice 4)
 
