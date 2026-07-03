@@ -466,3 +466,49 @@ test('extraction is rate-limited per user', async ({ page }, testInfo) => {
   await page.getByLabel('Abandon restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
+
+test('confirm is held disabled while the product match resolves; the saved flash shows the line already below', async ({ page }, testInfo) => {
+  const P = testInfo.project.name;
+  await login(page, 'aaron@demo.coop');
+
+  // Inject latency into product.search — the real response, delayed, never a
+  // mock — so the async match window is reliably observable. unroute matches
+  // the predicate by reference, so keep one instance.
+  const isSearch = (url: URL) => url.pathname.includes('product.search');
+  await page.route(isSearch, async (route) => {
+    await new Promise((r) => setTimeout(r, 1_200));
+    await route.continue();
+  });
+
+  await openOwnPantry(page);
+  await startRestock(page, { retailer: `MatchGuard-${P}-${RUN}` });
+  await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
+  await page.getByTestId('extract').click();
+
+  // While the match suggestion is in flight the row says "matching…" and
+  // holds Confirm disabled — a fast Confirm during this window used to
+  // create a duplicate product off the premature "new product" state.
+  const row = proposedRow(page, CHICKEN);
+  await expect(row.getByTestId('proposed-match')).toHaveText('matching…');
+  await expect(row.getByTestId('proposed-confirm')).toBeDisabled();
+  await expect(row.getByTestId('proposed-match')).not.toHaveText('matching…', {
+    timeout: 10_000,
+  });
+  await expect(row.getByTestId('proposed-confirm')).toBeEnabled();
+  await page.unroute(isSearch);
+
+  // Confirm: the "✓ Added — now in the lines below" flash must be TRUE while
+  // it displays — the lots list below already contains the confirmed line
+  // (the resolve + refetch fire immediately; only the flash is on a timer).
+  await row.getByTestId('proposed-confirm').click();
+  const flash = page.getByTestId('proposed-row-saved').filter({ hasText: CHICKEN });
+  await expect(flash).toBeVisible();
+  await expect(lineRow(page, CHICKEN)).toBeVisible();
+  // …and the flash collapses on its own shortly after.
+  await expect(flash).toHaveCount(0);
+  await expect(lineRow(page, CHICKEN)).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByLabel('Abandon restock').click();
+  await expect(page.getByTestId('receive-fab')).toBeVisible();
+});

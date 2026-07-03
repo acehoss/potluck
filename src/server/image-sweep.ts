@@ -11,17 +11,17 @@ const MIN_AGE_MS = 24 * 60 * 60 * 1000;
  * references them; if the follow-up attach mutation never happens (tab
  * closed, draft deleted concurrently, network drop) the file would otherwise
  * sit on the volume forever. Runs at server boot (src/instrumentation.ts).
- *
- * NOTE for slice 6: when Item.photoPath lands, add it to the referenced set.
  */
 export async function sweepOrphanImages(now = Date.now()) {
-  const [images, lots] = await Promise.all([
+  const [images, lots, items] = await Promise.all([
     db.restockImage.findMany({ select: { path: true } }),
     db.lot.findMany({ where: { unitPhotoPath: { not: null } }, select: { unitPhotoPath: true } }),
+    db.item.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
   ]);
   const referenced = new Set<string>([
     ...images.map((i) => i.path),
     ...lots.map((l) => l.unitPhotoPath!),
+    ...items.map((i) => i.photoPath!),
   ]);
 
   let removed = 0;

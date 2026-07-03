@@ -7,15 +7,15 @@ import { useEffect } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
 const TABS = [
-  { href: '/', label: 'Pantries', icon: '▣', enabled: true },
-  { href: '/ledger', label: 'Ledger', icon: '◫', enabled: true },
-  { href: '/items', label: 'Items', icon: '⛏', enabled: false, slice: 6 },
-  { href: '/more', label: 'More', icon: '☰', enabled: true },
+  { href: '/', label: 'Pantries', icon: '▣' },
+  { href: '/ledger', label: 'Ledger', icon: '◫' },
+  { href: '/items', label: 'Items', icon: '⛏' },
+  { href: '/more', label: 'More', icon: '☰' },
 ] as const;
 
 /**
  * Bottom tab bar (blueprint 02). Hidden on auth screens and inside the
- * full-screen receive wizard. Ledger/Items are greyed until their slice.
+ * full-screen receive wizard. All four tabs are live as of slice 6.
  * The Ledger tab carries a "new" dot when the other household posted ledger
  * entries since this user last viewed the ledger (blueprint 01 slice 4 —
  * the v1 counterparty notification; push arrives in slice 7).
@@ -54,19 +54,6 @@ export function TabBar() {
     >
       {TABS.map((tab) => {
         const active = tab.href === '/' ? pathname === '/' : pathname.startsWith(tab.href);
-        if (!tab.enabled) {
-          return (
-            <span
-              key={tab.href}
-              title={`arrives in slice ${'slice' in tab ? tab.slice : ''}`}
-              aria-disabled="true"
-              className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-text-muted opacity-40"
-            >
-              <span aria-hidden>{tab.icon}</span>
-              {tab.label}
-            </span>
-          );
-        }
         const showDot = tab.href === '/ledger' && hasNew.data?.hasNew === true;
         return (
           <Link

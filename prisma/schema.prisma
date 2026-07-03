@@ -16,6 +16,7 @@ model Household {
   pantries  Pantry[]
   invites   Invite[]
   purchases Restock[] @relation("purchases")
+  items     Item[]
 }
 
 model User {
@@ -32,6 +33,7 @@ model User {
   restocksCreated Restock[]
   takes           Take[]
   ledgerSeen      LedgerSeen[]
+  loans           Loan[]
 }
 
 // Per-pair "last looked at the ledger" watermark (blueprint 01 slice 4): an
@@ -245,4 +247,52 @@ model Adjustment {
   lot Lot @relation(fields: [lotId], references: [id])
 
   @@index([lotId])
+}
+
+// ---- slice 6: lending (blueprint 01) -----------------------------------------
+
+// Durable equipment owned by a household (SPEC §4). The per-loan fee defaults
+// to $0 and exists for maintenance-heavy or partially consumable gear; edits
+// affect FUTURE loans only (Loan.feeCents is a snapshot).
+model Item {
+  id          String   @id @default(cuid())
+  // Idempotency key: a photo-less create has no other server-side dedupe, so
+  // a double-tap replay must return the original item, not a twin.
+  clientKey   String?  @unique
+  householdId String
+  name        String
+  photoPath   String? // under IMAGES_DIR volume, kind "items"
+  notes       String?
+  feeCents    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  household Household @relation(fields: [householdId], references: [id])
+  loans     Loan[]
+
+  @@index([householdId])
+}
+
+// item + borrower + out date + optional due date + returned date + condition
+// note (SPEC §4). The fee posts to the ledger AT CHECKOUT (invariant 10: iff
+// feeCents > 0 and borrower household ≠ item household); LedgerEntry.loanId
+// links the LOAN_FEE entry back. One active loan per item is enforced both in
+// the checkout transaction and mechanically by a raw-SQL partial unique index
+// (see the slice6_lending migration — Prisma can't express partial indexes).
+model Loan {
+  id                String    @id @default(cuid())
+  // Idempotency key: checkout posts money, so a double-tap/lost-response
+  // replay must return the original loan instead of double-charging.
+  clientKey         String?   @unique
+  itemId            String
+  borrowerId        String // user; household derived via borrower
+  feeCents          Int // snapshot of item.feeCents at checkout; immutable
+  outAt             DateTime  @default(now())
+  dueAt             DateTime?
+  returnedAt        DateTime?
+  conditionReturned String?
+
+  item     Item @relation(fields: [itemId], references: [id])
+  borrower User @relation(fields: [borrowerId], references: [id])
+
+  @@index([itemId])
 }

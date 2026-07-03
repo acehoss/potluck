@@ -17,6 +17,8 @@ export type LedgerRow = {
   note: string | null;
   createdByName: string;
   restockId: string | null;
+  /** LOAN_FEE rows (and their reversals) link to the item detail. */
+  itemId: string | null;
   take: { id: string; reversed: boolean; canUndo: boolean } | null;
   /** Created since this viewer last saw this pair's ledger, by someone else. */
   isNew: boolean;
@@ -280,6 +282,11 @@ export function LedgerView({
                           className="font-medium text-accent"
                         >
                           View restock
+                        </Link>
+                      )}
+                      {row.itemId && (
+                        <Link href={`/items/${row.itemId}`} className="font-medium text-accent">
+                          View item
                         </Link>
                       )}
                       {row.take?.canUndo && (

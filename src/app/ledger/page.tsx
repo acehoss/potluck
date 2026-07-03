@@ -86,6 +86,17 @@ export default async function LedgerPage({
   });
   const takeById = new Map(takes.map((t) => [t.id, t]));
 
+  // LOAN_FEE entries (slice 6): enrich with the item and borrower.
+  const loanIds = entries.flatMap((e) => (e.loanId ? [e.loanId] : []));
+  const loans = await db.loan.findMany({
+    where: { id: { in: loanIds } },
+    include: {
+      item: { select: { id: true, name: true } },
+      borrower: { select: { name: true } },
+    },
+  });
+  const loanById = new Map(loans.map((l) => [l.id, l]));
+
   const restockIds = entries.flatMap((e) => (e.restockId ? [e.restockId] : []));
   const restocks = await db.restock.findMany({
     where: { id: { in: restockIds } },
@@ -113,6 +124,7 @@ export default async function LedgerPage({
     let label: string;
     let filterGroup: LedgerRow['filterGroup'] = 'other';
     let restockId = entry.restockId;
+    let itemId: string | null = null;
     let take: LedgerRow['take'] = null;
 
     const describeTake = (takeId: string) => {
@@ -143,12 +155,22 @@ export default async function LedgerPage({
         filterGroup = 'credit';
         break;
       }
+      case 'LOAN_FEE': {
+        const loan = entry.loanId ? loanById.get(entry.loanId) : undefined;
+        label = loan ? `Loan fee · ${loan.item.name}` : 'Loan fee';
+        itemId = loan?.item.id ?? null;
+        break;
+      }
       case 'REVERSAL': {
         const reversed = entry.reversesId ? entryById.get(entry.reversesId) : undefined;
         if (reversed?.type === 'TAKE' && reversed.takeId) {
           label = `Undo take ${describeTake(reversed.takeId)}`;
           filterGroup = 'take';
           restockId = takeById.get(reversed.takeId)?.lot.restockId ?? null;
+        } else if (reversed?.type === 'LOAN_FEE' && reversed.loanId) {
+          const loan = loanById.get(reversed.loanId);
+          label = `Undo loan fee · ${loan?.item.name ?? 'item'}`;
+          itemId = loan?.item.id ?? null;
         } else {
           label = 'Reversal';
           filterGroup = reversed?.type === 'RESTOCK_CREDIT' ? 'credit' : 'other';
@@ -178,6 +200,7 @@ export default async function LedgerPage({
       note: entry.note,
       createdByName: creatorById.get(entry.createdById)?.name ?? 'someone',
       restockId,
+      itemId,
       take,
       isNew: isNewEntry(entry),
     };

@@ -16,8 +16,14 @@ type Line = Restock['lots'][number];
 
 const inputClass =
   'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
+// Disabled state uses translucent COLORS, not element opacity: `opacity-50`
+// promotes the button to its own compositor layer, and Chromium's tiled
+// rasterization rounds the blended color slightly differently per tile — a
+// visible vertical seam ("darker patch") across the disabled button on
+// desktop-light (seen in the slice-5 screenshots). Alpha on the background/
+// text blends in normal paint, so there is no layer and no seam.
 const primaryBtn =
-  'min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50';
+  'min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:bg-accent/50 disabled:text-accent-contrast/70';
 const secondaryBtn =
   'min-h-11 rounded-lg border border-border-strong px-4 py-2.5 font-medium text-text transition-colors hover:bg-surface-sunken disabled:opacity-50';
 
@@ -537,11 +543,13 @@ function ProposalRow({
   restockId,
   proposal,
   onConsumed,
+  onSaved,
   onEdit,
 }: {
   restockId: string;
   proposal: ProposedLine;
   onConsumed: () => void;
+  onSaved: () => void;
   onEdit: (suggested: { id: string; name: string } | null) => void;
 }) {
   const trpc = useTRPC();
@@ -556,14 +564,21 @@ function ProposalRow({
     ),
   );
   const suggested = search.data?.[0] ?? null;
+  // The match suggestion resolves asynchronously AFTER the row renders; until
+  // it lands the row must say "matching…" (with Confirm held disabled below),
+  // never "new product" — or a fast Confirm creates a duplicate product.
+  const matching = suggestionQuery.length > 0 && search.isPending;
 
   const saveLine = useMutation(
     trpc.restock.saveLine.mutationOptions({
       onSuccess: () => {
         void queryClient.invalidateQueries(trpc.product.search.pathFilter());
-        // Persist the resolution (and refetch) — the row disappears once the
-        // server confirms; a lost resolve still hides it via the lot dedupe.
-        onConsumed();
+        // The parent resolves the proposal + refetches IMMEDIATELY (so the
+        // lines list and the reconcile totals already contain the new lot
+        // while the "✓ Added" flash shows) and keeps the flash row alive for
+        // a beat — otherwise the confirmed line "teleports" to the lots list
+        // below with no nearby feedback.
+        onSaved();
       },
       onError: (e) => setError(e.message),
     }),
@@ -606,7 +621,9 @@ function ProposalRow({
           {proposal.unitCount > 1 && <> → {formatCents(unitCost)}/u</>}
         </p>
         <p data-testid="proposed-match" className="text-sm text-text-muted">
-          {suggested ? (
+          {matching ? (
+            <>matching…</>
+          ) : suggested ? (
             <>
               matches <span className="font-medium text-text">{suggested.name}</span>
             </>
@@ -625,7 +642,7 @@ function ProposalRow({
           type="button"
           data-testid="proposed-confirm"
           onClick={confirm}
-          disabled={saveLine.isPending || (suggestionQuery.length > 0 && search.isLoading)}
+          disabled={saveLine.isPending || matching}
           className={`${smallBtn} flex-1 bg-accent text-accent-contrast hover:bg-accent-strong`}
         >
           {saveLine.isPending ? 'Saving…' : 'Confirm'}
@@ -697,6 +714,25 @@ function LinesStep({
   );
   const consumeProposal = (index: number) => resolve.mutate({ restockId: restock.id, index });
 
+  // Confirmed proposals collapse to a "✓ Added" flash for a beat so the row
+  // doesn't teleport to the lots list with no nearby feedback. The resolve +
+  // refetch fire IMMEDIATELY (the lot is really "in the lines below" and the
+  // reconcile math is current while the flash shows); only this purely visual
+  // row lives on the timer. A tab-kill mid-flash is covered by the lot dedupe.
+  const [savedFlashes, setSavedFlashes] = useState<ProposedLine[]>([]);
+  function onProposalSaved(proposal: ProposedLine) {
+    consumeProposal(proposal.index);
+    setSavedFlashes((f) => [...f, proposal]);
+    setTimeout(
+      () => setSavedFlashes((f) => f.filter((p) => p.index !== proposal.index)),
+      900,
+    );
+  }
+  // Until the resolve's refetch lands, the confirmed line is still in the
+  // derived pending set — the flash replaces the row, never joins it.
+  const flashing = new Set(savedFlashes.map((p) => p.index));
+  const visibleProposals = proposals.filter((p) => !flashing.has(p.index));
+
   const canExtract =
     restock.extractionEnabled && restock.status === 'DRAFT' && restock.images.length > 0;
 
@@ -757,18 +793,28 @@ function LinesStep({
         </div>
       )}
 
-      {!extract.isPending && proposals.length > 0 && (
+      {!extract.isPending && (visibleProposals.length > 0 || savedFlashes.length > 0) && (
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
             Proposed from receipt — confirm, edit, or dismiss each
           </h2>
           <ul className="flex flex-col gap-2">
-            {proposals.map((proposal) => (
+            {savedFlashes.map((proposal) => (
+              <li
+                key={`saved-${proposal.index}`}
+                data-testid="proposed-row-saved"
+                className="flex min-h-11 items-center gap-2 rounded-xl border border-success/30 bg-success-soft p-3 text-sm font-medium text-success shadow-sm"
+              >
+                ✓ Added {proposal.description} — now in the lines below
+              </li>
+            ))}
+            {visibleProposals.map((proposal) => (
               <ProposalRow
                 key={proposal.index}
                 restockId={restock.id}
                 proposal={proposal}
                 onConsumed={() => consumeProposal(proposal.index)}
+                onSaved={() => onProposalSaved(proposal)}
                 onEdit={(suggested) =>
                   setSheet({ open: true, line: null, proposal: { ...proposal, suggested } })
                 }
@@ -780,7 +826,8 @@ function LinesStep({
 
       {restock.lots.length === 0 &&
         !extract.isPending &&
-        proposals.length === 0 && (
+        proposals.length === 0 &&
+        savedFlashes.length === 0 && (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
             <p className="text-sm font-medium text-text">No lines yet.</p>
             <p className="text-sm text-text-muted">Add each receipt line — it becomes a lot.</p>
