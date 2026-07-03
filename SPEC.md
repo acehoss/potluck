@@ -19,9 +19,9 @@ Initial users: two households (ours and the in-laws down the street), each with 
 
 ## 3. Explicitly out of scope (v1)
 
-Multi-tenancy · native apps · offline mode · Bluetooth printers and scales · classic OCR (receipt extraction is VLM-based, §5; manual entry is the always-available fallback) · FIFO *enforcement* · reservations/order picking · meal planning, recipes, shopping lists · forecasting/analytics · the cost-sharing offer engine · minimum-balance thresholds · GDPR/compliance apparatus · SKU merging & generic SKUs.
+Multi-tenancy · native apps · offline mode · Bluetooth printers and scales · classic OCR (receipt extraction is VLM-based, §5; manual entry is the always-available fallback) · FIFO *enforcement* · meal planning, recipes, shopping lists · forecasting/analytics · the cost-sharing offer engine · minimum-balance thresholds · GDPR/compliance apparatus · SKU merging & generic SKUs.
 
-Doors deliberately left open (schema/design should not preclude): shared write-off offers (one offer/accept screen), reservations, label printing (Android Web Bluetooth or companion tool — iOS Safari will never get Web Bluetooth), SKU merging, multi-tenancy, native app (the PWA acts as its spec).
+Doors deliberately left open (schema/design should not preclude): shared write-off offers (one offer/accept screen), label printing (Android Web Bluetooth or companion tool — iOS Safari will never get Web Bluetooth), SKU merging, multi-tenancy, native app (the PWA acts as its spec). *(Orders/reservations were an open door; they shipped 2026-07-03 — see the Order model below.)*
 
 ## 4. Domain model
 
@@ -37,7 +37,8 @@ Doors deliberately left open (schema/design should not preclude): shared write-o
   - **Unit photo per lot:** the user photographs one unit at receiving. This documents what that lot's packaging looks like (designs change over time) and the newest one doubles as the product's display photo.
   - The receipt total is checked against the sum of lines **plus entered tax and fees** — the fairness/typo guard. Tax is distributed pro-rata across taxable lines and (optionally) fees across all lines, folded into each lot's at-cost unit price so takes and credits are tax-inclusive. Whole non-inventory receipt lines can be marked *excluded* (counted for reconcile/fee weight, not stocked). The `YYMMDD-NN` code is shown up front for labeling as items are shelved.
   - **If the purchaser is not the pantry owner, the purchaser's household is credited at cost — for received units only.** (This is how "settling a positive balance in goods" works, and how "I grabbed you a flat of tomatoes at Costco" works.)
-- **Take** — a user removes N units from a lot (identified by product + restock code; UI pre-selects the oldest lot as the FIFO suggestion). Cross-household → taker debited at unit cost. Own pantry → inventory decrement only. **All takes are logged, including own-household**, so counts, low-stock, and expiry views stay true. Takes can be edited/undone (covers returns).
+- **Order** — the way units leave a pantry. A household builds a cart against one pantry, then requests it; **everything is a request — there is no instant take.** Lifecycle: **DRAFT** (building the cart) → **REQUESTED** (units reserved, so availability = stock − reserved) → **PICKING** (owner is fulfilling; edits lock) → **READY** → **PICKED_UP**, or **CANCELED** (only before picking; releases the reservation). Lot-specific lines (oldest lot is the FIFO suggestion). Own-pantry orders run the same flow (you fulfill your own).
+- **Take** — the immutable record created **at pickup**, one per order line: cross-household → requester debited at unit cost; own pantry → inventory decrement only. **All takes are logged, including own-household**, so counts, low-stock, and expiry views stay true. Money posts *only* at pickup — a canceled order never touches the ledger. Takes are undoable (covers returns) via a swapped-party reversal.
 - **Ledger** — append-only entries from takes, restock credits, loan fees, settlements, and manual adjustments (with notification). Balances are per household pair, displayed net.
 - **Settlement** — a manual record: "cash/Venmo $X from us to them." No payment integration.
 - **Adjustment** — recount (set a lot's remaining count) or write-off (expired/damaged; owner household eats the cost in v1).
@@ -48,7 +49,7 @@ Doors deliberately left open (schema/design should not preclude): shared write-o
 
 **Restock (the make-or-break UX):** snap the receipt (multiple pages fine) → VLM proposes lines → review and correct → set received units per line (default all) → snap one unit photo per new lot → reconcile against receipt total → done. The restock code is displayed big at the end for physical labeling. Target: a full Costco receipt in ~2 minutes of active attention. Manual line entry works standalone whenever extraction fails or isn't worth it.
 
-**Take:** open pantry → find product (search/scan) → app suggests oldest lot → confirm count → done. Two taps for the common case.
+**Order:** open pantry → add items to your order (search/scan; oldest lot suggested) → review the cart → request. The owner sees the request, picks it, marks it ready; either household marks it picked up (money posts then). Own-pantry orders you fulfil yourself.
 
 **Lend/return:** browse items → check out → return with optional condition note.
 
@@ -78,4 +79,4 @@ Each slice is **demonstrated working in a browser** before the next begins. Prog
 6. **Lending** — items, loans, returns, fees.
 7. **PWA polish** — installability, camera scanning, push notifications.
 
-Post-v1 candidates, in rough order of likely want: shared write-off offers · reservations · label printing · SKU merging/generics · low-stock nudges.
+Iteration rounds on top of v1 (2026-07-03): receiving tweaks (tax-inclusive costs, corrections) and **orders/requests with reservation** (§4 Order/Take). Still on the post-v1 list, in rough order of likely want: shared write-off offers · a fuller notifications system (push + email + in-app panel + prefs) · label printing · SKU merging/generics · low-stock nudges.

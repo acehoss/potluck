@@ -3,7 +3,7 @@
 import { useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ScanSheet } from '@/app/scan-sheet';
 import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
@@ -60,6 +60,8 @@ export function InventoryView({
   draft,
   households,
   yourHouseholdId,
+  cart,
+  cartQtyByLot,
 }: {
   pantry: { id: string; name: string; householdName: string };
   isOwn: boolean;
@@ -67,9 +69,10 @@ export function InventoryView({
   draft: { id: string; retailer: string } | null;
   households: Household[];
   yourHouseholdId: string;
+  cart: { orderId: string; count: number; units: number } | null;
+  cartQtyByLot: Record<string, number>;
 }) {
   const router = useRouter();
-  const trpc = useTRPC();
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [startOpen, setStartOpen] = useState(false);
@@ -82,31 +85,10 @@ export function InventoryView({
     typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function';
   const [scanOpen, setScanOpen] = useState(false);
   const [scanNotice, setScanNotice] = useState<string | null>(null);
-  const [takeFor, setTakeFor] = useState<ProductGroup | null>(null);
+  const [orderFor, setOrderFor] = useState<ProductGroup | null>(null);
   const [lotMenu, setLotMenu] = useState<LotRef | null>(null);
   const [recountFor, setRecountFor] = useState<LotRef | null>(null);
   const [writeOffFor, setWriteOffFor] = useState<LotRef | null>(null);
-  const [toast, setToast] = useState<{ takeId: string; label: string } | null>(null);
-  const [toastError, setToastError] = useState<string | null>(null);
-
-  // The undo affordance lives 10s (blueprint 02); the take itself stays
-  // undoable from the ledger detail afterwards (cross-household).
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 10_000);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
-  const undo = useMutation(
-    trpc.take.undo.mutationOptions({
-      onSuccess: () => {
-        setToast(null);
-        setToastError(null);
-        router.refresh();
-      },
-      onError: (e) => setToastError(e.message),
-    }),
-  );
 
   const visible = groups.filter((g) => g.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -214,12 +196,12 @@ export function InventoryView({
               data-testid="product-row"
               className="rounded-xl border border-border bg-surface-raised shadow-sm"
             >
-              {/* Row tap opens the take sheet (blueprint 02); expanding lots
-                  is the other affordance — chevron only. */}
+              {/* Row tap adds to your order; expanding lots is the other
+                  affordance — chevron only. */}
               <div className="flex min-h-14 w-full items-center">
                 <button
                   type="button"
-                  onClick={() => setTakeFor(group)}
+                  onClick={() => setOrderFor(group)}
                   className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left"
                 >
                   {group.photoPath ? (
@@ -321,7 +303,7 @@ export function InventoryView({
             // against the pantry's products is the whole lookup.
             const group = groups.find((g) => g.upc === code);
             if (group) {
-              setTakeFor(group);
+              setOrderFor(group);
             } else {
               setScanNotice(`Scanned ${code} — nothing with this UPC in this pantry.`);
             }
@@ -380,39 +362,32 @@ export function InventoryView({
         />
       )}
 
-      {takeFor && (
-        <TakeSheet
-          group={takeFor}
+      {orderFor && (
+        <AddToOrderSheet
+          group={orderFor}
+          pantryId={pantry.id}
           ownerName={pantry.householdName}
           isOwn={isOwn}
-          onClose={() => setTakeFor(null)}
-          onTaken={(t) => {
-            setTakeFor(null);
-            setToastError(null);
-            setToast({ takeId: t.takeId, label: `Took ${t.quantity} × ${t.productName}` });
+          cartQtyByLot={cartQtyByLot}
+          onClose={() => setOrderFor(null)}
+          onAdded={() => {
+            setOrderFor(null);
             router.refresh();
           }}
         />
       )}
 
-      {toast && (
-        <div
-          role="status"
-          data-testid="take-toast"
-          data-take-id={toast.takeId}
-          className="fixed inset-x-4 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 mx-auto flex max-w-md items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised px-4 py-3 shadow-sm"
+      {cart && (
+        <Link
+          href={`/orders/${cart.orderId}`}
+          data-testid="cart-bar"
+          className="fixed inset-x-4 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-20 mx-auto flex max-w-md items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent-soft px-4 py-3 shadow-sm"
         >
-          <p className="min-w-0 truncate text-sm text-text">{toastError ?? toast.label}</p>
-          <button
-            type="button"
-            data-testid="toast-undo"
-            disabled={undo.isPending}
-            onClick={() => undo.mutate({ takeId: toast.takeId })}
-            className="shrink-0 text-sm font-medium text-accent disabled:opacity-50"
-          >
-            {undo.isPending ? 'Undoing…' : 'Undo'}
-          </button>
-        </div>
+          <span className="text-sm font-medium text-accent-strong">
+            🛒 {cart.units} {cart.units === 1 ? 'unit' : 'units'} in your order
+          </span>
+          <span className="shrink-0 text-sm font-semibold text-accent-strong">Review →</span>
+        </Link>
       )}
     </div>
   );
@@ -423,35 +398,39 @@ export function InventoryView({
  * preselected with a FIFO badge — suggested, never enforced; overtake is
  * blocked at the stepper (and again by the server's conditional decrement).
  */
-function TakeSheet({
+function AddToOrderSheet({
   group,
+  pantryId,
   ownerName,
   isOwn,
+  cartQtyByLot,
   onClose,
-  onTaken,
+  onAdded,
 }: {
   group: ProductGroup;
+  pantryId: string;
   ownerName: string;
   isOwn: boolean;
+  cartQtyByLot: Record<string, number>;
   onClose: () => void;
-  onTaken: (t: { takeId: string; quantity: number; productName: string }) => void;
+  onAdded: () => void;
 }) {
   const trpc = useTRPC();
-  // One idempotency key per sheet open: a double-tap on Take (dispatched
-  // before isPending re-renders the disabled attribute) replays as the same
-  // take server-side instead of decrementing twice.
-  const [clientKey] = useState(newClientKey);
   // Lots arrive oldest-first (FIFO order); index 0 is the suggestion.
+  const cartQtyOf = (lotId: string) => cartQtyByLot[lotId] ?? 0;
+  const seedQty = (l: ProductGroup['lots'][number]) =>
+    Math.min(Math.max(cartQtyOf(l.id) || 1, 1), l.remaining);
   const [lotId, setLotId] = useState(group.lots[0].id);
-  const [qty, setQty] = useState(1);
+  const [qty, setQty] = useState(() => seedQty(group.lots[0]));
   const [error, setError] = useState<string | null>(null);
   const lot = group.lots.find((l) => l.id === lotId) ?? group.lots[0];
   const isFifo = lot.id === group.lots[0].id;
+  const inCart = cartQtyOf(lot.id) > 0;
   const costCents = qty * lot.unitCostCents;
 
-  const take = useMutation(
-    trpc.take.create.mutationOptions({
-      onSuccess: (t) => onTaken(t),
+  const add = useMutation(
+    trpc.order.addToCart.mutationOptions({
+      onSuccess: () => onAdded(),
       onError: (e) => setError(e.message),
     }),
   );
@@ -462,64 +441,63 @@ function TakeSheet({
   return (
     <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div
-        data-testid="take-sheet"
+        data-testid="order-sheet"
         className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
       >
-        <h2 className="text-lg font-semibold">Take: {group.name}</h2>
+        <h2 className="text-lg font-semibold">Add to order: {group.name}</h2>
 
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
           <span className="flex items-center gap-2">
             Lot
             {isFifo && (
               <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
-oldest ✓
+                oldest ✓
               </span>
             )}
           </span>
           <select
-            data-testid="take-lot"
+            data-testid="order-lot"
             value={lotId}
             onChange={(e) => {
-              setLotId(e.target.value);
-              setQty(1);
+              const next = group.lots.find((l) => l.id === e.target.value) ?? group.lots[0];
+              setLotId(next.id);
+              setQty(seedQty(next));
             }}
             className="min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
           >
             {group.lots.map((l) => (
               <option key={l.id} value={l.id}>
-                {l.code} · {l.remaining} left
+                {l.code} · {l.remaining} available
               </option>
             ))}
           </select>
           <span className="text-xs font-normal text-text-muted">
-            {lot.remaining} left
+            {lot.remaining} available
             {lot.bestBy && <> · {bestByBadge(lot.bestBy)}</>}
+            {inCart && <> · {cartQtyOf(lot.id)} already in your order</>}
           </span>
         </label>
 
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-text">
-            Qty{' '}
-            <span className="font-normal text-text-muted">
-              {formatCents(lot.unitCostCents)}/u
-            </span>
+            Qty <span className="font-normal text-text-muted">{formatCents(lot.unitCostCents)}/u</span>
           </span>
           <div className="flex items-center gap-3">
             <button
               type="button"
-              aria-label="Take fewer"
+              aria-label="Fewer"
               disabled={qty <= 1}
               onClick={() => setQty((q) => Math.max(1, q - 1))}
               className={stepperBtn}
             >
               −
             </button>
-            <span data-testid="take-qty" className="w-8 text-center font-mono tabular-nums">
+            <span data-testid="order-qty" className="w-8 text-center font-mono tabular-nums">
               {qty}
             </span>
             <button
               type="button"
-              aria-label="Take more"
+              aria-label="More"
               disabled={qty >= lot.remaining}
               onClick={() => setQty((q) => Math.min(lot.remaining, q + 1))}
               className={stepperBtn}
@@ -529,8 +507,14 @@ oldest ✓
           </div>
         </div>
 
-        <p data-testid="take-cost" className="text-sm font-medium text-text">
-          {isOwn ? 'No charge — your pantry' : <>You&apos;ll owe {ownerName} {formatCents(costCents)}</>}
+        <p data-testid="order-cost" className="text-sm font-medium text-text">
+          {isOwn ? (
+            'No charge — your own pantry'
+          ) : (
+            <>
+              Adds {formatCents(costCents)} you&apos;d owe {ownerName} at pickup
+            </>
+          )}
         </p>
 
         {error && (
@@ -549,12 +533,12 @@ oldest ✓
           </button>
           <button
             type="button"
-            data-testid="take-submit"
-            disabled={take.isPending}
-            onClick={() => take.mutate({ lotId: lot.id, quantity: qty, clientKey })}
+            data-testid="order-add"
+            disabled={add.isPending}
+            onClick={() => add.mutate({ pantryId, lotId: lot.id, quantity: qty })}
             className="min-h-11 flex-1 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50"
           >
-            {take.isPending ? 'Taking…' : 'Take'}
+            {add.isPending ? 'Saving…' : inCart ? 'Update order' : 'Add to order'}
           </button>
         </div>
       </div>

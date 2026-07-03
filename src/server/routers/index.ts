@@ -5,6 +5,7 @@ import { householdRouter } from './household';
 import { inviteRouter } from './invite';
 import { itemRouter, loanRouter } from './item';
 import { ledgerRouter } from './ledger';
+import { orderRouter } from './order';
 import { productRouter } from './product';
 import { pushRouter } from './push';
 import { restockRouter } from './restock';
@@ -18,6 +19,7 @@ export const appRouter = router({
   item: itemRouter,
   ledger: ledgerRouter,
   loan: loanRouter,
+  order: orderRouter,
   product: productRouter,
   push: pushRouter,
   restock: restockRouter,

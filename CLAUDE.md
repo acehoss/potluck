@@ -4,9 +4,14 @@ Private Coop: a self-hosted web app (PWA) for a small circle of trusted househol
 
 ## Current state (2026-07-03)
 
-**v1 is built, committed, and green.** All seven slices (skeleton → receiving → takes/ledger → settlements/adjustments → VLM extraction → lending → PWA) plus a pre-handoff hardening pass are on `main`. ~9,900 lines of app code, 16 Prisma models across 9 migrations, 133 Playwright e2e passing (+3 documented skips) on both Chromium-light and WebKit-dark against the real container.
+**v1 is built, committed, and green.** All seven slices (skeleton → receiving → takes/ledger → settlements/adjustments → VLM extraction → lending → PWA) plus a pre-handoff hardening pass are on `main`. Two iteration rounds have since shipped on top. 18 Prisma models across 10 migrations; Playwright e2e green on both Chromium-light and WebKit-dark against the real container.
 
-**Phase now: iterating on tweaks with Aaron in the loop** — not autonomous slice-building. The build is done. A first polish round shipped 2026-07-03 (see PLAN.md → "Polish round — receiving tweaks"): lot code shown up front (reverses D6), tax/fees as explicit amounts folded into a **tax-inclusive** at-cost unit price (opens D7's allocation door), excluded non-coop lines, auto-extraction on the review screen, and a restock-history list with **auditable** finalized corrections (correct received counts / void) that preview the exact ledger change before committing — never a raw reopen (that would rewrite frozen costs takes already used). Migration `20260703060000_tax_fees_receipt_text`. Do not start large autonomous workflows without an explicit ask.
+**Phase now: iterating with Aaron in the loop** — not autonomous slice-building. Rounds shipped 2026-07-03 (see PLAN.md):
+
+- **Receiving tweaks** — lot code shown up front (reverses D6), tax/fees folded into a **tax-inclusive** at-cost unit price (opens D7), excluded non-coop lines, auto-extraction, and a restock-history list with **auditable** finalized corrections (preview the exact ledger change; never a raw reopen). Migration `20260703060000_tax_fees_receipt_text`.
+- **Orders & requests** — receiving proposals now split Confirm-a-match vs **Process** (unmatched lines must pick/create a real product, no auto-create). The take flow became **orders**: everything is a request with reservation — `DRAFT → REQUESTED (reserve) → PICKING (lock) → READY → PICKED_UP (money posts here) / CANCELED (release)`. `Lot.reservedCount` (availability = `remaining − reserved`), `Order`/`OrderLine`, an `order` router, an **Orders** tab, and `/orders` + `/orders/[id]`. The instant `take.create` was **removed** (it ignored reservations); `take.undo` stays for returns. Money still posts exactly at goods-transfer (now pickup), append-only, via `dbTransaction` + `clientKey`. Migration `20260703080000_orders_reserved`.
+
+Do not start large autonomous workflows without an explicit ask.
 
 ## Read first
 

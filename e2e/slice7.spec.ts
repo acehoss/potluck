@@ -680,7 +680,7 @@ async function emitScan(page: Page, rawValue: string) {
   await emitWhenReady(page, rawValue);
 }
 
-test('take flow: scanning at the pantry opens the take sheet for the matched product', async ({
+test('order flow: scanning at the pantry opens the add-to-order sheet for the matched product', async ({
   page,
 }, testInfo) => {
   test.slow(); // API seeding + two scan-sheet opens; give webkit headroom under load
@@ -740,15 +740,15 @@ test('take flow: scanning at the pantry opens the take sheet for the matched pro
   await emitWhenReady(page, `0${bogus}`);
   await expect(page.getByTestId('inventory-scan-notice')).toContainText('nothing with this UPC');
 
-  // The real code (13-digit form again) jumps straight into the take sheet
-  // with the FIFO suggestion — SPEC §5's "find product (search/scan)".
+  // The real code (13-digit form again) jumps straight into the add-to-order
+  // sheet with the FIFO suggestion — SPEC §5's "find product (search/scan)".
   await scanButton.click();
   await emitWhenReady(page, `0${upc}`);
-  const takeSheet = page.getByTestId('take-sheet');
-  await expect(takeSheet).toBeVisible();
-  await expect(takeSheet).toContainText(productName);
-  await expect(takeSheet).toContainText('oldest');
-  await takeSheet.getByRole('button', { name: 'Cancel' }).click();
+  const orderSheet = page.getByTestId('order-sheet');
+  await expect(orderSheet).toBeVisible();
+  await expect(orderSheet).toContainText(productName);
+  await expect(orderSheet).toContainText('oldest');
+  await orderSheet.getByRole('button', { name: 'Cancel' }).click();
 });
 
 test('manual UPC path: a typed UPC finds the product; a new product keeps its UPC', async ({

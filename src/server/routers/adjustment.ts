@@ -78,15 +78,25 @@ async function guardedRecount(
   for (let attempt = 0; attempt < 3; attempt++) {
     const lot = await tx.lot.findUniqueOrThrow({
       where: { id: lotId },
-      select: { remainingCount: true },
+      select: { remainingCount: true, reservedCount: true },
     });
     const countBefore = lot.remainingCount;
     const countAfter = nextCount(countBefore);
     if (countAfter < 0) {
       throw new TRPCError({ code: 'CONFLICT', message: 'Not enough left.' });
     }
+    // A recount/write-off must not drop physical stock below the units already
+    // reserved by open orders — that would strand the reservation and wedge the
+    // order at pickup (whose guard needs remainingCount ≥ its quantity). The
+    // owner has to cancel or complete those orders first.
+    if (countAfter < lot.reservedCount) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: `${lot.reservedCount} unit(s) are held by open orders — cancel or complete those first.`,
+      });
+    }
     const hit = await tx.lot.updateMany({
-      where: { id: lotId, remainingCount: countBefore },
+      where: { id: lotId, remainingCount: countBefore, reservedCount: lot.reservedCount },
       data: { remainingCount: countAfter },
     });
     if (hit.count === 1) return { countBefore, countAfter };

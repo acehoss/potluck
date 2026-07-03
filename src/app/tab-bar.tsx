@@ -8,6 +8,7 @@ import { useTRPC } from '@/lib/trpc';
 
 const TABS = [
   { href: '/', label: 'Pantries', icon: '▣' },
+  { href: '/orders', label: 'Orders', icon: '▤' },
   { href: '/ledger', label: 'Ledger', icon: '◫' },
   { href: '/items', label: 'Items', icon: '⛏' },
   { href: '/more', label: 'More', icon: '☰' },

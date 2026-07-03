@@ -17,6 +17,7 @@ model Household {
   invites   Invite[]
   purchases Restock[] @relation("purchases")
   items     Item[]
+  orders    Order[]
 }
 
 model User {
@@ -35,6 +36,7 @@ model User {
   ledgerSeen        LedgerSeen[]
   loans             Loan[]
   pushSubscriptions PushSubscription[]
+  ordersCreated     Order[]
 }
 
 // ---- slice 7: web push (blueprint 04 §4) ------------------------------------
@@ -110,6 +112,7 @@ model Pantry {
 
   household Household @relation(fields: [householdId], references: [id])
   restocks  Restock[]
+  orders    Order[]
 }
 
 // ---- slice 2: receiving (blueprint 01) ------------------------------------
@@ -264,6 +267,11 @@ model Lot {
   taxCentsAllocated Int?
   feeCentsAllocated Int?
   remainingCount Int       @default(0) // set to receivedCount at finalize (D3)
+  // Units held by open orders (REQUESTED/PICKING/READY). Availability shown and
+  // guarded everywhere is remainingCount − reservedCount; a soft hold that never
+  // touches the ledger. Bumped on request, released on cancel/edit-down, and
+  // decremented (with remainingCount) at pickup.
+  reservedCount  Int       @default(0)
   bestBy         DateTime?
   unitPhotoPath  String?
 
@@ -271,6 +279,7 @@ model Lot {
   product     Product?     @relation(fields: [productId], references: [id])
   takes       Take[]
   adjustments Adjustment[]
+  orderLines  OrderLine[]
 
   @@unique([restockId, position])
   @@index([productId])
@@ -345,4 +354,62 @@ model Loan {
   borrower User @relation(fields: [borrowerId], references: [id])
 
   @@index([itemId])
+}
+
+// ---- orders: build → request → fulfil → pickup (2026-07 round) --------------
+
+// An order is built by a household against ONE pantry (the "store"). Every
+// order runs the same lifecycle — there is no instant-take path:
+//   DRAFT      cart being built; nothing reserved
+//   REQUESTED  submitted; each line's units reserved on its lot (availability
+//              = remainingCount − reservedCount); the requester may still edit
+//   PICKING    owner started picking; edits LOCK
+//   READY      owner set it aside for pickup
+//   PICKED_UP  goods changed hands → a Take + (cross-household) TAKE ledger
+//              entry post per line, exactly here (money posts at pickup only)
+//   CANCELED   from DRAFT/REQUESTED only; releases reservations; ledger untouched
+// Money posts solely at pickup, so that transition carries a clientKey and runs
+// through dbTransaction (money rule #2); the ledger stays append-only (a
+// post-pickup return is take.undo's swapped-party REVERSAL, never an edit).
+model Order {
+  id          String    @id @default(cuid())
+  // Idempotency for the money-posting pickup; a replayed pickup returns the
+  // original result instead of double-posting the takes/credits.
+  clientKey   String?   @unique
+  pantryId    String
+  householdId String // requester household (the pantry's owner household is the "store")
+  createdById String
+  status      String    @default("DRAFT") // DRAFT | REQUESTED | PICKING | READY | PICKED_UP | CANCELED
+  note        String?
+  requestedAt DateTime?
+  pickingAt   DateTime?
+  readyAt     DateTime?
+  pickedUpAt  DateTime?
+  canceledAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  pantry    Pantry      @relation(fields: [pantryId], references: [id])
+  household Household   @relation(fields: [householdId], references: [id])
+  createdBy User        @relation(fields: [createdById], references: [id])
+  lines     OrderLine[]
+
+  @@index([householdId])
+  @@index([pantryId])
+}
+
+// One lot-specific line in an order (the requester picks the lot, FIFO default,
+// so cost freezes trivially at that lot's unitCost). takeId is set at pickup to
+// the Take row that recorded the transfer (audit link; the ledger is separate).
+model OrderLine {
+  id       String  @id @default(cuid())
+  orderId  String
+  lotId    String
+  quantity Int // > 0 while the line exists (0 removes it)
+  takeId   String? @unique
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lot   Lot   @relation(fields: [lotId], references: [id])
+
+  @@index([orderId])
+  @@index([lotId])
 }

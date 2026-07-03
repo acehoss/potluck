@@ -722,14 +722,16 @@ function ProposalRow({
     }),
   );
 
-  // The 1-tap confirm (blueprint 02): the normal saveLine flow, prefilled.
-  // Matched → the suggested product; unmatched → create-new with the
-  // proposed description. All units received by default; hold-backs via Edit.
+  // The 1-tap confirm (blueprint 02): the normal saveLine flow, prefilled with
+  // the MATCHED product. Offered only when a match exists (the button is hidden
+  // otherwise), so an unmatched line can never be one-tapped into a product
+  // named after the raw receipt text — it must go through Process. All units
+  // received by default; hold-backs via Process.
   function confirm() {
+    if (!suggested) return;
     saveLine.mutate({
       restockId,
-      productId: suggested?.id,
-      newProductName: suggested ? undefined : proposal.description,
+      productId: suggested.id,
       purchasedCount: proposal.unitCount,
       receivedCount: proposal.unitCount,
       lineTotalCents: proposal.lineTotalCents,
@@ -776,7 +778,7 @@ function ProposalRow({
               matches <span className="font-medium text-text">{suggested.name}</span>
             </>
           ) : (
-            <>new product</>
+            <>no match — Process to name it</>
           )}
         </p>
       </div>
@@ -786,30 +788,35 @@ function ProposalRow({
         </p>
       )}
       <div className="flex gap-2">
-        <button
-          type="button"
-          data-testid="proposed-confirm"
-          onClick={confirm}
-          disabled={saveLine.isPending || matching}
-          className={`${smallBtn} flex-1 bg-accent text-accent-contrast hover:bg-accent-strong`}
-        >
-          {saveLine.isPending ? 'Saving…' : 'Confirm'}
-        </button>
+        {/* One-tap Confirm appears ONLY once the line has matched an existing
+            product; an unmatched line (or one still matching) must be Processed
+            so the user picks/creates a product with a real name. */}
+        {suggested && (
+          <button
+            type="button"
+            data-testid="proposed-confirm"
+            onClick={confirm}
+            disabled={saveLine.isPending}
+            className={`${smallBtn} flex-1 bg-accent text-accent-contrast hover:bg-accent-strong`}
+          >
+            {saveLine.isPending ? 'Saving…' : 'Confirm'}
+          </button>
+        )}
         <button
           type="button"
           data-testid="proposed-edit"
           onClick={() => onEdit(suggested)}
-          className={`${smallBtn} border border-border-strong text-text hover:bg-surface-sunken`}
+          className={`${smallBtn} flex-1 border border-border-strong text-text hover:bg-surface-sunken`}
         >
-          Edit
+          Process
         </button>
         <button
           type="button"
           data-testid="proposed-dismiss"
           onClick={onConsumed}
-          className={`${smallBtn} border border-border-strong text-text hover:bg-surface-sunken`}
+          className={`${smallBtn} flex-1 border border-border-strong text-text hover:bg-surface-sunken`}
         >
-          Dismiss
+          Ignore
         </button>
       </div>
     </li>
@@ -990,7 +997,7 @@ function LinesStep({
       {!extract.isPending && (visibleProposals.length > 0 || savedFlashes.length > 0) && (
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
-            Proposed from receipt — confirm, edit, or dismiss each
+            Proposed from receipt — confirm a match, or process each
           </h2>
           <ul className="flex flex-col gap-2">
             {savedFlashes.map((proposal) => (
@@ -1175,9 +1182,12 @@ function LineSheet({
   const [product, setProduct] = useState<{ id: string | null; name: string } | null>(
     line?.product
       ? { id: line.product.id, name: line.product.name }
-      : proposal
-        ? (proposal.suggested ?? { id: null, name: proposal.description })
-        : null,
+      : // A proposed line prefills its MATCHED product only. An unmatched
+        // proposal opens with no product, so processing it forces the user to
+        // pick/match a product or create one with a real name — the receipt
+        // description (often unusable, shown read-only above) is never adopted
+        // silently as a product name.
+        (proposal?.suggested ?? null),
   );
   // Camera UPC scan (blueprint 04 §2). The button renders only when a camera
   // API exists (secure context — plain-http LAN gets the manual path only,
@@ -1313,7 +1323,7 @@ function LineSheet({
     <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
         <h2 className="text-lg font-semibold">
-          {line ? 'Edit line' : excluded ? 'Non-coop line' : proposal ? 'Edit proposed line' : 'Add line'}
+          {line ? 'Edit line' : excluded ? 'Non-coop line' : proposal ? 'Process line' : 'Add line'}
         </h2>
 
         {/* The receipt line exactly as printed (extraction) — always shown so

@@ -107,15 +107,13 @@ async function addLine(page: Page, opts: { product: string; units: number; total
 }
 
 /**
- * Add a manual line picking the named product if it already exists, else
- * creating it — keeps tests self-sufficient on a fresh stack AND rerun-safe
- * against an accumulated one.
+ * In an open line sheet, pick the named product if it already exists, else
+ * create it. Decides pick-vs-create from the search RESPONSE, not the racing
+ * DOM (the create affordance renders optimistically and detaches once an exact
+ * match arrives). Keeps tests deterministic on a fresh stack AND on the shared,
+ * accumulated one both engines run against.
  */
-async function addLineWithProduct(page: Page, name: string, total: string) {
-  await page.getByTestId('add-line').click();
-  // Decide pick-vs-create from the search RESPONSE, not the racing DOM (the
-  // create affordance renders optimistically and detaches once an exact
-  // match arrives).
+async function pickOrCreateProduct(page: Page, name: string) {
   const searched = page.waitForResponse(
     (r) => r.url().includes('product.search') && decodeURIComponent(r.url()).includes(name),
   );
@@ -130,6 +128,12 @@ async function addLineWithProduct(page: Page, name: string, total: string) {
   } else {
     await page.getByTestId('create-product').click();
   }
+}
+
+/** Add a manual line, picking or creating the named product. */
+async function addLineWithProduct(page: Page, name: string, total: string) {
+  await page.getByTestId('add-line').click();
+  await pickOrCreateProduct(page, name);
   await page.getByTestId('line-total').fill(total);
   await page.getByTestId('save-line').click();
   await expect(page.getByTestId('line-row').filter({ hasText: name })).toBeVisible();
@@ -140,7 +144,28 @@ const proposedRow = (page: Page, text: string) =>
 const lineRow = (page: Page, text: string) =>
   page.getByTestId('line-row').filter({ hasText: text });
 
-test('extract → confirm/edit/dismiss proposals → lines land in the draft → finalize', async ({ page }, testInfo) => {
+/**
+ * Resolve a proposed line into a real draft line, deterministically on any
+ * stack state. A proposal that MATCHED an existing product offers one-tap
+ * Confirm; an UNMATCHED one has no Confirm and must be Processed — the receipt
+ * description is never auto-adopted as a product name, so we pick/create a real
+ * product. Waits for the async match to settle before deciding.
+ */
+async function landProposal(page: Page, name: string) {
+  const row = proposedRow(page, name);
+  await expect(row.getByTestId('proposed-match')).not.toHaveText('matching…');
+  if (await row.getByTestId('proposed-confirm').count()) {
+    await row.getByTestId('proposed-confirm').click();
+  } else {
+    await row.getByTestId('proposed-edit').click(); // relabeled "Process"
+    await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+    await pickOrCreateProduct(page, name);
+    await page.getByTestId('save-line').click();
+  }
+  await expect(lineRow(page, name)).toBeVisible();
+}
+
+test('extract → land/process/ignore proposals → lines land in the draft → finalize', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
   await login(page, 'aaron@demo.coop');
   await openOwnPantry(page);
@@ -163,23 +188,29 @@ test('extract → confirm/edit/dismiss proposals → lines land in the draft →
   await expect(page.getByRole('heading', { name: 'Review lines' })).toBeVisible();
   await expect(page.getByTestId('proposed-row')).toHaveCount(12);
 
-  // 1-tap confirm (blueprint 02's tap budget for a VLM-prefilled line): the
-  // proposal becomes a real line via the normal saveLine flow, prefilled.
-  await proposedRow(page, MARINARA).getByTestId('proposed-confirm').click();
-  await expect(lineRow(page, MARINARA)).toBeVisible();
+  // Land a proposal as a real draft line (blueprint 02's tap budget): a matched
+  // line is one-tap Confirm, an unmatched one is Processed (pick/create a
+  // product with a real name) — landProposal does whichever the stack state
+  // calls for.
+  await landProposal(page, MARINARA);
   await expect(proposedRow(page, MARINARA)).toHaveCount(0);
-  // D1 preview on the confirmed line: $8.99 / 3 units → $3.00/u.
+  // D1 preview on the landed line: $8.99 / 3 units → $3.00/u.
   await expect(lineRow(page, MARINARA)).toContainText('3 units');
   await expect(lineRow(page, MARINARA)).toContainText('$8.99');
   await expect(lineRow(page, MARINARA)).toContainText('$3.00/u');
 
-  await proposedRow(page, CHICKEN).getByTestId('proposed-confirm').click();
-  await expect(lineRow(page, CHICKEN)).toBeVisible();
+  await landProposal(page, CHICKEN);
 
-  // Edit opens the normal line sheet prefilled from the proposal; hold one
-  // unit back to prove the full sheet (not a shortcut path) is in play.
+  // Process opens the normal line sheet prefilled from the proposal; hold one
+  // unit back to prove the full sheet (not a shortcut path) is in play. An
+  // unmatched proposal opens with an empty picker (pick/create first); a
+  // matched one arrives with the product already set.
+  await expect(proposedRow(page, EGGS).getByTestId('proposed-match')).not.toHaveText('matching…');
   await proposedRow(page, EGGS).getByTestId('proposed-edit').click();
-  await expect(page.getByRole('heading', { name: 'Edit proposed line' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+  if (await page.getByTestId('product-search').count()) {
+    await pickOrCreateProduct(page, EGGS);
+  }
   await expect(page.getByTestId('units-value')).toHaveText('24');
   await expect(page.getByTestId('line-total')).toHaveValue('6.79');
   await page.getByRole('button', { name: 'Receive fewer' }).click();
@@ -187,7 +218,7 @@ test('extract → confirm/edit/dismiss proposals → lines land in the draft →
   await expect(lineRow(page, EGGS)).toContainText('recv 23/24');
   await expect(proposedRow(page, EGGS)).toHaveCount(0);
 
-  // Dismiss drops the proposal without touching the draft.
+  // Ignore drops the proposal without touching the draft.
   await proposedRow(page, CHIPS).getByTestId('proposed-dismiss').click();
   await expect(proposedRow(page, CHIPS)).toHaveCount(0);
   await expect(lineRow(page, CHIPS)).toHaveCount(0);
@@ -214,6 +245,49 @@ test('extract → confirm/edit/dismiss proposals → lines land in the draft →
   await finalize.click();
   await expect(page.getByTestId('restock-code')).toBeVisible();
   expect(await page.getByTestId('restock-code').textContent()).toMatch(/^\d{6}-\d{2,}$/);
+});
+
+test('an unmatched proposal has no one-tap Confirm — Process forces a real product name', async ({ page }, testInfo) => {
+  const P = testInfo.project.name;
+  await login(page, 'aaron@demo.coop');
+  await openOwnPantry(page);
+  await startRestock(page, { retailer: `Unmatched-${P}-${RUN}` });
+  await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
+  await page.getByTestId('extract').click();
+  await expect(page.getByTestId('proposed-row')).toHaveCount(12);
+
+  // TORTILLA CHIPS is never turned into a product anywhere in this suite, so
+  // its proposal is deterministically UNMATCHED on every engine and re-run.
+  const row = proposedRow(page, CHIPS);
+  await expect(row.getByTestId('proposed-match')).toContainText('no match');
+  // No one-tap path for an unmatched line — it can't be dropped into a product
+  // named after the (often unusable) receipt text.
+  await expect(row.getByTestId('proposed-confirm')).toHaveCount(0);
+
+  // Process opens the sheet with the raw receipt text for reference but an
+  // EMPTY product picker — the user must decide.
+  await row.getByTestId('proposed-edit').click();
+  await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+  await expect(page.getByTestId('line-receipt-text')).toBeVisible();
+  await expect(page.getByTestId('product-search')).toBeVisible();
+
+  // Saving with no product chosen is blocked — pick-or-create is mandatory.
+  await page.getByTestId('save-line').click();
+  await expect(page.getByText('Pick a product or create one.')).toBeVisible();
+
+  // Give it a real, clean name (unique, so 'TORTILLA CHIPS 2LB' never becomes a
+  // product — keeps this line unmatched for the next run/engine).
+  const cleanName = uniq('Corn Chips', P);
+  await page.getByTestId('product-search').fill(cleanName);
+  await page.getByTestId('create-product').click();
+  await page.getByTestId('save-line').click();
+
+  await expect(lineRow(page, cleanName)).toBeVisible();
+  await expect(proposedRow(page, CHIPS)).toHaveCount(0);
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByLabel('Abandon restock').click();
+  await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
 test('proposals match existing products; re-extract never re-proposes confirmed lines', async ({ page }, testInfo) => {
@@ -275,12 +349,13 @@ test('hostile model output is sanitized: clamps, 200-char cap, discounts dropped
   await expect(proposedRow(page, 'ZERO COUNT ITEM')).toContainText('1 unit');
   await expect(proposedRow(page, 'MEGA PACK NAPKINS')).toContainText('10000 units');
 
-  // The 240-char description is sliced to the 200-char product-name cap, so
-  // the 1-tap Confirm succeeds instead of surfacing a raw zod error.
+  // The 240-char description renders truncated to the 200-char cap in the
+  // proposal; it's never adopted as a product name — landing the line goes
+  // through Process, where the product name comes from the user (server-capped
+  // at 200), so a hostile-length description can't break the flow.
   const longRow = proposedRow(page, 'ESPRESSO ROAST COFFEE');
   await expect(longRow).toContainText(EDGE_LONG_DESCRIPTION.slice(0, 200).trimEnd());
-  await longRow.getByTestId('proposed-confirm').click();
-  await expect(lineRow(page, 'ESPRESSO ROAST COFFEE')).toBeVisible();
+  await landProposal(page, 'ESPRESSO ROAST COFFEE');
   await expect(page.getByTestId('proposed-row')).toHaveCount(2);
 
   // Dismissal persists (server-side resolution), proven across a reload.
@@ -487,47 +562,35 @@ test('extraction is rate-limited per user', async ({ page }, testInfo) => {
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
-test('confirm is held disabled while the product match resolves; the saved flash shows the line already below', async ({ page }, testInfo) => {
+test('a matched proposal offers one-tap Confirm; the saved flash shows the line already below', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await disableServiceWorker(page); // WebKit: SW-controlled pages bypass page.route()
   await login(page, 'aaron@demo.coop');
-
-  // Inject latency into product.search — the real response, delayed, never a
-  // mock — so the async match window is reliably observable. unroute matches
-  // the predicate by reference, so keep one instance.
-  const isSearch = (url: URL) => url.pathname.includes('product.search');
-  await page.route(isSearch, async (route) => {
-    await new Promise((r) => setTimeout(r, 1_200));
-    await route.continue();
-  });
-
   await openOwnPantry(page);
-  await startRestock(page, { retailer: `MatchGuard-${P}-${RUN}` });
+  await startRestock(page, { retailer: `MatchFlash-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
+
+  // Pre-create the product so the CHICKEN proposal deterministically MATCHES on
+  // every engine/run (a $1.00 line, unlike the receipt's $4.99, so the lot
+  // dedupe can't hide the proposal). Only a matched line gets one-tap Confirm;
+  // an unmatched line's absence of Confirm is proven by the gating test above.
+  await addLineWithProduct(page, CHICKEN, '1.00');
+
   await page.getByTestId('extract').click();
-
-  // While the match suggestion is in flight the row says "matching…" and
-  // holds Confirm disabled — a fast Confirm during this window used to
-  // create a duplicate product off the premature "new product" state.
   const row = proposedRow(page, CHICKEN);
-  await expect(row.getByTestId('proposed-match')).toHaveText('matching…');
-  await expect(row.getByTestId('proposed-confirm')).toBeDisabled();
-  await expect(row.getByTestId('proposed-match')).not.toHaveText('matching…', {
-    timeout: 10_000,
-  });
-  await expect(row.getByTestId('proposed-confirm')).toBeEnabled();
-  await page.unroute(isSearch);
+  await expect(row.getByTestId('proposed-match')).toContainText('matches', { timeout: 10_000 });
+  await expect(row.getByTestId('proposed-confirm')).toBeVisible();
 
-  // Confirm: the "✓ Added — now in the lines below" flash must be TRUE while
-  // it displays — the lots list below already contains the confirmed line
-  // (the resolve + refetch fire immediately; only the flash is on a timer).
+  // Confirm: the "✓ Added — now in the lines below" flash must be TRUE while it
+  // displays — the lots list below already contains the confirmed line (the
+  // resolve + refetch fire immediately; only the flash is on a timer). A CHICKEN
+  // line already exists from the pre-create, so match .first().
   await row.getByTestId('proposed-confirm').click();
   const flash = page.getByTestId('proposed-row-saved').filter({ hasText: CHICKEN });
   await expect(flash).toBeVisible();
-  await expect(lineRow(page, CHICKEN)).toBeVisible();
+  await expect(lineRow(page, CHICKEN).first()).toBeVisible();
   // …and the flash collapses on its own shortly after.
   await expect(flash).toHaveCount(0);
-  await expect(lineRow(page, CHICKEN)).toBeVisible();
+  await expect(lineRow(page, CHICKEN).first()).toBeVisible();
 
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByLabel('Abandon restock').click();

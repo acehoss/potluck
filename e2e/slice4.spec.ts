@@ -78,12 +78,41 @@ async function receiveLot(
   expect(code).toMatch(/^\d{6}-\d{2,}$/);
   await page.getByRole('link', { name: 'Back to pantry' }).click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
+  const pantryId = page.url().match(/\/pantries\/([^/?]+)/)![1];
 
   const got = await page.request.get(
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
   const lotId = (await got.json()).result.data.lots[0].id as string;
-  return { restockId, code, lotId };
+  return { restockId, code, lotId, pantryId };
+}
+
+/**
+ * Create a cross-household take by running an order through to pickup (the
+ * only path that hands goods over now). `requester` orders `quantity` units of
+ * `lotId` from `owner`'s pantry; the resulting TAKE ledger entry debits the
+ * requester at unit cost, exactly like the old instant take did.
+ */
+async function orderPickup(
+  requester: Page,
+  owner: Page,
+  pantryId: string,
+  lotId: string,
+  quantity: number,
+) {
+  const created = await requester.request.post('/api/trpc/order.addToCart', {
+    data: { pantryId, lotId, quantity },
+  });
+  expect(created.ok(), 'addToCart').toBe(true);
+  const orderId = (await created.json()).result.data.orderId as string;
+  expect((await requester.request.post('/api/trpc/order.submit', { data: { orderId } })).ok()).toBe(true);
+  expect((await owner.request.post('/api/trpc/order.startPicking', { data: { orderId } })).ok()).toBe(true);
+  expect((await owner.request.post('/api/trpc/order.markReady', { data: { orderId } })).ok()).toBe(true);
+  const done = await requester.request.post('/api/trpc/order.pickup', {
+    data: { orderId, clientKey: `pick-${orderId}`.slice(0, 40) },
+  });
+  expect(done.ok(), 'pickup').toBe(true);
+  return orderId;
 }
 
 /** Signed net with the (single) counterparty, in cents, from /ledger's hero. */
@@ -119,26 +148,21 @@ test('settle up prefills toward zero, zeroes the pair, and renders from both sid
   const product = uniq('Settle Corn', P);
   const noteToken = `sett-${P}-${RUN}`;
 
-  // Aaron stocks 3 units at $10.00 → $3.33/u; Dana takes 2 → owes $6.66.
+  // Aaron stocks 3 units at $10.00 → $3.33/u; Dana orders 2 and picks them up
+  // → owes $6.66 (a pickup is the only way a take is created now).
   await login(page, 'aaron@demo.coop');
-  const { lotId } = await receiveLot(page, { product, units: 3, total: '10.00' });
+  const { lotId, pantryId } = await receiveLot(page, { product, units: 3, total: '10.00' });
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
   await login(dana, 'dana@demo.coop');
-  const take = await dana.request.post('/api/trpc/take.create', {
-    data: { lotId, quantity: 2 },
-  });
-  expect(take.ok()).toBe(true);
+  await orderPickup(dana, page, pantryId, lotId, 2);
 
   let net = await netCents(page);
   if (net === 0) {
     // Residue from earlier runs exactly cancelled the take — unbalance again
     // so the prefill assertions below have a direction to point at.
-    const extra = await dana.request.post('/api/trpc/take.create', {
-      data: { lotId, quantity: 1 },
-    });
-    expect(extra.ok()).toBe(true);
+    await orderPickup(dana, page, pantryId, lotId, 1);
     net = await netCents(page);
   }
   expect(net).not.toBe(0);

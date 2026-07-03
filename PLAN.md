@@ -48,6 +48,68 @@ Screenshots from this round: `.playwright-mcp/tweaks/verify-*.png` (code banner,
 
 **Owner tasks (real-device, can't be done in headless CI):** install the PWA on an iPhone and an Android via the /more card; confirm icon/splash; turn on notifications and confirm a settlement push arrives with the app closed and deep-links to /ledger; scan a real UPC-A barcode in the receive line sheet (torch toggle on Android). Rotate the `ANTHROPIC_API_KEY` and generate real VAPID keys before any public deployment.
 
+## Orders & requests + receiving refinement (2026-07-03, with Aaron)
+
+Second iteration round. Two things: a small receiving-line refinement (Slice A), and a substantial rework of the take flow into **orders with a request/fulfillment lifecycle and inventory reservation** (Slices B–D). Design locked with Aaron before building (his three lifecycle calls + four assumptions below). Notifications are explicitly **out of scope for this round** — see the deferred note at the end.
+
+**2026-07-03 — shipped & green (146 passed + 4 intentional skips, both engines).** Full `down -v && build && SEED_DEMO=1 EXTRACTION_MODE=fixture up --wait && playwright test`. Migration `20260703080000_orders_reserved` (`Lot.reservedCount` + `Order` + `OrderLine`; plain ADD COLUMN, no rebuild).
+
+- **Slice A — receiving Process/Ignore.** `ProposalRow` buttons relabeled Edit→**Process**, Dismiss→**Ignore**; a **matched** proposal keeps one-tap **Confirm**, an **unmatched** one has *no* one-tap path — it must be Processed, where the sheet opens with an empty product picker (autofocused) and Save is blocked until the user picks/creates a product with a real name (the receipt text is shown read-only for reference, never adopted). One line did it: the LineSheet product-state no longer falls back to `{id:null, name: proposal.description}`. `slice5.spec.ts` rewritten to a both-paths `landProposal` helper (deterministic on the shared DB) + a dedicated gating test on a never-created fixture line.
+- **Slices B–D — orders.** New `order` router: `addToCart`/`setLine`/`submit`/`startPicking`/`markReady`/`pickup`/`cancel`. Reservation is a guarded read-then-`updateMany` on `remainingCount − reservedCount` (mirrors `adjustment.guardedRecount`, race-safe under the app lock). `pickup` mirrors `take.create` per line (decrements `remainingCount` **and** `reservedCount`, logs a Take, posts the cross-household TAKE ledger entry) under one `dbTransaction` with a `clientKey` + `READY→PICKED_UP` fire-once guard; `cancel` posts nothing. UI: the pantry "Take" became **Add to order** (`AddToOrderSheet`, FIFO lot default), a **cart bar** links to the order, `/orders` lists your orders + incoming requests, `/orders/[id]` is the shared hub whose actions switch on (status × role). New **Orders** tab (5 tabs). Availability everywhere = `remainingCount − reservedCount`.
+- **"Everything is a request" → the instant take is gone.** `take.create` was removed (a stand-alone take guarded only on `remainingCount` would oversell units already reserved by an open order). `take.undo` stays as the append-only return path (ledger detail + restock detail). `slice3.spec.ts` deleted; its take/ledger/undo coverage re-homed into `orders.spec.ts` (driven by order pickups). `slice4`/`slice7` migrated off `take.create`/the take sheet.
+- **Adversarial review (workflow, 5 dimensions → 19 agents) caught a cross-feature family** — pre-existing inventory ops didn't know about `reservedCount`. Fixed: `adjustment.recount/writeOff` now reject dropping physical stock below `reservedCount`; `restock.voidInError` blocks when open orders reserve its lots; `loadOrderableLot` excludes voided restocks. (Authz reviewer found nothing; `correctCredit` verified safe.) `orders.spec.ts` covers each fix (below-reserved 409, void-blocked 412) plus the full UI lifecycle, ledger-from-pickup + undo, own-pantry $0, and the raw-API guards.
+
+### Slice A — receiving Process / Ignore (no schema, no money)
+
+Extracted-line proposal cards (`ProposalRow`) currently show **Confirm / Edit / Dismiss**, and the one-tap Confirm auto-creates a product from the raw receipt text when nothing matches. Changes Aaron asked for:
+
+- Relabel **Edit → "Process"**, **Dismiss → "Ignore"**.
+- **Matched** proposal → keep the one-tap **Confirm** (adds to the matched product), plus Process / Ignore.
+- **Unmatched** proposal → **no one-tap confirm**. Only Process / Ignore. Process opens the line sheet where the user must (a) pick/match an existing product *or* create one, and (b) set a real description — prefilled from the receipt text but clearly meant to be rewritten, since receipt descriptions are often unusable. No silent auto-create of a product from receipt text.
+
+### Slices B–D — orders + requests (schema + money)
+
+**Decisions locked (Aaron):** every order goes through the request/fulfillment flow (no instant-take path); the ledger posts **at pickup**; and the states are explicit with a separate "start picking" lock.
+
+**Unified lifecycle (one Order object per pantry, built by a household):**
+
+```text
+DRAFT       building the cart; NOT reserved
+ → REQUESTED  submit: reserve inventory (guard: available ≥ qty); requester may still edit
+ → PICKING    owner "starts picking": edits LOCK
+ → READY      owner "ready to pick up"
+ → PICKED_UP  Takes created + TAKE ledger entries post here (cross-household only; $0 own-pantry)
+ → CANCELED   (from DRAFT / REQUESTED only) release reservations; ledger never touched
+```
+
+Post-pickup returns reuse the existing `take.undo` (swapped-party REVERSAL + inventory restore) — unchanged.
+
+**Data-model deltas:**
+
+- `Lot.reservedCount Int @default(0)` — availability everywhere becomes `remainingCount − reservedCount`. Reserve guards on it; pickup decrements `remainingCount` **and** `reservedCount` together, so a `Take` stays exactly what it is today (the record of a real decrement + ledger post).
+- `Order` — `pantryId`, `requesterHouseholdId`, `createdById`, `status`, lifecycle timestamps, optional note.
+- `OrderLine` — `orderId`, `lotId`, `quantity`, `takeId?` (set at pickup).
+
+**Money invariants preserved:** every reserve/edit/pickup/cancel goes through `dbTransaction`; the pickup mutation carries a `clientKey`; the ledger stays append-only (TAKE at pickup, REVERSAL on return, **nothing** on cancel — money never posted before pickup). Reservation is a soft hold that never touches the ledger.
+
+**Assumptions Aaron confirmed:**
+
+1. **Lot-specific lines** — the requester picks a lot (FIFO default, like today's take sheet), not "product, owner picks the lot." Keeps at-cost precision trivial.
+2. **One open DRAFT order per (household, pantry)** — adding items accumulates into it; two drafts racing for the last unit is fine (first to submit reserves; the second gets "not enough available").
+3. **The browse-and-take page becomes an ordering surface** — "Take" → "Add to order" + a cart; there is no more one-tap immediate take. Own-pantry orders run the full flow too (you are requester and owner both; $0).
+4. **Push/notifications deferred** (below).
+
+**Slice plan:**
+
+- **A** — receiving Process / Ignore (independent, ships first with its own browser + e2e verify).
+- **B** — orders engine: migration (`reservedCount` + `Order` + `OrderLine`) + reservation + full lifecycle mutations (`order` router), unit + e2e.
+- **C** — requester UI: cart → request → edit/cancel/pickup.
+- **D** — owner fulfillment UI: incoming requests → start picking → ready → picked up.
+
+### Deferred: notifications (its own future round)
+
+Aaron: notifications are a **separate feature set** to work through later, because there's real depth — **push infra, email infra, an in-app notification panel, event generation, and per-user notification prefs**. This round ships in-app order status only (the requester sees status on their orders; the owner sees incoming requests). The natural order events (request placed → owner; ready → requester; picked up) become notification triggers when that round happens. The existing slice-7 push (settlement + adjustment only) stays as-is until then.
+
 ## Progress notes
 
 Append dated notes per slice as work happens: decisions made, deviations from spec (with why), what was demonstrated and how. Newest at the top of each slice's section.

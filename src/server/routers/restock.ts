@@ -957,6 +957,20 @@ export const restockRouter = router({
               'This restock already has takes — undo those first, or use Correct received counts.',
           });
         }
+        // Reservations are not takes (a Take is only created at pickup), so the
+        // takeCount gate above misses an open order holding these lots. Zeroing
+        // remainingCount would strand that reservation and wedge the order at
+        // pickup. Block until those orders are canceled or completed.
+        const reserved = await tx.lot.aggregate({
+          where: { restockId: restock.id },
+          _sum: { reservedCount: true },
+        });
+        if ((reserved._sum.reservedCount ?? 0) > 0) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Open orders have reserved items from this restock — cancel or complete those first.',
+          });
+        }
 
         const entries = await tx.ledgerEntry.findMany({ where: { restockId: restock.id } });
         const active = pickActiveRestockCredit(entries);
