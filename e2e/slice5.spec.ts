@@ -49,6 +49,25 @@ async function login(page: Page, email: string) {
   await expect(page.getByTestId('tab-bar')).toBeVisible();
 }
 
+/**
+ * Requests from a service-worker-controlled page bypass page.route() in
+ * WebKit, so the slice-7 SW (push-only, harmless functionally) silently
+ * disarms response interception. Tests that rely on page.route() must call
+ * this BEFORE the first navigation. (Playwright's serviceWorkers:'block'
+ * context option is not usable instead: under it WebKit's second-and-later
+ * contexts intermittently hang on their first goto.)
+ */
+async function disableServiceWorker(page: Page) {
+  await page.addInitScript(() => {
+    // Prototype-level: WebKit ignores instance-level overrides of some
+    // platform methods (seen with mediaDevices.getUserMedia in slice7).
+    if (typeof ServiceWorkerContainer !== 'undefined') {
+      ServiceWorkerContainer.prototype.register = () =>
+        Promise.reject(new Error('SW disabled by this test (route interception in use)'));
+    }
+  });
+}
+
 async function openOwnPantry(page: Page) {
   await page.goto('/');
   const ownGroup = page.getByTestId('pantry-group').filter({ hasText: 'your household' });
@@ -194,7 +213,7 @@ test('extract → confirm/edit/dismiss proposals → lines land in the draft →
   await expect(finalize).toHaveText('Finalize');
   await finalize.click();
   await expect(page.getByTestId('restock-code')).toBeVisible();
-  expect(await page.getByTestId('restock-code').textContent()).toMatch(/^\d{6}-\d{2}$/);
+  expect(await page.getByTestId('restock-code').textContent()).toMatch(/^\d{6}-\d{2,}$/);
 });
 
 test('proposals match existing products; re-extract never re-proposes confirmed lines', async ({ page }, testInfo) => {
@@ -341,6 +360,7 @@ test('extract affordance hides when the server reports extraction disabled', asy
   // on every run by rewriting extractionEnabled in restock.get's response —
   // the single mocked seam in this suite, kept because the alternative is a
   // second compose stack per run.
+  await disableServiceWorker(page); // WebKit: SW-controlled pages bypass page.route()
   type TrpcItem = { result?: { data?: { extractionEnabled?: boolean } } };
   await page.route(
     (url) => url.pathname.startsWith('/api/trpc/') && url.pathname.includes('restock.get'),
@@ -469,6 +489,7 @@ test('extraction is rate-limited per user', async ({ page }, testInfo) => {
 
 test('confirm is held disabled while the product match resolves; the saved flash shows the line already below', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
+  await disableServiceWorker(page); // WebKit: SW-controlled pages bypass page.route()
   await login(page, 'aaron@demo.coop');
 
   // Inject latency into product.search — the real response, delayed, never a

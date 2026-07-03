@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
+import { normalizeScannedCode } from '@/lib/barcode';
 import { dateCodeFor, restockCode, unitCostCents, varianceAutoPasses } from '@/lib/domain';
 import { db, dbTransaction } from '../db';
 import {
@@ -69,6 +70,17 @@ const lineSchema = z.object({
   // Exactly one of productId / newProductName.
   productId: z.string().min(1).optional(),
   newProductName: z.string().trim().min(1).max(200).optional(),
+  // Optional retail code (slice 7 scan flow): saved onto the inline-created
+  // product, or onto an EXISTING picked product that has no UPC yet — a scan
+  // matched by search rather than UPC must still stick, or pre-scan-era
+  // products could never gain a code and repeat scans would miss forever.
+  // Digits only, UPC-A/EAN length; normalized server-side (leading-zero
+  // EAN-13 → 12-digit UPC-A) so scanned and typed codes meet in one form.
+  upc: z
+    .string()
+    .trim()
+    .regex(/^\d{8,14}$/)
+    .optional(),
   purchasedCount: z.number().int().min(1).max(10_000),
   receivedCount: z.number().int().min(0).max(10_000),
   lineTotalCents: z.number().int().min(0).max(MAX_CENTS),
@@ -435,13 +447,23 @@ export const restockRouter = router({
     const lotId = await dbTransaction(async (tx) => {
       await getDraftOrThrow(tx, input.restockId);
 
+      // Canonical stored form (zod guarantees 8–14 digits, so this never
+      // nulls out a value the schema accepted).
+      const upc = input.upc ? normalizeScannedCode(input.upc) : null;
       let productId = input.productId;
       if (input.newProductName) {
-        const product = await tx.product.create({ data: { name: input.newProductName } });
+        const product = await tx.product.create({
+          data: { name: input.newProductName, upc },
+        });
         productId = product.id;
       } else {
         const exists = await tx.product.findUnique({ where: { id: productId! } });
         if (!exists) throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
+        // A scanned code picked onto an existing product fills in a missing
+        // UPC (never overwrites one that's already set).
+        if (upc && exists.upc === null) {
+          await tx.product.update({ where: { id: exists.id }, data: { upc } });
+        }
       }
 
       const data = {

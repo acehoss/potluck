@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { db, dbTransaction } from '../db';
+import { adjustmentPushBody, notifyLedgerEvent, settlementPushBody } from '../push';
 import { protectedProcedure, router } from '../trpc';
 
 /** Upper bound for money inputs: keeps values inside Prisma's Int range. */
@@ -75,9 +76,9 @@ export const ledgerRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         const replayed = await findReplayedEntry(tx, input.clientKey, 'SETTLEMENT', ctx.user.id);
-        if (replayed) return { id: replayed.id };
+        if (replayed) return { id: replayed.id, created: false };
         await assertPairWithMe(
           tx,
           input.payerHouseholdId,
@@ -95,8 +96,20 @@ export const ledgerRouter = router({
             createdById: ctx.user.id,
           },
         });
-        return { id: entry.id };
+        return { id: entry.id, created: true };
       });
+      // Push AFTER commit (blueprint 04 §4): one of the two v1 push events.
+      // Fire-and-forget — never awaited, never fails the mutation — and only
+      // for a genuinely new entry (a clientKey replay must not re-notify).
+      if (result.created) {
+        void notifyLedgerEvent({
+          creatorId: ctx.user.id,
+          householdIds: [input.payerHouseholdId, input.payeeHouseholdId],
+          title: 'Settlement recorded',
+          body: settlementPushBody(ctx.user.name, input.amountCents, input.note),
+        });
+      }
+      return { id: result.id };
     }),
 
   /**
@@ -119,9 +132,9 @@ export const ledgerRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         const replayed = await findReplayedEntry(tx, input.clientKey, 'ADJUSTMENT', ctx.user.id);
-        if (replayed) return { id: replayed.id };
+        if (replayed) return { id: replayed.id, created: false };
         await assertPairWithMe(
           tx,
           input.creditorHouseholdId,
@@ -139,8 +152,19 @@ export const ledgerRouter = router({
             createdById: ctx.user.id,
           },
         });
-        return { id: entry.id };
+        return { id: entry.id, created: true };
       });
+      // The second (and last) v1 push event — same post-commit, non-blocking,
+      // no-replay rules as settle.
+      if (result.created) {
+        void notifyLedgerEvent({
+          creatorId: ctx.user.id,
+          householdIds: [input.creditorHouseholdId, input.debtorHouseholdId],
+          title: 'Ledger adjustment posted',
+          body: adjustmentPushBody(ctx.user.name, input.amountCents, input.note),
+        });
+      }
+      return { id: result.id };
     }),
 
   /**

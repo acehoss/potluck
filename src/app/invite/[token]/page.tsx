@@ -1,5 +1,6 @@
 import { getSessionUser, hashToken } from '@/server/auth';
 import { db } from '@/server/db';
+import { BrandMark } from '../../brand-mark';
 import { AcceptInviteForm } from './accept-invite-form';
 
 /** Returns the invite only when it is unclaimed and unexpired. */
@@ -20,15 +21,16 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
-      <div className="text-center">
-        <h1 className="text-3xl font-semibold tracking-tight">Private Coop</h1>
+      <div className="flex flex-col items-center text-center">
+        <BrandMark className="size-16 text-accent" />
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Private Coop</h1>
         {invite ? (
-          <p className="mt-2 text-sm text-text-muted">
+          <p className="mt-2 max-w-sm text-sm text-text-muted">
             You&apos;ve been invited to join the{' '}
             <span className="font-medium text-text">{invite.household.name}</span> household.
           </p>
         ) : (
-          <p role="alert" className="mt-2 text-sm text-danger">
+          <p role="alert" className="mt-2 max-w-sm text-sm text-danger">
             This invite link is invalid, expired, or already used. Ask for a new one.
           </p>
         )}
@@ -40,7 +42,9 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         </p>
       )}
       {invite && !sessionUser && (
-        <AcceptInviteForm token={token} defaultName={invite.invitedName ?? ''} />
+        <div className="w-full max-w-sm rounded-xl border border-border bg-surface-raised p-6 shadow-sm">
+          <AcceptInviteForm token={token} defaultName={invite.invitedName ?? ''} />
+        </div>
       )}
     </main>
   );

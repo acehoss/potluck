@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Private Coop app icon (blueprint 02 PWA section): a simple bold pantry-jar
+    mark, emerald on warm stone-900. All artwork stays inside the maskable
+    safe zone (radius ~205px around center), so the same art serves both
+    purpose:any and purpose:maskable. Regenerate the PNGs with:
+      npx tsx scripts/generate-icons.ts
+  -->
+  <rect width="512" height="512" fill="#1c1917"/>
+  <!-- lid band -->
+  <rect x="172" y="108" width="168" height="46" rx="16" fill="#34d399"/>
+  <!-- jar body -->
+  <rect x="140" y="170" width="232" height="238" rx="40" fill="#34d399"/>
+  <!-- label window (negative space) -->
+  <rect x="178" y="236" width="156" height="96" rx="18" fill="#1c1917"/>
+  <!-- fill line inside the label: the "shared at cost" tick -->
+  <rect x="200" y="272" width="112" height="24" rx="12" fill="#34d399" opacity="0.55"/>
+</svg>

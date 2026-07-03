@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
+const inputClass =
+  'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
+
 export function LoginForm() {
   const trpc = useTRPC();
   const router = useRouter();
@@ -22,13 +25,13 @@ export function LoginForm() {
 
   return (
     <form
-      className="flex w-full max-w-sm flex-col gap-4"
+      className="flex w-full flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
         login.mutate({ email, password });
       }}
     >
-      <label className="flex flex-col gap-1 text-sm font-medium">
+      <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Email
         <input
           type="email"
@@ -37,10 +40,10 @@ export function LoginForm() {
           autoComplete="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+          className={inputClass}
         />
       </label>
-      <label className="flex flex-col gap-1 text-sm font-medium">
+      <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Password
         <input
           type="password"
@@ -49,7 +52,7 @@ export function LoginForm() {
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+          className={inputClass}
         />
       </label>
       {login.error && (
@@ -60,7 +63,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={login.isPending}
-        className="rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50"
+        className="min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:bg-accent/50 disabled:text-accent-contrast/70"
       >
         {login.isPending ? 'Signing in…' : 'Sign in'}
       </button>

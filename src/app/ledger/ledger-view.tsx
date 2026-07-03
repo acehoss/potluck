@@ -175,22 +175,24 @@ export function LedgerView({
 
       <section
         data-testid="net-hero"
-        className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface-raised px-6 py-6 text-center shadow-sm"
+        className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface-raised px-6 py-6 text-center shadow-sm sm:flex-row sm:justify-between sm:gap-4 sm:text-left"
       >
-        {/* Blueprint 03 §3 hero contract: success up, danger down, text at $0. */}
-        <p
-          className={`text-3xl font-bold tracking-tight ${
-            netCents > 0 ? 'text-success' : netCents < 0 ? 'text-danger' : 'text-text'
-          }`}
-        >
-          {heroText(netCents)}
-        </p>
-        <p className="text-sm text-text-muted">with {other.name}</p>
+        <div>
+          {/* Blueprint 03 §3 hero contract: success up, danger down, text at $0. */}
+          <p
+            className={`text-3xl font-bold tracking-tight ${
+              netCents > 0 ? 'text-success' : netCents < 0 ? 'text-danger' : 'text-text'
+            }`}
+          >
+            {heroText(netCents)}
+          </p>
+          <p className="mt-1 text-sm text-text-muted">with {other.name}</p>
+        </div>
         <button
           type="button"
           data-testid="settle-up"
           onClick={() => setSettleOpen(true)}
-          className="min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
+          className="min-h-11 shrink-0 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
         >
           Settle up
         </button>
@@ -223,9 +225,14 @@ export function LedgerView({
 
       <main className="flex flex-col">
         {visible.length === 0 && (
-          <p className="rounded-xl border border-dashed border-border-strong px-6 py-10 text-center text-sm text-text-muted">
-            No entries yet. Takes, credits, and payments land here.
-          </p>
+          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
+            <p className="text-sm font-medium text-text">
+              {chip === 'all' ? 'All square so far.' : 'Nothing of this kind yet.'}
+            </p>
+            <p className="text-sm text-text-muted">
+              Takes, restock credits, and payments between your households land here.
+            </p>
+          </div>
         )}
         <ul className="divide-y divide-border rounded-xl border border-border bg-surface-raised px-4 shadow-sm empty:hidden">
           {visible.map((row) => {

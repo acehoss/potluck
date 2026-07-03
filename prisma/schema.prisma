@@ -27,13 +27,34 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
-  household       Household    @relation(fields: [householdId], references: [id])
-  sessions        Session[]
-  invitesCreated  Invite[]
-  restocksCreated Restock[]
-  takes           Take[]
-  ledgerSeen      LedgerSeen[]
-  loans           Loan[]
+  household         Household          @relation(fields: [householdId], references: [id])
+  sessions          Session[]
+  invitesCreated    Invite[]
+  restocksCreated   Restock[]
+  takes             Take[]
+  ledgerSeen        LedgerSeen[]
+  loans             Loan[]
+  pushSubscriptions PushSubscription[]
+}
+
+// ---- slice 7: web push (blueprint 04 §4) ------------------------------------
+
+// One browser push endpoint per row, owned by the user who subscribed in that
+// browser. Endpoint is globally unique (a browser re-subscribing after a user
+// switch reassigns the row). Rows are pruned server-side when the push service
+// answers 404/410 (expired/uninstalled — iOS silently drops subscriptions when
+// the PWA icon is deleted).
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // Per-pair "last looked at the ledger" watermark (blueprint 01 slice 4): an

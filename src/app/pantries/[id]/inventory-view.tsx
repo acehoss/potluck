@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { ScanSheet } from '@/app/scan-sheet';
 import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { formatCents, parseDollarsToCents } from '@/lib/money';
@@ -12,6 +13,7 @@ import { useTRPC } from '@/lib/trpc';
 export type ProductGroup = {
   productId: string;
   name: string;
+  upc: string | null;
   photoPath: string | null;
   total: number;
   lots: {
@@ -71,6 +73,15 @@ export function InventoryView({
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [startOpen, setStartOpen] = useState(false);
+  // Find-by-scan in the take flow (SPEC §5: "find product (search/scan)"):
+  // a scan that matches a product's UPC jumps straight into its take sheet.
+  // Same camera-API gate as the receive wizard's line sheet — hidden on
+  // plain-http LAN, where typing stays the path. Safe to read during render:
+  // this is a client component and the value never changes within a page.
+  const canScan =
+    typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function';
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
   const [takeFor, setTakeFor] = useState<ProductGroup | null>(null);
   const [lotMenu, setLotMenu] = useState<LotRef | null>(null);
   const [recountFor, setRecountFor] = useState<LotRef | null>(null);
@@ -121,13 +132,35 @@ export function InventoryView({
       )}
 
       {groups.length > 0 && (
-        <input
-          type="search"
-          placeholder="search products…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
-        />
+        <div className="flex gap-2">
+          <input
+            type="search"
+            placeholder="search products…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="min-h-11 min-w-0 flex-1 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+          />
+          {canScan && (
+            <button
+              type="button"
+              data-testid="inventory-scan"
+              aria-label="Scan barcode to take"
+              onClick={() => {
+                setScanNotice(null);
+                setScanOpen(true);
+              }}
+              className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border border-border-strong px-3 text-sm font-medium text-text transition-colors hover:bg-surface-sunken"
+            >
+              <span aria-hidden>▥</span> Scan
+            </button>
+          )}
+        </div>
+      )}
+
+      {scanNotice && (
+        <p role="status" data-testid="inventory-scan-notice" className="text-sm text-text-muted">
+          {scanNotice}
+        </p>
       )}
 
       <main className="flex flex-col gap-3">
@@ -135,13 +168,18 @@ export function InventoryView({
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
             <p className="text-sm font-medium text-text">Nothing here yet.</p>
             {isOwn ? (
-              <button
-                type="button"
-                onClick={() => setStartOpen(true)}
-                className="min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
-              >
-                Receive a restock
-              </button>
+              <>
+                <p className="text-sm text-text-muted">
+                  Receive a shopping run and every lot lands here, priced at cost.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setStartOpen(true)}
+                  className="mt-1 min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
+                >
+                  Receive a restock
+                </button>
+              </>
             ) : (
               <p className="text-sm text-text-muted">
                 The {pantry.householdName} haven&apos;t stocked this pantry yet.
@@ -251,10 +289,27 @@ export function InventoryView({
           type="button"
           data-testid="receive-fab"
           onClick={() => setStartOpen(true)}
-          className="fixed bottom-20 right-4 z-10 min-h-12 rounded-full bg-accent px-5 py-3 font-medium text-accent-contrast shadow-sm transition-colors hover:bg-accent-strong"
+          className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-10 min-h-12 rounded-full bg-accent px-5 py-3 font-medium text-accent-contrast shadow-sm transition-colors hover:bg-accent-strong"
         >
           + Receive
         </button>
+      )}
+
+      {scanOpen && (
+        <ScanSheet
+          onDetected={(code) => {
+            setScanOpen(false);
+            // Codes are stored normalized (server-side), so an exact match
+            // against the pantry's products is the whole lookup.
+            const group = groups.find((g) => g.upc === code);
+            if (group) {
+              setTakeFor(group);
+            } else {
+              setScanNotice(`Scanned ${code} — nothing with this UPC in this pantry.`);
+            }
+          }}
+          onClose={() => setScanOpen(false)}
+        />
       )}
 
       {startOpen && (
@@ -327,7 +382,7 @@ export function InventoryView({
           role="status"
           data-testid="take-toast"
           data-take-id={toast.takeId}
-          className="fixed inset-x-4 bottom-16 z-30 mx-auto flex max-w-md items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised px-4 py-3 shadow-sm"
+          className="fixed inset-x-4 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 mx-auto flex max-w-md items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised px-4 py-3 shadow-sm"
         >
           <p className="min-w-0 truncate text-sm text-text">{toastError ?? toast.label}</p>
           <button

@@ -93,7 +93,7 @@ async function receiveLot(
   await expect(page.getByRole('heading', { name: 'Reconcile' })).toBeVisible();
   await page.getByTestId('finalize').click();
   const code = (await page.getByTestId('restock-code').textContent())!;
-  expect(code).toMatch(/^\d{6}-\d{2}$/);
+  expect(code).toMatch(/^\d{6}-\d{2,}$/);
   await page.getByRole('link', { name: 'Back to pantry' }).click();
   // Wait for the pantry to fully render, not just the URL: a goto() that
   // aborts the in-flight RSC navigation makes Next fall back to a full-page

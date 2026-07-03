@@ -22,7 +22,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       receivedCount: { gt: 0 },
     },
     include: {
-      product: { select: { id: true, name: true } },
+      product: { select: { id: true, name: true, upc: true } },
       restock: { select: { dateCode: true, seq: true, purchasedAt: true } },
     },
   });
@@ -46,6 +46,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       group = {
         productId: lot.productId,
         name: lot.product.name,
+        upc: lot.product.upc,
         photoPath: photoByProduct.get(lot.productId) ?? null,
         total: 0,
         lots: [],

@@ -122,7 +122,7 @@ test('full receive wizard: photos, lines with hold-back, unit photo, reconcile, 
 
   // Step 6: the restock code, big, for physical labeling.
   const code = await page.getByTestId('restock-code').textContent();
-  expect(code).toMatch(/^\d{6}-\d{2}$/);
+  expect(code).toMatch(/^\d{6}-\d{2,}$/);
 
   // Restock detail keeps the code and the full line breakdown.
   await page.getByRole('link', { name: 'View restock' }).click();

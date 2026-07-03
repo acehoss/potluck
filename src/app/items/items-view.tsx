@@ -73,13 +73,15 @@ export function ItemsView({
   const [addOpen, setAddOpen] = useState(false);
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24">
+    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24 lg:max-w-4xl">
       <header className="flex items-center justify-between gap-4">
         <h1 className="text-xl font-semibold tracking-tight">Items</h1>
         <p className="text-sm text-text-muted">{yourName}</p>
       </header>
 
-      <main className="flex flex-col gap-6">
+      {/* Desktop: household groups side-by-side where it's free (blueprint 02
+          keeps the centered mobile column otherwise). */}
+      <main className="flex flex-col gap-6 lg:grid lg:grid-cols-2 lg:items-start">
         {groups.map((group) => (
           <section key={group.householdId} data-testid="item-group" className="flex flex-col gap-2">
             <div className="flex min-h-11 items-center gap-2">

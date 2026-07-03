@@ -10,6 +10,7 @@ import { downscaleToJpeg, sha256HexOfFile, uploadImage } from '@/lib/downscale';
 import { centsToDollarsString, formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers';
+import { ScanSheet } from '@/app/scan-sheet';
 
 type Restock = inferRouterOutputs<AppRouter>['restock']['get'];
 type Line = Restock['lots'][number];
@@ -929,6 +930,17 @@ function LineSheet({
         ? (proposal.suggested ?? { id: null, name: proposal.description })
         : null,
   );
+  // Camera UPC scan (blueprint 04 §2). The button renders only when a camera
+  // API exists (secure context — plain-http LAN gets the manual path only,
+  // which is why the search field also matches typed UPC digits). A scanned
+  // code with no product match is KEPT and saved onto the inline-created
+  // product. This sheet only ever renders client-side (opened by a tap), so
+  // reading navigator during render is safe.
+  const canScan =
+    typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function';
+  const [scanOpen, setScanOpen] = useState(false);
+  const [pendingUpc, setPendingUpc] = useState<string | null>(null);
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
   const [units, setUnits] = useState(line?.purchasedCount ?? proposal?.unitCount ?? 1);
   const [lineTotal, setLineTotal] = useState(
     line
@@ -990,11 +1002,42 @@ function LineSheet({
       lotId: line?.id,
       productId: product.id ?? undefined,
       newProductName: product.id === null ? product.name : undefined,
+      // A scanned-but-unmatched UPC rides along: onto the inline-created
+      // product, or onto a picked EXISTING product that has no UPC yet (so a
+      // pre-scan-era product gains its code and the next scan matches). The
+      // chip below the picker shows exactly what will be saved, with a ✕ to
+      // drop it.
+      upc: pendingUpc ?? undefined,
       purchasedCount: units,
       receivedCount: effectiveReceived,
       lineTotalCents: totalCents,
       bestBy: bestBy || null,
     });
+  }
+
+  /** Scan result → product lookup (product.search matches upc for digit queries). */
+  async function onScanDetected(code: string) {
+    setScanOpen(false);
+    try {
+      const results = await queryClient.fetchQuery(
+        trpc.product.search.queryOptions({ query: code }),
+      );
+      const match = results.find((p) => p.upc === code) ?? null;
+      if (match) {
+        setProduct({ id: match.id, name: match.name });
+        setPendingUpc(null);
+        setScanNotice(`Scanned ${code} — matched ${match.name}.`);
+      } else {
+        setProduct(null);
+        setPendingUpc(code);
+        setProductQuery('');
+        setScanNotice(
+          `Scanned ${code} — no product with this UPC yet. Pick or create one and the code sticks to it.`,
+        );
+      }
+    } catch {
+      setScanNotice(`Scanned ${code}, but the lookup failed — try the search field.`);
+    }
   }
 
   const stepperBtn =
@@ -1032,15 +1075,28 @@ function LineSheet({
         ) : (
           <label className="flex flex-col gap-1 text-sm font-medium text-text">
             Product
-            <input
-              type="text"
-              autoFocus
-              value={productQuery}
-              onChange={(e) => setProductQuery(e.target.value)}
-              placeholder="search or create…"
-              data-testid="product-search"
-              className={inputClass}
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                autoFocus
+                value={productQuery}
+                onChange={(e) => setProductQuery(e.target.value)}
+                placeholder="search, UPC, or create…"
+                data-testid="product-search"
+                className={`${inputClass} min-w-0 flex-1`}
+              />
+              {canScan && (
+                <button
+                  type="button"
+                  data-testid="scan-upc"
+                  aria-label="Scan barcode"
+                  onClick={() => setScanOpen(true)}
+                  className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border border-border-strong px-3 text-sm font-medium text-text transition-colors hover:bg-surface-sunken"
+                >
+                  <span aria-hidden>▥</span> Scan
+                </button>
+              )}
+            </div>
             <div className="flex flex-col divide-y divide-border rounded-lg border border-border">
               {productQuery.trim() &&
                 !search.data?.some(
@@ -1059,14 +1115,56 @@ function LineSheet({
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => setProduct({ id: p.id, name: p.name })}
+                  data-testid="product-result"
+                  onClick={() => {
+                    setProduct({ id: p.id, name: p.name });
+                    // A product that already has a UPC can't take the scanned
+                    // one — drop it rather than show a chip that would lie.
+                    if (p.upc) setPendingUpc(null);
+                  }}
                   className="px-3 py-2.5 text-left text-sm text-text hover:bg-surface-sunken"
                 >
                   {p.name}
+                  {p.upc && (
+                    <span className="ml-2 font-mono text-xs text-text-muted">{p.upc}</span>
+                  )}
                 </button>
               ))}
             </div>
           </label>
+        )}
+
+        {/* Scanned-UPC chip: visible from the scan all the way to Save (never
+            silently attached), whatever the picker state — with ✕ to drop it
+            if the scan was a mistake or belongs to something else. */}
+        {pendingUpc && (
+          <span className="flex items-center gap-2 text-xs text-text-muted">
+            <span
+              data-testid="pending-upc"
+              className="rounded-full bg-accent-soft px-2.5 py-0.5 font-mono font-medium text-accent-strong"
+            >
+              UPC {pendingUpc}
+            </span>
+            {product === null
+              ? 'will be saved with the product you pick or create'
+              : product.id === null
+                ? 'will be saved with the new product'
+                : `will be saved onto ${product.name}`}
+            <button
+              type="button"
+              aria-label="Drop scanned UPC"
+              onClick={() => setPendingUpc(null)}
+              className="font-medium text-accent"
+            >
+              ✕
+            </button>
+          </span>
+        )}
+
+        {scanNotice && (
+          <p role="status" data-testid="scan-notice" className="text-sm text-text-muted">
+            {scanNotice}
+          </p>
         )}
 
         <div className="flex items-center justify-between gap-2">
@@ -1192,6 +1290,8 @@ function LineSheet({
           </button>
         </div>
       </div>
+
+      {scanOpen && <ScanSheet onDetected={onScanDetected} onClose={() => setScanOpen(false)} />}
     </div>
   );
 }

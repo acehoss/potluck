@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
 const inputClass =
-  'rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
+  'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
 
 export function AcceptInviteForm({ token, defaultName }: { token: string; defaultName: string }) {
   const trpc = useTRPC();
@@ -26,13 +26,13 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
 
   return (
     <form
-      className="flex w-full max-w-sm flex-col gap-4"
+      className="flex w-full flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
         accept.mutate({ token, name, email, password });
       }}
     >
-      <label className="flex flex-col gap-1 text-sm font-medium">
+      <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Your name
         <input
           type="text"
@@ -44,7 +44,7 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
           className={inputClass}
         />
       </label>
-      <label className="flex flex-col gap-1 text-sm font-medium">
+      <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Email
         <input
           type="email"
@@ -56,7 +56,7 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
           className={inputClass}
         />
       </label>
-      <label className="flex flex-col gap-1 text-sm font-medium">
+      <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Password
         <input
           type="password"
@@ -78,7 +78,7 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
       <button
         type="submit"
         disabled={accept.isPending}
-        className="rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:opacity-50"
+        className="min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:bg-accent/50 disabled:text-accent-contrast/70"
       >
         {accept.isPending ? 'Creating account…' : 'Join household'}
       </button>

@@ -3,6 +3,7 @@ import { getSessionUser } from '@/server/auth';
 import { db } from '@/server/db';
 import { InviteMember } from '../invite-member';
 import { LogoutButton } from '../logout-button';
+import { InstallCard, NotificationsCard } from './pwa-cards';
 
 /** More tab (blueprint 02): household members, invite link, sign out. */
 export default async function MorePage() {
@@ -53,6 +54,12 @@ export default async function MorePage() {
             </section>
           );
         })}
+
+        <h2 className="mt-2 text-xs font-medium uppercase tracking-wide text-text-muted">
+          This device
+        </h2>
+        <InstallCard />
+        <NotificationsCard />
       </main>
     </div>
   );

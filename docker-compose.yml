@@ -13,6 +13,15 @@ services:
       EXTRACTION_MODE: ${EXTRACTION_MODE:-off}
       EXTRACTION_MODEL: ${EXTRACTION_MODEL:-claude-opus-4-8}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Web push (blueprint 04 §4). No committed key ever serves a real
+      # deployment: empty values disable push, and demo/e2e stacks
+      # (SEED_DEMO=1) get a publicly known dev keypair injected by the
+      # entrypoint — which REFUSES to start if that dev pair is configured
+      # outside demo mode. Generate your own for a real deployment
+      # (`npx web-push generate-vapid-keys`) and set these in the host env.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:coop@example.com}
     volumes:
       - coop-data:/data
     healthcheck:

@@ -4,6 +4,7 @@ import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
 import { db } from '@/server/db';
 import { netByCounterparty } from '@/server/ledger';
+import { BrandMark } from './brand-mark';
 
 /**
  * Pantries tab (blueprint 02): every pantry across all households —
@@ -41,9 +42,12 @@ export default async function PantriesPage() {
   const others = households.filter((h) => h.id !== user.householdId);
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24">
+    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24 lg:max-w-4xl">
       <header className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold tracking-tight">Private Coop</h1>
+        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <BrandMark className="size-6 text-accent" />
+          Private Coop
+        </h1>
         <p className="text-sm text-text-muted">{user.name}</p>
       </header>
 
@@ -78,6 +82,9 @@ export default async function PantriesPage() {
             })}
           </div>
         )}
+        {/* Desktop: the centered mobile column is fine (blueprint 02), but the
+            two household groups sit side-by-side where that's free. */}
+        <div className="flex flex-col gap-6 lg:grid lg:grid-cols-2 lg:items-start">
         {households.map((household) => {
           const isYours = household.id === user.householdId;
           return (
@@ -121,6 +128,7 @@ export default async function PantriesPage() {
             </section>
           );
         })}
+        </div>
       </main>
     </div>
   );

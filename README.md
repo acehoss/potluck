@@ -47,6 +47,33 @@ Controlled by `EXTRACTION_MODE` (default `off` — manual entry only):
 Extraction is advisory: proposed lines land on the review screen for per-line
 confirm/edit/dismiss, and any failure degrades to manual entry.
 
+## Install & notifications (PWA)
+
+The app is installable (manifest + icons + service worker; guidance lives on
+the **More** tab — Android offers a native install prompt, iOS shows the
+Share → Add to Home Screen steps). Camera barcode scanning and web push both
+need a **secure context**: HTTPS in production (localhost is exempt for dev).
+On iOS, push requires the *installed* app (iOS 16.4+) and the permission
+prompt only ever follows an explicit tap on the More tab's toggle.
+
+Web push needs a VAPID keypair in the container environment:
+
+```bash
+npx web-push generate-vapid-keys
+# then set in the host env (or a .env file next to docker-compose.yml):
+#   VAPID_PUBLIC_KEY=…  VAPID_PRIVATE_KEY=…  VAPID_SUBJECT=mailto:you@example.com
+```
+
+Leave them empty to disable push (the More tab says it's not configured).
+Demo/e2e stacks (`SEED_DEMO=1`) get a **publicly known dev keypair** injected
+by the entrypoint so the test suite works out of the box; the entrypoint
+**refuses to start** a non-demo stack configured with that dev pair — its
+private key is committed to this repo. Subscription endpoints are validated
+as public HTTPS push-service hosts (the server POSTs notifications to them,
+so anything else would be an SSRF hole). Exactly two events notify: a
+settlement recorded and a manual ledger adjustment posted — members of both
+involved households, except whoever recorded it.
+
 ## Backups
 
 One tar covers everything (SPEC §6): the SQLite database plus the images tree,
