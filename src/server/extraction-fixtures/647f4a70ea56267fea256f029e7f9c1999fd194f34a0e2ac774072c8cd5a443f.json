@@ -2,36 +2,47 @@
   "lines": [
     {
       "description": "ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRES",
+      "receiptText": "ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRES",
       "unitCount": 2,
       "lineTotalCents": 1499,
+      "taxable": null,
       "confidence": 0.41
     },
     {
       "description": "ZERO COUNT ITEM",
+      "receiptText": "ZERO COUNT ITEM",
       "unitCount": 0,
       "lineTotalCents": 399,
+      "taxable": null,
       "confidence": 0.5
     },
     {
       "description": "MEGA PACK NAPKINS",
+      "receiptText": "MEGA PACK NAPKINS",
       "unitCount": 50000,
       "lineTotalCents": 2599,
+      "taxable": null,
       "confidence": 0.6
     },
     {
       "description": "1234 INSTANT SVG",
+      "receiptText": "1234 INSTANT SVG",
       "unitCount": 1,
       "lineTotalCents": -300,
+      "taxable": null,
       "confidence": 0.9
     },
     {
       "description": "FREE PROMO ITEM",
+      "receiptText": "FREE PROMO ITEM",
       "unitCount": 1,
       "lineTotalCents": 0,
+      "taxable": null,
       "confidence": 0.8
     }
   ],
   "receiptTotalCents": null,
+  "taxCents": null,
   "retailer": "Edge Mart",
   "purchasedAt": null
 }

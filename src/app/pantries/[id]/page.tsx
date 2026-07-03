@@ -16,16 +16,23 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
   });
   if (!pantry) notFound();
 
-  const lots = await db.lot.findMany({
+  const rawLots = await db.lot.findMany({
     where: {
       restock: { pantryId: pantry.id, status: 'FINALIZED' },
       receivedCount: { gt: 0 },
+      productId: { not: null },
     },
     include: {
       product: { select: { id: true, name: true, upc: true } },
       restock: { select: { dateCode: true, seq: true, purchasedAt: true } },
     },
   });
+  // receivedCount > 0 already excludes non-inventory lines; the productId guard
+  // narrows the type (excluded lines have a null product).
+  const lots = rawLots.filter(
+    (l): l is typeof l & { productId: string; product: NonNullable<typeof l.product> } =>
+      l.product !== null,
+  );
 
   // D8: product display photo = newest lot of the product with a unit photo.
   const productIds = [...new Set(lots.map((l) => l.productId))];
@@ -36,7 +43,9 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
   });
   const photoByProduct = new Map<string, string>();
   for (const l of photoLots) {
-    if (!photoByProduct.has(l.productId)) photoByProduct.set(l.productId, l.unitPhotoPath!);
+    if (l.productId && !photoByProduct.has(l.productId)) {
+      photoByProduct.set(l.productId, l.unitPhotoPath!);
+    }
   }
 
   const groups = new Map<string, ProductGroup>();

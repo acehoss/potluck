@@ -1,6 +1,7 @@
 {
   "lines": [],
   "receiptTotalCents": null,
+  "taxCents": null,
   "retailer": null,
   "purchasedAt": null
 }

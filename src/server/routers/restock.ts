@@ -2,7 +2,13 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { normalizeScannedCode } from '@/lib/barcode';
-import { dateCodeFor, restockCode, unitCostCents, varianceAutoPasses } from '@/lib/domain';
+import {
+  allocateReceipt,
+  dateCodeFor,
+  reconcileVariance,
+  restockCode,
+  varianceAutoPasses,
+} from '@/lib/domain';
 import { db, dbTransaction } from '../db';
 import {
   extractReceipt,
@@ -62,14 +68,29 @@ const draftHeaderSchema = z.object({
   purchasedAt: dateOnly,
   purchaserHouseholdId: z.string().min(1),
   receiptTotalCents: z.number().int().min(0).max(MAX_CENTS).nullable(),
+  // Non-inventory receipt amounts (blueprint 01 D7). Tax is split across taxable
+  // lines; fees across all lines only when feesDistributed. Both fold into the
+  // frozen unit cost at finalize, so entering them also removes the false
+  // "receipt is short" variance a taxed receipt used to always show.
+  taxCents: z.number().int().min(0).max(MAX_CENTS).nullable().optional(),
+  feesCents: z.number().int().min(0).max(MAX_CENTS).nullable().optional(),
+  feesDistributed: z.boolean().optional(),
 });
 
 const lineSchema = z.object({
   restockId: z.string().min(1),
   lotId: z.string().min(1).optional(), // absent = new line
-  // Exactly one of productId / newProductName.
+  // Exactly one of productId / newProductName — unless `excluded` (no product).
   productId: z.string().min(1).optional(),
   newProductName: z.string().trim().min(1).max(200).optional(),
+  // A taxable line earns a pro-rata share of the receipt tax at finalize.
+  taxable: z.boolean().optional(),
+  // An excluded line has no product and no units — it exists only so the
+  // receipt reconciles and fee distribution is accurate (a shortcut for whole
+  // receipt lines that aren't going into the pantry). Still opt-in taxable.
+  excluded: z.boolean().optional(),
+  // Raw receipt line text (from extraction), shown beside the product.
+  receiptText: z.string().trim().max(300).optional(),
   // Optional retail code (slice 7 scan flow): saved onto the inline-created
   // product, or onto an EXISTING picked product that has no UPC yet — a scan
   // matched by search rather than UPC must still stick, or pre-scan-era
@@ -81,7 +102,7 @@ const lineSchema = z.object({
     .trim()
     .regex(/^\d{8,14}$/)
     .optional(),
-  purchasedCount: z.number().int().min(1).max(10_000),
+  purchasedCount: z.number().int().min(0).max(10_000), // 0 only for excluded lines
   receivedCount: z.number().int().min(0).max(10_000),
   lineTotalCents: z.number().int().min(0).max(MAX_CENTS),
   bestBy: dateOnly.nullable(),
@@ -102,6 +123,47 @@ async function getDraftOrThrow(tx: Prisma.TransactionClient, restockId: string) 
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restock is already finalized.' });
   }
   return restock;
+}
+
+/**
+ * Assign the restock's `YYMMDD-NN` code for its purchase date, race-safe via
+ * @@unique([dateCode, seq]). Assigned at DRAFT START (not finalize) so the
+ * physical label is known up front — the user pulls items from bags in any
+ * order and labels each as it hits the shelf (Aaron's flow). Reverses blueprint
+ * D6's finalize-time assignment; the tradeoff is that abandoned drafts leave
+ * gaps in a day's numbering, which is fine. Re-derives when the receipt date is
+ * edited to a different day, and no-ops when already coded for the same day.
+ * Must run inside a caller transaction wrapped in `withCodeRetry` (a P2002 on
+ * the unique index means a concurrent restock grabbed the seq — retry).
+ */
+async function assignRestockCode(
+  tx: Prisma.TransactionClient,
+  restockId: string,
+  purchasedAt: Date,
+) {
+  const dateCode = dateCodeFor(purchasedAt);
+  const current = await tx.restock.findUnique({
+    where: { id: restockId },
+    select: { dateCode: true, seq: true },
+  });
+  if (current?.dateCode === dateCode && current.seq !== null) return;
+  const maxSeq = await tx.restock.aggregate({ where: { dateCode }, _max: { seq: true } });
+  const seq = (maxSeq._max.seq ?? 0) + 1;
+  await tx.restock.update({ where: { id: restockId }, data: { dateCode, seq } });
+}
+
+/** Retry a transaction that assigns a restock seq when it collides (P2002). */
+async function withCodeRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isUniqueViolation =
+        typeof err === 'object' && err !== null && 'code' in err && err.code === 'P2002';
+      if (isUniqueViolation && attempt < 5) continue;
+      throw err;
+    }
+  }
 }
 
 /**
@@ -171,17 +233,27 @@ export const restockRouter = router({
       });
       if (!purchaser) throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
 
-      const restock = await db.restock.create({
-        data: {
-          pantryId: input.pantryId,
-          purchaserHouseholdId: input.purchaserHouseholdId,
-          createdById: ctx.user.id,
-          retailer: input.retailer,
-          purchasedAt: input.purchasedAt,
-          receiptTotalCents: input.receiptTotalCents,
-        },
-      });
-      return { id: restock.id };
+      const id = await withCodeRetry(() =>
+        dbTransaction(async (tx) => {
+          const restock = await tx.restock.create({
+            data: {
+              pantryId: input.pantryId,
+              purchaserHouseholdId: input.purchaserHouseholdId,
+              createdById: ctx.user.id,
+              retailer: input.retailer,
+              purchasedAt: input.purchasedAt,
+              receiptTotalCents: input.receiptTotalCents,
+              taxCents: input.taxCents ?? null,
+              feesCents: input.feesCents ?? null,
+              feesDistributed: input.feesDistributed ?? false,
+            },
+          });
+          // Assign the label code up front (see assignRestockCode).
+          await assignRestockCode(tx, restock.id, input.purchasedAt);
+          return restock.id;
+        }),
+      );
+      return { id };
     }),
 
   /** Header edits while DRAFT (fix a mistyped total/date without abandoning). */
@@ -189,10 +261,14 @@ export const restockRouter = router({
     .input(draftHeaderSchema.partial().extend({ restockId: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const { restockId, ...data } = input;
-      await dbTransaction(async (tx) => {
-        await getDraftOrThrow(tx, restockId);
-        await tx.restock.update({ where: { id: restockId }, data });
-      });
+      await withCodeRetry(() =>
+        dbTransaction(async (tx) => {
+          await getDraftOrThrow(tx, restockId);
+          await tx.restock.update({ where: { id: restockId }, data });
+          // A changed receipt date changes the day, so re-derive the label.
+          if (data.purchasedAt) await assignRestockCode(tx, restockId, data.purchasedAt);
+        }),
+      );
       return { ok: true };
     }),
 
@@ -233,9 +309,17 @@ export const restockRouter = router({
       retailer: restock.retailer,
       purchasedAt: restock.purchasedAt.toISOString().slice(0, 10),
       receiptTotalCents: restock.receiptTotalCents,
+      taxCents: restock.taxCents,
+      feesCents: restock.feesCents,
+      feesDistributed: restock.feesDistributed,
       dateCode: restock.dateCode,
       seq: restock.seq,
+      code:
+        restock.dateCode && restock.seq !== null
+          ? restockCode(restock.dateCode, restock.seq)
+          : null,
       varianceCents: restock.varianceCents,
+      voidedAt: restock.voidedAt?.toISOString() ?? null,
       pantry: {
         id: restock.pantry.id,
         name: restock.pantry.name,
@@ -250,9 +334,15 @@ export const restockRouter = router({
         purchasedCount: l.purchasedCount,
         receivedCount: l.receivedCount,
         lineTotalCents: l.lineTotalCents,
+        taxable: l.taxable,
+        excluded: l.excluded,
+        receiptText: l.receiptText,
         unitCostCents: l.unitCostCents,
+        taxCentsAllocated: l.taxCentsAllocated,
+        feeCentsAllocated: l.feeCentsAllocated,
         bestBy: l.bestBy?.toISOString().slice(0, 10) ?? null,
         unitPhotoPath: l.unitPhotoPath,
+        // Null for an excluded (non-inventory) line.
         product: l.product,
       })),
       credit: credit ? { amountCents: credit.amountCents } : null,
@@ -367,6 +457,7 @@ export const restockRouter = router({
         retailer: result.data.retailer,
         purchasedAt: result.data.purchasedAt,
         receiptTotalCents: result.data.receiptTotalCents,
+        taxCents: result.data.taxCents,
       };
     }),
 
@@ -428,17 +519,23 @@ export const restockRouter = router({
 
   /** Step 3: create or edit a receipt line (a draft Lot — blueprint 01 D4). */
   saveLine: protectedProcedure.input(lineSchema).mutation(async ({ input }) => {
-    if (input.receivedCount > input.purchasedCount) {
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message: 'Received count cannot exceed purchased count.',
-      });
-    }
-    if (!input.productId === !input.newProductName) {
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message: 'Pick a product or name a new one.',
-      });
+    const excluded = input.excluded ?? false;
+    if (!excluded) {
+      if (input.purchasedCount < 1) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'At least one unit.' });
+      }
+      if (input.receivedCount > input.purchasedCount) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Received count cannot exceed purchased count.',
+        });
+      }
+      if (!input.productId === !input.newProductName) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Pick a product or name a new one.',
+        });
+      }
     }
 
     // One transaction: the DRAFT check holds through the write, a new Product
@@ -450,28 +547,36 @@ export const restockRouter = router({
       // Canonical stored form (zod guarantees 8–14 digits, so this never
       // nulls out a value the schema accepted).
       const upc = input.upc ? normalizeScannedCode(input.upc) : null;
-      let productId = input.productId;
-      if (input.newProductName) {
-        const product = await tx.product.create({
-          data: { name: input.newProductName, upc },
-        });
-        productId = product.id;
-      } else {
-        const exists = await tx.product.findUnique({ where: { id: productId! } });
-        if (!exists) throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
-        // A scanned code picked onto an existing product fills in a missing
-        // UPC (never overwrites one that's already set).
-        if (upc && exists.upc === null) {
-          await tx.product.update({ where: { id: exists.id }, data: { upc } });
+      let productId: string | null = null;
+      if (!excluded) {
+        productId = input.productId ?? null;
+        if (input.newProductName) {
+          const product = await tx.product.create({
+            data: { name: input.newProductName, upc },
+          });
+          productId = product.id;
+        } else {
+          const exists = await tx.product.findUnique({ where: { id: productId! } });
+          if (!exists) throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
+          // A scanned code picked onto an existing product fills in a missing
+          // UPC (never overwrites one that's already set).
+          if (upc && exists.upc === null) {
+            await tx.product.update({ where: { id: exists.id }, data: { upc } });
+          }
         }
       }
 
+      // An excluded line carries only its total (weight for tax/fee split) and
+      // its taxable flag — no product, no units, no inventory.
       const data = {
-        productId: productId!,
-        purchasedCount: input.purchasedCount,
-        receivedCount: input.receivedCount,
+        productId,
+        purchasedCount: excluded ? 0 : input.purchasedCount,
+        receivedCount: excluded ? 0 : input.receivedCount,
         lineTotalCents: input.lineTotalCents,
-        bestBy: input.bestBy,
+        taxable: input.taxable ?? false,
+        excluded,
+        receiptText: input.receiptText || null,
+        bestBy: excluded ? null : input.bestBy,
       };
 
       if (input.lotId) {
@@ -570,22 +675,48 @@ export const restockRouter = router({
               });
             }
 
+            // Fold receipt tax/fees into each lot's landed cost (D1 freeze, now
+            // tax-inclusive), then freeze the unit costs and remaining counts.
+            const allocations = allocateReceipt(
+              restock.lots.map((l) => ({
+                lineTotalCents: l.lineTotalCents,
+                purchasedCount: l.purchasedCount,
+                taxable: l.taxable,
+                excluded: l.excluded,
+              })),
+              restock.taxCents,
+              restock.feesCents,
+              restock.feesDistributed,
+            );
+
             let creditCents = 0;
             let lineSumCents = 0;
-            for (const lot of restock.lots) {
-              const unitCost = unitCostCents(lot.lineTotalCents, lot.purchasedCount);
+            for (let i = 0; i < restock.lots.length; i++) {
+              const lot = restock.lots[i];
+              const a = allocations[i];
               lineSumCents += lot.lineTotalCents;
-              creditCents += lot.receivedCount * unitCost;
+              // Excluded lines never become inventory and never earn a credit —
+              // their tax/fee share is the purchaser's own cost.
+              if (!lot.excluded && a.unitCostCents !== null) {
+                creditCents += lot.receivedCount * a.unitCostCents;
+              }
               await tx.lot.update({
                 where: { id: lot.id },
-                data: { unitCostCents: unitCost, remainingCount: lot.receivedCount },
+                data: {
+                  unitCostCents: a.unitCostCents,
+                  taxCentsAllocated: a.taxCentsAllocated,
+                  feeCentsAllocated: a.feeCentsAllocated,
+                  remainingCount: lot.excluded ? 0 : lot.receivedCount,
+                },
               });
             }
 
-            const varianceCents =
-              restock.receiptTotalCents === null
-                ? null
-                : restock.receiptTotalCents - lineSumCents;
+            const varianceCents = reconcileVariance(
+              restock.receiptTotalCents,
+              lineSumCents,
+              restock.taxCents,
+              restock.feesCents,
+            );
             if (
               varianceCents !== null &&
               !varianceAutoPasses(varianceCents, restock.lots.length) &&
@@ -594,11 +725,12 @@ export const restockRouter = router({
               throw new TRPCError({
                 code: 'PRECONDITION_FAILED',
                 message:
-                  'Receipt total differs from the line sum — review the variance and acknowledge to finalize.',
+                  'Receipt total differs from the accounted amount — review the variance and acknowledge to finalize.',
               });
             }
 
-            // Cross-household: credit the purchaser at cost, received units only.
+            // Cross-household: credit the purchaser at cost (tax-inclusive),
+            // received units only.
             if (restock.purchaserHouseholdId !== restock.pantry.householdId && creditCents > 0) {
               await tx.ledgerEntry.create({
                 data: {
@@ -612,25 +744,28 @@ export const restockRouter = router({
               });
             }
 
-            const dateCode = dateCodeFor(restock.purchasedAt);
-            const maxSeq = await tx.restock.aggregate({
-              where: { dateCode },
-              _max: { seq: true },
+            // The code was assigned at draft start; this only fills one in for a
+            // legacy draft that predates early assignment (no-op otherwise).
+            await assignRestockCode(tx, restock.id, restock.purchasedAt);
+            const coded = await tx.restock.findUnique({
+              where: { id: restock.id },
+              select: { dateCode: true, seq: true },
             });
-            const seq = (maxSeq._max.seq ?? 0) + 1;
 
             await tx.restock.update({
               where: { id: restock.id },
               data: {
                 status: 'FINALIZED',
-                dateCode,
-                seq,
                 varianceCents,
                 finalizedAt: new Date(),
               },
             });
 
-            return { code: restockCode(dateCode, seq), creditCents, varianceCents };
+            return {
+              code: restockCode(coded!.dateCode!, coded!.seq!),
+              creditCents,
+              varianceCents,
+            };
           });
         } catch (err) {
           const isUniqueViolation =
@@ -774,6 +909,79 @@ export const restockRouter = router({
           });
         }
         return { creditCents: newCreditCents, previousCents };
+      });
+    }),
+
+  /**
+   * Void a finalized restock entered by mistake (auditable "undo"). FINALIZED is
+   * terminal and stays so — this reverses the active purchaser credit (swapped
+   * parties, `reversesId`, same `restockId`) and zeroes every lot's
+   * remainingCount so the phantom stock leaves inventory, then stamps
+   * `voidedAt`. Gated to the purchaser or pantry-owning household (same standing
+   * as correctCredit). ALLOWED ONLY WHILE NO TAKE references a lot — once
+   * someone has pulled from these lots, the honest fix is to undo those takes or
+   * use correctCredit, not to pretend the restock never happened.
+   */
+  voidInError: protectedProcedure
+    .input(z.object({ restockId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      return dbTransaction(async (tx) => {
+        const restock = await tx.restock.findUnique({
+          where: { id: input.restockId },
+          include: { pantry: { select: { householdId: true } } },
+        });
+        if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (restock.status !== 'FINALIZED') {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Only a finalized restock can be voided.',
+          });
+        }
+        if (restock.voidedAt) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Already voided.' });
+        }
+        if (
+          restock.purchaserHouseholdId !== ctx.user.householdId &&
+          restock.pantry.householdId !== ctx.user.householdId
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the purchaser or pantry-owning household can void this restock.',
+          });
+        }
+        const takeCount = await tx.take.count({ where: { lot: { restockId: restock.id } } });
+        if (takeCount > 0) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message:
+              'This restock already has takes — undo those first, or use Correct received counts.',
+          });
+        }
+
+        const entries = await tx.ledgerEntry.findMany({ where: { restockId: restock.id } });
+        const active = pickActiveRestockCredit(entries);
+        if (active) {
+          await tx.ledgerEntry.create({
+            data: {
+              type: 'REVERSAL',
+              reversesId: active.id,
+              restockId: restock.id,
+              creditorHouseholdId: active.debtorHouseholdId,
+              debtorHouseholdId: active.creditorHouseholdId,
+              amountCents: active.amountCents,
+              createdById: ctx.user.id,
+            },
+          });
+        }
+        await tx.lot.updateMany({
+          where: { restockId: restock.id },
+          data: { remainingCount: 0 },
+        });
+        await tx.restock.update({
+          where: { id: restock.id },
+          data: { voidedAt: new Date() },
+        });
+        return { reversedCents: active?.amountCents ?? 0 };
       });
     }),
 

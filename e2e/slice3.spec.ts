@@ -41,7 +41,7 @@ async function openPantryOf(page: Page, household: string | 'own') {
       ? page.getByTestId('pantry-group').filter({ hasText: 'your household' })
       : page.getByTestId('pantry-group').filter({ hasText: household });
   await group.getByTestId('pantry-row').first().click();
-  await expect(page.getByTestId('product-row').first().or(page.getByText('Nothing here yet.'))).toBeVisible();
+  await expect(page.getByTestId('product-row').first().or(page.getByText(/empty|Nothing to browse/i))).toBeVisible();
 }
 
 /**
@@ -138,7 +138,7 @@ test('cross-household take debits the taker at unit cost and undo reverses it', 
   await openPantryOf(dana, 'Heise');
   await dana.getByTestId('product-row').filter({ hasText: product }).getByRole('button').first().click();
   await expect(dana.getByTestId('take-sheet')).toBeVisible();
-  await expect(dana.getByText('FIFO ✓')).toBeVisible();
+  await expect(dana.getByText('oldest ✓')).toBeVisible();
   await expect(dana.getByText('$3.33/u')).toBeVisible();
   await dana.getByRole('button', { name: 'Take more' }).click();
   await expect(dana.getByTestId('take-cost')).toHaveText("You'll owe Heise $6.66");
@@ -231,12 +231,12 @@ test('the take sheet preselects the oldest lot as the FIFO suggestion', async ({
   await page.getByTestId('product-row').filter({ hasText: product }).getByRole('button').first().click();
   const lotSelect = page.getByTestId('take-lot');
   await expect(lotSelect.locator('option:checked')).toContainText(older.code);
-  await expect(page.getByText('FIFO ✓')).toBeVisible();
+  await expect(page.getByText('oldest ✓')).toBeVisible();
 
   // Overriding is allowed — suggested, never enforced — and drops the badge.
   await lotSelect.selectOption({ index: 1 });
   await expect(lotSelect.locator('option:checked')).toContainText(newer.code);
-  await expect(page.getByText('FIFO ✓')).toHaveCount(0);
+  await expect(page.getByText('oldest ✓')).toHaveCount(0);
 });
 
 test('the server guards stock, undo authz, and double undo', async ({ page, browser }, testInfo) => {

@@ -4,8 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { inferRouterOutputs } from '@trpc/server';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useRef, useState } from 'react';
-import { restockCode, unitCostCents, varianceAutoPasses } from '@/lib/domain';
+import { useEffect, useRef, useState } from 'react';
+import { reconcileVariance, restockCode, unitCostCents, varianceAutoPasses } from '@/lib/domain';
 import { downscaleToJpeg, sha256HexOfFile, uploadImage } from '@/lib/downscale';
 import { centsToDollarsString, formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
@@ -132,6 +132,24 @@ export function ReceiveWizard({ pantryId, restockId }: { pantryId: string; resto
         </p>
       )}
 
+      {/* The label code is assigned up front (not at finalize) so you can mark
+          each item as it goes on the shelf — see the router's assignRestockCode.
+          Shown from the photos step through reconcile. */}
+      {step < 6 && restock.status === 'DRAFT' && restock.code && (
+        <div
+          data-testid="draft-code-banner"
+          className="flex items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent-soft px-4 py-3"
+        >
+          <span className="text-sm font-medium text-accent-strong">Label everything</span>
+          <span
+            data-testid="draft-code"
+            className="font-mono text-2xl font-bold tracking-widest text-accent-strong"
+          >
+            {restock.code}
+          </span>
+        </div>
+      )}
+
       {step === 2 && <PhotosStep restock={restock} refetch={refetch} onNext={() => goToStep(3)} />}
       {step === 3 && (
         <LinesStep
@@ -139,6 +157,7 @@ export function ReceiveWizard({ pantryId, restockId }: { pantryId: string; resto
           refetch={refetch}
           onBack={() => goToStep(2)}
           onNext={() => goToStep(4)}
+          onEditDetails={() => setEditOpen(true)}
         />
       )}
       {step === 4 && (
@@ -154,6 +173,7 @@ export function ReceiveWizard({ pantryId, restockId }: { pantryId: string; resto
           restock={restock}
           restockId={restockId}
           onBack={() => goToStep(4)}
+          onEditDetails={() => setEditOpen(true)}
           onDone={async () => {
             await refetch();
             goToStep(6);
@@ -191,6 +211,13 @@ function EditDetailsSheet({
   const [receiptTotal, setReceiptTotal] = useState(
     restock.receiptTotalCents !== null ? centsToDollarsString(restock.receiptTotalCents) : '',
   );
+  const [tax, setTax] = useState(
+    restock.taxCents !== null ? centsToDollarsString(restock.taxCents) : '',
+  );
+  const [fees, setFees] = useState(
+    restock.feesCents !== null ? centsToDollarsString(restock.feesCents) : '',
+  );
+  const [feesDistributed, setFeesDistributed] = useState(restock.feesDistributed);
   const [error, setError] = useState<string | null>(null);
 
   const households = useQuery(trpc.household.overview.queryOptions());
@@ -215,12 +242,25 @@ function EditDetailsSheet({
               setError('Receipt total must look like 86.02');
               return;
             }
+            const taxCents = tax.trim() ? parseDollarsToCents(tax) : null;
+            if (tax.trim() && taxCents === null) {
+              setError('Tax must look like 1.72');
+              return;
+            }
+            const feesCents = fees.trim() ? parseDollarsToCents(fees) : null;
+            if (fees.trim() && feesCents === null) {
+              setError('Fees must look like 4.99');
+              return;
+            }
             updateDraft.mutate({
               restockId: restock.id,
               retailer,
               purchasedAt,
               purchaserHouseholdId,
               receiptTotalCents: cents,
+              taxCents,
+              feesCents,
+              feesDistributed,
             });
           }}
         >
@@ -271,6 +311,52 @@ function EditDetailsSheet({
               className={inputClass}
             />
           </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1 text-sm font-medium text-text">
+              Tax (optional)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={tax}
+                onChange={(e) => setTax(e.target.value)}
+                placeholder="1.72"
+                data-testid="edit-tax"
+                className={inputClass}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-medium text-text">
+              Fees (optional)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={fees}
+                onChange={(e) => setFees(e.target.value)}
+                placeholder="delivery, etc."
+                data-testid="edit-fees"
+                className={inputClass}
+              />
+            </label>
+          </div>
+          <p className="-mt-1 text-xs text-text-muted">
+            Tax is split across taxable lines. Fees are the purchaser&apos;s unless you share them.
+          </p>
+          {fees.trim() && (
+            <label className="flex items-start gap-2 text-sm text-text">
+              <input
+                type="checkbox"
+                checked={feesDistributed}
+                data-testid="edit-fees-distributed"
+                onChange={(e) => setFeesDistributed(e.target.checked)}
+                className="mt-0.5 size-5 accent-accent"
+              />
+              <span>
+                Share fees across all lines
+                <span className="block text-xs text-text-muted">
+                  Everyone who takes an item pays a proportional bit of the fee.
+                </span>
+              </span>
+            </label>
+          )}
           {error && (
             <p role="alert" className="text-sm text-danger">
               {error}
@@ -405,23 +491,44 @@ function PhotosStep({
 
 function reconcileParts(restock: Restock) {
   const lineSumCents = restock.lots.reduce((s, l) => s + l.lineTotalCents, 0);
-  const varianceCents =
-    restock.receiptTotalCents === null ? null : restock.receiptTotalCents - lineSumCents;
+  const nonInventoryCents = (restock.taxCents ?? 0) + (restock.feesCents ?? 0);
+  const varianceCents = reconcileVariance(
+    restock.receiptTotalCents,
+    lineSumCents,
+    restock.taxCents,
+    restock.feesCents,
+  );
   const autoPass =
     varianceCents === null || varianceAutoPasses(varianceCents, restock.lots.length);
-  return { lineSumCents, varianceCents, autoPass };
+  return { lineSumCents, nonInventoryCents, varianceCents, autoPass };
 }
 
-function VarianceBanner({ restock }: { restock: Restock }) {
+/** "Lines $X + tax $Y + fees $Z" — omits the tax/fee parts when zero/unset. */
+function accountedLabel(restock: Restock, lineSumCents: number) {
+  let label = `Lines ${formatCents(lineSumCents)}`;
+  if (restock.taxCents) label += ` + tax ${formatCents(restock.taxCents)}`;
+  if (restock.feesCents) label += ` + fees ${formatCents(restock.feesCents)}`;
+  return label;
+}
+
+function VarianceBanner({
+  restock,
+  onEditDetails,
+}: {
+  restock: Restock;
+  onEditDetails?: () => void;
+}) {
   const { lineSumCents, varianceCents, autoPass } = reconcileParts(restock);
   if (varianceCents === null) {
     return (
       <p className="text-sm text-text-muted">
-        Lines {formatCents(lineSumCents)} · no receipt total entered
+        {accountedLabel(restock, lineSumCents)} · no receipt total entered
       </p>
     );
   }
-  const label = `Lines ${formatCents(lineSumCents)} / Rcpt ${formatCents(restock.receiptTotalCents!)}`;
+  const label = `${accountedLabel(restock, lineSumCents)} / Receipt ${formatCents(
+    restock.receiptTotalCents!,
+  )}`;
   if (autoPass) {
     return (
       <div
@@ -432,13 +539,28 @@ function VarianceBanner({ restock }: { restock: Restock }) {
       </div>
     );
   }
+  // A short receipt with no tax entered is almost always unrecorded tax/fees —
+  // point the user at the fix instead of leaving them feeling they mis-entered.
+  const looksLikeTax = varianceCents > 0 && !restock.taxCents;
   return (
     <div
       role="status"
       data-testid="variance-banner"
-      className="rounded-lg border border-warn/30 bg-warn-soft px-4 py-3 text-sm font-medium text-warn"
+      className="flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn-soft px-4 py-3 text-sm font-medium text-warn"
     >
-      {label} — ⚠ {formatCents(Math.abs(varianceCents))} {varianceCents > 0 ? 'short' : 'over'}
+      <span>
+        {label} — ⚠ {formatCents(Math.abs(varianceCents))} {varianceCents > 0 ? 'short' : 'over'}
+      </span>
+      {looksLikeTax && onEditDetails && (
+        <button
+          type="button"
+          data-testid="add-tax-hint"
+          onClick={onEditDetails}
+          className="min-h-11 self-start rounded-lg border border-warn/40 px-3 py-2 text-sm font-medium text-warn hover:bg-warn/10"
+        >
+          Add tax or fees →
+        </button>
+      )}
     </div>
   );
 }
@@ -453,9 +575,11 @@ function VarianceBanner({ restock }: { restock: Restock }) {
 
 type ProposedLine = {
   index: number; // position in Restock.extractionJson.lines — the resolve key
-  description: string;
+  description: string; // clean product name
+  receiptText: string | null; // raw line as printed (shown for reconciliation)
   unitCount: number;
   lineTotalCents: number;
+  taxable: boolean | null;
   confidence: number | null;
 };
 
@@ -485,7 +609,14 @@ const clampInt = (n: number, min: number, max: number) =>
  * surviving $0.00 row would overstate what the purchaser paid elsewhere.
  */
 function sanitizeProposal(
-  line: { description: string; unitCount: number; lineTotalCents: number; confidence: number | null },
+  line: {
+    description: string;
+    receiptText: string | null;
+    unitCount: number;
+    lineTotalCents: number;
+    taxable: boolean | null;
+    confidence: number | null;
+  },
   index: number,
 ): ProposedLine | null {
   const lineTotalCents = Math.round(line.lineTotalCents);
@@ -494,8 +625,10 @@ function sanitizeProposal(
     index,
     // saveLine's newProductName schema is .max(200).
     description: (line.description.trim() || 'Unlabeled item').slice(0, 200),
+    receiptText: line.receiptText?.trim().slice(0, 300) || null,
     unitCount: clampInt(line.unitCount, 1, 10_000),
     lineTotalCents: Math.min(lineTotalCents, 100_000_000),
+    taxable: line.taxable,
     confidence: line.confidence,
   };
 }
@@ -518,11 +651,15 @@ function pendingProposals(restock: Restock): ProposedLine[] {
     .map((line, index) => (resolved.has(index) ? null : sanitizeProposal(line, index)))
     .filter((p): p is ProposedLine => p !== null);
 
-  const lots = restock.lots.map((l) => ({
-    name: l.product.name.toUpperCase(),
-    key: `${l.purchasedCount}|${l.lineTotalCents}`,
-    used: false,
-  }));
+  // Excluded (non-inventory) lots never came from a proposal, so they don't
+  // consume one; only real product lots participate in the dedupe.
+  const lots = restock.lots
+    .filter((l) => !l.excluded && l.product)
+    .map((l) => ({
+      name: l.product!.name.toUpperCase(),
+      key: `${l.purchasedCount}|${l.lineTotalCents}`,
+      used: false,
+    }));
   const hidden = new Set<number>();
   for (const exactName of [true, false]) {
     for (const p of pending) {
@@ -596,6 +733,8 @@ function ProposalRow({
       purchasedCount: proposal.unitCount,
       receivedCount: proposal.unitCount,
       lineTotalCents: proposal.lineTotalCents,
+      taxable: proposal.taxable ?? false,
+      receiptText: proposal.receiptText ?? proposal.description,
       bestBy: null,
     });
   }
@@ -616,10 +755,18 @@ function ProposalRow({
           </span>
           {proposal.description}
         </p>
+        {proposal.receiptText && proposal.receiptText !== proposal.description && (
+          <p className="font-mono text-xs text-text-muted">{proposal.receiptText}</p>
+        )}
         <p className="text-sm text-text-muted">
           {proposal.unitCount} {proposal.unitCount === 1 ? 'unit' : 'units'} ·{' '}
           {formatCents(proposal.lineTotalCents)}
           {proposal.unitCount > 1 && <> → {formatCents(unitCost)}/u</>}
+          {proposal.taxable && (
+            <span className="ml-2 rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent-strong">
+              taxed
+            </span>
+          )}
         </p>
         <p data-testid="proposed-match" className="text-sm text-text-muted">
           {matching ? (
@@ -674,23 +821,34 @@ function LinesStep({
   refetch,
   onBack,
   onNext,
+  onEditDetails,
 }: {
   restock: Restock;
   refetch: () => Promise<unknown>;
   onBack: () => void;
   onNext: () => void;
+  onEditDetails: () => void;
 }) {
   const trpc = useTRPC();
   const [sheet, setSheet] = useState<{
     open: boolean;
     line: Line | null;
     proposal: (ProposedLine & { suggested: { id: string; name: string } | null }) | null;
+    startExcluded?: boolean;
   }>({ open: false, line: null, proposal: null });
   const [extractError, setExtractError] = useState<string | null>(null);
 
   // Pending proposals are derived from the query data — nothing to lose on
   // refresh/step-back, and nothing to re-spend an API call rehydrating.
   const proposals = pendingProposals(restock);
+
+  // The receipt's printed tax, read by extraction — surfaced as a one-tap
+  // suggestion (NOT silently written: tax feeds the tax-inclusive unit cost, so
+  // applying it stays an explicit choice, money rule #2).
+  const [suggestedTaxCents, setSuggestedTaxCents] = useState<number | null>(null);
+  const updateDraft = useMutation(
+    trpc.restock.updateDraft.mutationOptions({ onSuccess: () => refetch() }),
+  );
 
   const extract = useMutation(
     trpc.restock.extract.mutationOptions({
@@ -702,11 +860,28 @@ function LinesStep({
         setExtractError(
           res.lines.length === 0 ? 'No lines found on the receipt — enter them manually.' : null,
         );
+        setSuggestedTaxCents(res.taxCents != null && res.taxCents > 0 ? res.taxCents : null);
         await refetch(); // the server stored the extraction; proposals derive from it
       },
       onError: (e) => setExtractError(e.message),
     }),
   );
+
+  // Auto-extract on arriving at Review lines with receipt photos and nothing
+  // extracted yet — the user snapped the receipt to get lines, not to press a
+  // button (Aaron: "if a receipt is provided, the lines should be created").
+  // Fires at most once per mount; the manual "Re-extract" stays for retries.
+  const canExtract =
+    restock.extractionEnabled && restock.status === 'DRAFT' && restock.images.length > 0;
+  const autoExtractedRef = useRef(false);
+  useEffect(() => {
+    if (canExtract && !restock.extractedAt && !extract.isPending && !autoExtractedRef.current) {
+      autoExtractedRef.current = true;
+      extract.mutate({ restockId: restock.id });
+    }
+    // extract.mutate is stable; guarded by the ref so this runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canExtract, restock.extractedAt]);
 
   // Confirm/dismiss/edit-save all resolve the line server-side so it never
   // comes back; refetch on settle updates both the lot list and proposals.
@@ -734,12 +909,9 @@ function LinesStep({
   const flashing = new Set(savedFlashes.map((p) => p.index));
   const visibleProposals = proposals.filter((p) => !flashing.has(p.index));
 
-  const canExtract =
-    restock.extractionEnabled && restock.status === 'DRAFT' && restock.images.length > 0;
-
   return (
     <div className="flex flex-col gap-4">
-      <VarianceBanner restock={restock} />
+      <VarianceBanner restock={restock} onEditDetails={onEditDetails} />
 
       {canExtract && !extract.isPending && (
         <button
@@ -794,6 +966,27 @@ function LinesStep({
         </div>
       )}
 
+      {suggestedTaxCents !== null && restock.taxCents === null && (
+        <div
+          data-testid="tax-suggestion"
+          className="flex items-center justify-between gap-2 rounded-lg border border-accent/30 bg-accent-soft px-4 py-3 text-sm"
+        >
+          <span className="text-accent-strong">
+            Receipt shows {formatCents(suggestedTaxCents)} tax.
+          </span>
+          <button
+            type="button"
+            data-testid="apply-tax"
+            onClick={() =>
+              updateDraft.mutate({ restockId: restock.id, taxCents: suggestedTaxCents })
+            }
+            className="min-h-9 shrink-0 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast hover:bg-accent-strong"
+          >
+            Add tax
+          </button>
+        </div>
+      )}
+
       {!extract.isPending && (visibleProposals.length > 0 || savedFlashes.length > 0) && (
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
@@ -831,12 +1024,42 @@ function LinesStep({
         savedFlashes.length === 0 && (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
             <p className="text-sm font-medium text-text">No lines yet.</p>
-            <p className="text-sm text-text-muted">Add each receipt line — it becomes a lot.</p>
+            <p className="text-sm text-text-muted">
+              Add each line from your receipt, or extract them from a photo.
+            </p>
           </div>
         )}
 
       <ul className="flex flex-col gap-2">
         {restock.lots.map((lot) => {
+          const taxBadge = lot.taxable && (
+            <span className="ml-2 rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
+              taxed
+            </span>
+          );
+          if (lot.excluded) {
+            return (
+              <li key={lot.id}>
+                <button
+                  type="button"
+                  data-testid="line-row"
+                  onClick={() => setSheet({ open: true, line: lot, proposal: null })}
+                  className="flex w-full flex-col gap-0.5 rounded-xl border border-dashed border-border-strong bg-surface-raised p-3 text-left shadow-sm"
+                >
+                  <p className="text-base text-text-muted">
+                    {lot.receiptText || 'Excluded line'}
+                    <span className="ml-2 rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted">
+                      not stocked
+                    </span>
+                  </p>
+                  <p className="text-sm text-text-muted">
+                    {formatCents(lot.lineTotalCents)} · counts toward the receipt only
+                    {taxBadge}
+                  </p>
+                </button>
+              </li>
+            );
+          }
           const unitCost = unitCostCents(lot.lineTotalCents, lot.purchasedCount);
           const heldBack = lot.receivedCount < lot.purchasedCount;
           return (
@@ -847,7 +1070,10 @@ function LinesStep({
                 onClick={() => setSheet({ open: true, line: lot, proposal: null })}
                 className="flex w-full flex-col gap-0.5 rounded-xl border border-border bg-surface-raised p-3 text-left shadow-sm"
               >
-                <p className="text-base text-text">{lot.product.name}</p>
+                <p className="text-base text-text">
+                  {lot.product?.name ?? 'Unnamed'}
+                  {taxBadge}
+                </p>
                 <p className="text-sm text-text-muted">
                   {lot.purchasedCount} {lot.purchasedCount === 1 ? 'unit' : 'units'} ·{' '}
                   {formatCents(lot.lineTotalCents)}
@@ -868,14 +1094,26 @@ function LinesStep({
         })}
       </ul>
 
-      <button
-        type="button"
-        data-testid="add-line"
-        onClick={() => setSheet({ open: true, line: null, proposal: null })}
-        className={secondaryBtn}
-      >
-        + Add line
-      </button>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          data-testid="add-line"
+          onClick={() => setSheet({ open: true, line: null, proposal: null })}
+          className={`${secondaryBtn} flex-1`}
+        >
+          + Add line
+        </button>
+        <button
+          type="button"
+          data-testid="add-excluded-line"
+          onClick={() =>
+            setSheet({ open: true, line: null, proposal: null, startExcluded: true })
+          }
+          className={`${secondaryBtn} flex-1`}
+        >
+          + Non-coop line
+        </button>
+      </div>
 
       <div className="flex gap-2">
         <button type="button" onClick={onBack} className={`${secondaryBtn} flex-1`}>
@@ -896,6 +1134,7 @@ function LinesStep({
           restockId={restock.id}
           line={sheet.line}
           proposal={sheet.proposal}
+          startExcluded={sheet.startExcluded}
           onClose={async (changed) => {
             // A saved proposal-edit consumes its proposal, like Confirm
             // (consumeProposal refetches when it settles).
@@ -913,18 +1152,28 @@ function LineSheet({
   restockId,
   line,
   proposal,
+  startExcluded,
   onClose,
 }: {
   restockId: string;
   line: Line | null;
   /** VLM proposal prefill (slice 5): editing a proposed line opens the normal sheet, prefilled. */
   proposal?: (ProposedLine & { suggested: { id: string; name: string } | null }) | null;
+  /** Open a NEW line straight into excluded (non-inventory) mode. */
+  startExcluded?: boolean;
   onClose: (changed: boolean) => void;
 }) {
   const trpc = useTRPC();
+  // An excluded line has no product/units — only a total and taxable flag.
+  const [excluded, setExcluded] = useState(line?.excluded ?? startExcluded ?? false);
+  const [taxable, setTaxable] = useState(line?.taxable ?? proposal?.taxable ?? false);
+  // The raw receipt text, when this line came from extraction — shown read-only
+  // so the user always sees what the receipt actually said (falls back to the
+  // clean name for older proposals without a raw line).
+  const receiptText = line?.receiptText ?? proposal?.receiptText ?? proposal?.description ?? null;
   const [productQuery, setProductQuery] = useState('');
   const [product, setProduct] = useState<{ id: string | null; name: string } | null>(
-    line
+    line?.product
       ? { id: line.product.id, name: line.product.name }
       : proposal
         ? (proposal.suggested ?? { id: null, name: proposal.description })
@@ -989,12 +1238,27 @@ function LineSheet({
     totalCents !== null && units > 0 ? unitCostCents(totalCents, units) : null;
 
   function submit() {
-    if (!product) {
-      setError('Pick a product or create one.');
-      return;
-    }
     if (totalCents === null) {
       setError('Line total must look like 8.99');
+      return;
+    }
+    if (excluded) {
+      saveLine.mutate({
+        restockId,
+        lotId: line?.id,
+        excluded: true,
+        taxable,
+        receiptText: receiptText ?? undefined,
+        // Non-inventory: no product, no units.
+        purchasedCount: 0,
+        receivedCount: 0,
+        lineTotalCents: totalCents,
+        bestBy: null,
+      });
+      return;
+    }
+    if (!product) {
+      setError('Pick a product or create one.');
       return;
     }
     saveLine.mutate({
@@ -1008,6 +1272,8 @@ function LineSheet({
       // chip below the picker shows exactly what will be saved, with a ✕ to
       // drop it.
       upc: pendingUpc ?? undefined,
+      taxable,
+      receiptText: receiptText ?? undefined,
       purchasedCount: units,
       receivedCount: effectiveReceived,
       lineTotalCents: totalCents,
@@ -1047,11 +1313,42 @@ function LineSheet({
     <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
         <h2 className="text-lg font-semibold">
-          {line ? 'Edit line' : proposal ? 'Edit proposed line' : 'Add line'}
+          {line ? 'Edit line' : excluded ? 'Non-coop line' : proposal ? 'Edit proposed line' : 'Add line'}
         </h2>
 
+        {/* The receipt line exactly as printed (extraction) — always shown so
+            the user can reconcile the product they pick against the paper. */}
+        {receiptText && (
+          <p
+            data-testid="line-receipt-text"
+            className="rounded-lg bg-surface-sunken px-3 py-2 font-mono text-sm text-text-muted"
+          >
+            {receiptText}
+          </p>
+        )}
+
+        {/* Exclude toggle: a whole receipt line that isn't going into the
+            pantry — kept only so the receipt reconciles and fees distribute
+            right (blueprint 01 D7). No product, no units. */}
+        <label className="flex items-start gap-2 text-sm text-text">
+          <input
+            type="checkbox"
+            checked={excluded}
+            data-testid="line-excluded"
+            onChange={(e) => setExcluded(e.target.checked)}
+            className="mt-0.5 size-5 accent-accent"
+          />
+          <span>
+            Not going into the pantry
+            <span className="block text-xs text-text-muted">
+              A personal/non-coop line — counts toward the receipt and fee split only.
+            </span>
+          </span>
+        </label>
+
         {/* Product picker: search-as-you-type, create inline (blueprint 02). */}
-        {product ? (
+        {!excluded &&
+          (product ? (
           <div className="flex items-center justify-between gap-2">
             <p className="min-w-0 truncate text-base text-text">
               {product.name}
@@ -1132,12 +1429,12 @@ function LineSheet({
               ))}
             </div>
           </label>
-        )}
+          ))}
 
         {/* Scanned-UPC chip: visible from the scan all the way to Save (never
             silently attached), whatever the picker state — with ✕ to drop it
             if the scan was a mistake or belongs to something else. */}
-        {pendingUpc && (
+        {!excluded && pendingUpc && (
           <span className="flex items-center gap-2 text-xs text-text-muted">
             <span
               data-testid="pending-upc"
@@ -1167,34 +1464,36 @@ function LineSheet({
           </p>
         )}
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-text">Units</span>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              aria-label="Fewer units"
-              disabled={units <= 1}
-              onClick={() => setUnits((u) => Math.max(1, u - 1))}
-              className={stepperBtn}
-            >
-              −
-            </button>
-            <span data-testid="units-value" className="w-8 text-center font-mono tabular-nums">
-              {units}
-            </span>
-            <button
-              type="button"
-              aria-label="More units"
-              onClick={() => setUnits((u) => u + 1)}
-              className={stepperBtn}
-            >
-              +
-            </button>
+        {!excluded && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-text">Units</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                aria-label="Fewer units"
+                disabled={units <= 1}
+                onClick={() => setUnits((u) => Math.max(1, u - 1))}
+                className={stepperBtn}
+              >
+                −
+              </button>
+              <span data-testid="units-value" className="w-8 text-center font-mono tabular-nums">
+                {units}
+              </span>
+              <button
+                type="button"
+                aria-label="More units"
+                onClick={() => setUnits((u) => u + 1)}
+                className={stepperBtn}
+              >
+                +
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
-          Line total
+          {excluded ? 'Line total (from the receipt)' : 'Line total'}
           <input
             type="text"
             inputMode="decimal"
@@ -1204,59 +1503,77 @@ function LineSheet({
             data-testid="line-total"
             className={inputClass}
           />
-          {unitCostPreview !== null && units > 1 && (
+          {!excluded && unitCostPreview !== null && units > 1 && (
             <span className="text-xs font-normal text-text-muted">
               {formatCents(unitCostPreview)}/unit
             </span>
           )}
         </label>
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-text">
-            Received{' '}
-            <span className="font-normal text-text-muted">
-              {effectiveReceived}/{units}
-              {effectiveReceived === 0 && ' — personal item'}
-            </span>
-          </span>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              aria-label="Receive fewer"
-              disabled={effectiveReceived <= 0}
-              onClick={() => {
-                setReceivedTouched(true);
-                setReceived(Math.max(0, effectiveReceived - 1));
-              }}
-              className={stepperBtn}
-            >
-              −
-            </button>
-            <span className="w-8 text-center font-mono tabular-nums">{effectiveReceived}</span>
-            <button
-              type="button"
-              aria-label="Receive more"
-              disabled={effectiveReceived >= units}
-              onClick={() => {
-                setReceivedTouched(true);
-                setReceived(Math.min(units, effectiveReceived + 1));
-              }}
-              className={stepperBtn}
-            >
-              +
-            </button>
-          </div>
-        </div>
-
-        <label className="flex flex-col gap-1 text-sm font-medium text-text">
-          Best-by (optional)
+        {/* Taxable: earns a share of the receipt tax at finalize (folded into
+            the unit cost). Available on excluded lines too — their share is the
+            purchaser's own cost. */}
+        <label className="flex items-center gap-2 text-sm text-text">
           <input
-            type="date"
-            value={bestBy}
-            onChange={(e) => setBestBy(e.target.value)}
-            className={inputClass}
+            type="checkbox"
+            checked={taxable}
+            data-testid="line-taxable"
+            onChange={(e) => setTaxable(e.target.checked)}
+            className="size-5 accent-accent"
           />
+          Taxable — this line was taxed on the receipt
         </label>
+
+        {!excluded && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-text">
+              Received{' '}
+              <span className="font-normal text-text-muted">
+                {effectiveReceived}/{units}
+                {effectiveReceived === 0 && ' — personal item'}
+              </span>
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                aria-label="Receive fewer"
+                disabled={effectiveReceived <= 0}
+                onClick={() => {
+                  setReceivedTouched(true);
+                  setReceived(Math.max(0, effectiveReceived - 1));
+                }}
+                className={stepperBtn}
+              >
+                −
+              </button>
+              <span className="w-8 text-center font-mono tabular-nums">{effectiveReceived}</span>
+              <button
+                type="button"
+                aria-label="Receive more"
+                disabled={effectiveReceived >= units}
+                onClick={() => {
+                  setReceivedTouched(true);
+                  setReceived(Math.min(units, effectiveReceived + 1));
+                }}
+                className={stepperBtn}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!excluded && (
+          <label className="flex flex-col gap-1 text-sm font-medium text-text">
+            Best-by (optional)
+            <input
+              type="date"
+              value={bestBy}
+              onChange={(e) => setBestBy(e.target.value)}
+              className={inputClass}
+            />
+          </label>
+        )}
 
         {error && (
           <p role="alert" className="text-sm text-danger">
@@ -1336,7 +1653,7 @@ function UnitPhotoCard({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={`/api/images/${lot.unitPhotoPath}`}
-          alt={`${lot.product.name} unit`}
+          alt={`${lot.product?.name ?? 'lot'} unit`}
           className="size-16 shrink-0 rounded-lg border border-border object-cover"
         />
       ) : (
@@ -1345,7 +1662,7 @@ function UnitPhotoCard({
         </span>
       )}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-base text-text">{lot.product.name}</p>
+        <p className="truncate text-base text-text">{lot.product?.name ?? 'Unnamed'}</p>
         <p className="text-sm text-text-muted">{lot.receivedCount} into {restock.pantry.name}</p>
       </div>
       <input
@@ -1422,11 +1739,13 @@ function ReconcileStep({
   restockId,
   onBack,
   onDone,
+  onEditDetails,
 }: {
   restock: Restock;
   restockId: string;
   onBack: () => void;
   onDone: () => void;
+  onEditDetails: () => void;
 }) {
   const trpc = useTRPC();
   const [error, setError] = useState<string | null>(null);
@@ -1471,12 +1790,23 @@ function ReconcileStep({
           received units
         </p>
         <p className="text-base text-text">Lines total {formatCents(lineSumCents)}</p>
+        {restock.taxCents !== null && (
+          <p className="text-sm text-text-muted">
+            + tax {formatCents(restock.taxCents)} (split across taxable lines)
+          </p>
+        )}
+        {restock.feesCents !== null && (
+          <p className="text-sm text-text-muted">
+            + fees {formatCents(restock.feesCents)}
+            {restock.feesDistributed ? ' (shared across lines)' : ' (purchaser pays)'}
+          </p>
+        )}
         {restock.receiptTotalCents !== null && (
           <p className="text-base text-text">Receipt total {formatCents(restock.receiptTotalCents)}</p>
         )}
       </section>
 
-      <VarianceBanner restock={restock} />
+      <VarianceBanner restock={restock} onEditDetails={onEditDetails} />
 
       {restock.purchaserHousehold.id !== restock.pantry.householdId && (
         <p className="text-sm text-text-muted">

@@ -40,7 +40,7 @@ export const takeRouter = router({
               takeId: existing.id,
               quantity: existing.quantity,
               costCents: existing.costCents,
-              productName: existing.lot.product.name,
+              productName: existing.lot.product?.name ?? 'item',
             };
           }
         }
@@ -103,7 +103,7 @@ export const takeRouter = router({
           takeId: take.id,
           quantity: input.quantity,
           costCents,
-          productName: lot.product.name,
+          productName: lot.product?.name ?? 'item',
         };
       });
     }),

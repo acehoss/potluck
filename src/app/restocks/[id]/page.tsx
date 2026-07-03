@@ -6,6 +6,7 @@ import { getSessionUser } from '@/server/auth';
 import { db } from '@/server/db';
 import { getActiveRestockCredit } from '@/server/ledger';
 import { AdjustmentsList, type AdjustmentRow } from './adjustments-list';
+import { RestockCorrections, type CorrectionLot } from './restock-corrections';
 import { TakesList, type TakeRow } from './takes-list';
 
 /** Restock detail (blueprint 02): code, photos, lines, credit. */
@@ -47,7 +48,7 @@ export default async function RestockDetailPage({
   const takeRows: TakeRow[] = takes.map((t) => ({
     id: t.id,
     quantity: t.quantity,
-    productName: t.lot.product.name,
+    productName: t.lot.product?.name ?? 'item',
     takerName: t.taker.name,
     takenAt: t.takenAt.toISOString(),
     costCents: t.costCents,
@@ -75,7 +76,7 @@ export default async function RestockDetailPage({
     countBefore: a.countBefore,
     countAfter: a.countAfter,
     note: a.note,
-    productName: a.lot.product.name,
+    productName: a.lot.product?.name ?? 'item',
     createdByName: adjusterById.get(a.createdById) ?? 'someone',
     createdAt: a.createdAt.toISOString(),
   }));
@@ -85,6 +86,25 @@ export default async function RestockDetailPage({
     restock.dateCode && restock.seq !== null
       ? restockCode(restock.dateCode, restock.seq)
       : 'DRAFT';
+
+  // Auditable corrections (blueprint 01 invariant 5): purchaser/pantry household
+  // only, on a live finalized restock. crossHousehold gates credit correction;
+  // void is offered either way (it reverses any credit and clears inventory).
+  const crossHousehold = restock.purchaserHouseholdId !== restock.pantry.householdId;
+  const canCorrect =
+    user.householdId === restock.purchaserHouseholdId ||
+    user.householdId === restock.pantry.householdId;
+  const showCorrections =
+    restock.status === 'FINALIZED' && restock.voidedAt === null && canCorrect;
+  const correctionLots: CorrectionLot[] = restock.lots
+    .filter((l) => !l.excluded && l.product && l.unitCostCents !== null)
+    .map((l) => ({
+      id: l.id,
+      productName: l.product!.name,
+      purchasedCount: l.purchasedCount,
+      receivedCount: l.receivedCount,
+      unitCostCents: l.unitCostCents!,
+    }));
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24">
@@ -116,6 +136,17 @@ export default async function RestockDetailPage({
       </header>
 
       <main className="flex flex-col gap-4">
+        {restock.voidedAt !== null && (
+          <div
+            role="status"
+            data-testid="voided-banner"
+            className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm font-medium text-danger"
+          >
+            Voided — entered in error. Any credit was reversed and its units removed from
+            inventory. Kept for the record.
+          </div>
+        )}
+
         <section className="rounded-xl border border-border bg-surface-raised p-4 shadow-sm">
           <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">Summary</h2>
           <p className="mt-2 text-base text-text">
@@ -125,6 +156,8 @@ export default async function RestockDetailPage({
           </p>
           <p className="mt-1 text-sm text-text-muted">
             Purchased by {restock.purchaserHousehold.name} · received by {restock.createdBy.name}
+            {restock.taxCents !== null && <> · tax {formatCents(restock.taxCents)}</>}
+            {restock.feesCents !== null && <> · fees {formatCents(restock.feesCents)}</>}
             {restock.receiptTotalCents !== null && (
               <> · receipt {formatCents(restock.receiptTotalCents)}</>
             )}
@@ -162,8 +195,29 @@ export default async function RestockDetailPage({
           <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">Lines</h2>
           <ul className="mt-1 divide-y divide-border">
             {restock.lots.map((lot) => {
+              if (lot.excluded) {
+                return (
+                  <li
+                    key={lot.id}
+                    className="flex min-h-14 items-center justify-between gap-3 py-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-base text-text-muted">
+                        {lot.receiptText || 'Excluded line'}
+                      </p>
+                      <p className="text-sm text-text-muted">
+                        not stocked{lot.taxable && ' · taxed'} · receipt only
+                      </p>
+                    </div>
+                    <span className="shrink-0 font-mono text-sm tabular-nums text-text-muted">
+                      {formatCents(lot.lineTotalCents)}
+                    </span>
+                  </li>
+                );
+              }
               const unitCost =
                 lot.unitCostCents ?? unitCostCents(lot.lineTotalCents, lot.purchasedCount);
+              const taxFee = (lot.taxCentsAllocated ?? 0) + (lot.feeCentsAllocated ?? 0);
               return (
                 <li key={lot.id} className="flex min-h-14 items-center justify-between gap-3 py-3">
                   <div className="flex min-w-0 items-center gap-3">
@@ -180,10 +234,17 @@ export default async function RestockDetailPage({
                       </span>
                     )}
                     <div className="min-w-0">
-                      <p className="truncate text-base text-text">{lot.product.name}</p>
+                      <p className="truncate text-base text-text">
+                        {lot.product?.name ?? 'Unnamed'}
+                        {lot.taxable && (
+                          <span className="ml-2 rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent-strong">
+                            taxed
+                          </span>
+                        )}
+                      </p>
                       <p className="text-sm text-text-muted">
-                        recv {lot.receivedCount}/{lot.purchasedCount} ·{' '}
-                        {formatCents(unitCost)}/u
+                        recv {lot.receivedCount}/{lot.purchasedCount} · {formatCents(unitCost)}/u
+                        {taxFee > 0 && <> (incl. {formatCents(taxFee)} tax/fee)</>}
                         {lot.bestBy && <> · BB {lot.bestBy.toISOString().slice(0, 10)}</>}
                       </p>
                     </div>
@@ -196,6 +257,17 @@ export default async function RestockDetailPage({
             })}
           </ul>
         </section>
+
+        {showCorrections && (
+          <RestockCorrections
+            restockId={restock.id}
+            crossHousehold={crossHousehold}
+            purchaserName={restock.purchaserHousehold.name}
+            currentCreditCents={credit?.amountCents ?? 0}
+            hasTakes={takes.length > 0}
+            lots={correctionLots}
+          />
+        )}
 
         <TakesList takes={takeRows} />
         <AdjustmentsList adjustments={adjustmentRows} />

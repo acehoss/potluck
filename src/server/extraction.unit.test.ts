@@ -20,8 +20,11 @@ import {
 } from './extraction';
 
 const receipt = {
-  lines: [{ description: 'X', unitCount: 1, lineTotalCents: 100, confidence: null }],
+  lines: [
+    { description: 'X', receiptText: 'X', unitCount: 1, lineTotalCents: 100, taxable: null, confidence: null },
+  ],
   receiptTotalCents: null,
+  taxCents: null,
   retailer: null,
   purchasedAt: null,
 };

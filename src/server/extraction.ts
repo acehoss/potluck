@@ -41,14 +41,17 @@ function extractionModel() {
  * shapes avoid surprises). Money is integer cents (SPEC §6).
  */
 const ExtractedLine = z.object({
-  description: z.string(), // as printed on the receipt
+  description: z.string(), // clean product name (no SKU/item number or tax flag) — becomes the product name
+  receiptText: z.string().nullable(), // the whole line exactly as printed; shown for reconciliation
   unitCount: z.number().int(), // eaches in the pack; 1 if unknown
   lineTotalCents: z.number().int(),
+  taxable: z.boolean().nullable(), // true if the receipt marks this line taxed (T/E/A flag); null if unclear
   confidence: z.number().nullable(), // 0..1 model self-estimate; advisory
 });
 const ReceiptSchema = z.object({
   lines: z.array(ExtractedLine),
   receiptTotalCents: z.number().int().nullable(),
+  taxCents: z.number().int().nullable(), // total sales tax printed on the receipt
   retailer: z.string().nullable(),
   purchasedAt: z.string().nullable(), // YYYY-MM-DD if legible
 });
@@ -62,12 +65,18 @@ export type ExtractionImage = { jpeg: Buffer; originalSha256: string | null };
 
 const PROMPT =
   'Extract every purchased line item from this retail receipt (multiple images are pages in ' +
-  'order). Bulk multipacks: unitCount = the number of eaches in the pack (e.g. "8CT" → 8); 1 ' +
-  'when unknown. All money as integer US cents. Discounts and instant savings that apply to an ' +
-  'item (e.g. a separate negative line under it) must be NETTED into that item\'s ' +
-  'lineTotalCents — report the price actually paid, and never emit a discount as its own line. ' +
-  'Skip subtotal, tax, and payment lines; put the printed grand total in receiptTotalCents. ' +
-  'Set confidence (0-1) per line for how sure you are of its description and amounts.';
+  'order). For each line: description = a clean product name you would label the item with — ' +
+  'drop the SKU/item number and any leading tax flag; receiptText = the whole line exactly as ' +
+  'printed (SKU, name, flags, as-is). Bulk ' +
+  'multipacks: unitCount = the number of eaches in the pack (e.g. "8CT" → 8); 1 when unknown. ' +
+  'All money as integer US cents. Discounts and instant savings that apply to an item (e.g. a ' +
+  "separate negative line under it) must be NETTED into that item's lineTotalCents — report the " +
+  'price actually paid, and never emit a discount as its own line. Set taxable per line: true ' +
+  'if the receipt marks the line as taxed (a T/E/A/X flag beside the price, common on grocery ' +
+  'receipts), false if it is clearly untaxed, null if you cannot tell. Skip subtotal, tax, and ' +
+  'payment lines as line items; put the printed grand total in receiptTotalCents and the printed ' +
+  'sales tax in taxCents (null if none). Set confidence (0-1) per line for how sure you are of ' +
+  'its description and amounts.';
 
 const UNAVAILABLE_MESSAGE = 'Extraction is unavailable right now — enter lines manually.';
 

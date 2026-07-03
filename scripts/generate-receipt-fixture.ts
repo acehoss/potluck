@@ -56,11 +56,11 @@ const EDGE_LONG_DESCRIPTION =
 // sanitize: 3 (long-description sliced, unitCount 0 → 1, 50000 → 10000);
 // the −$3.00 discount and the $0.00 promo lines are dropped, not clamped.
 const EDGE_LINES = [
-  { description: EDGE_LONG_DESCRIPTION, unitCount: 2, lineTotalCents: 1499, confidence: 0.41 },
-  { description: 'ZERO COUNT ITEM', unitCount: 0, lineTotalCents: 399, confidence: 0.5 },
-  { description: 'MEGA PACK NAPKINS', unitCount: 50_000, lineTotalCents: 2599, confidence: 0.6 },
-  { description: '1234 INSTANT SVG', unitCount: 1, lineTotalCents: -300, confidence: 0.9 },
-  { description: 'FREE PROMO ITEM', unitCount: 1, lineTotalCents: 0, confidence: 0.8 },
+  { description: EDGE_LONG_DESCRIPTION, receiptText: EDGE_LONG_DESCRIPTION, unitCount: 2, lineTotalCents: 1499, taxable: null, confidence: 0.41 },
+  { description: 'ZERO COUNT ITEM', receiptText: 'ZERO COUNT ITEM', unitCount: 0, lineTotalCents: 399, taxable: null, confidence: 0.5 },
+  { description: 'MEGA PACK NAPKINS', receiptText: 'MEGA PACK NAPKINS', unitCount: 50_000, lineTotalCents: 2599, taxable: null, confidence: 0.6 },
+  { description: '1234 INSTANT SVG', receiptText: '1234 INSTANT SVG', unitCount: 1, lineTotalCents: -300, taxable: null, confidence: 0.9 },
+  { description: 'FREE PROMO ITEM', receiptText: 'FREE PROMO ITEM', unitCount: 1, lineTotalCents: 0, taxable: null, confidence: 0.8 },
 ];
 
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -121,8 +121,16 @@ const emptyHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
 </style></head><body><div class="receipt">CORNER STORE<br>— no items printed —</div></body></html>`;
 
 type Extraction = {
-  lines: { description: string; unitCount: number; lineTotalCents: number; confidence: number | null }[];
+  lines: {
+    description: string;
+    receiptText: string | null;
+    unitCount: number;
+    lineTotalCents: number;
+    taxable: boolean | null;
+    confidence: number | null;
+  }[];
   receiptTotalCents: number | null;
+  taxCents: number | null;
   retailer: string | null;
   purchasedAt: string | null;
 };
@@ -134,11 +142,15 @@ const RECEIPTS: { jpegName: string; html: string; extraction: Extraction }[] = [
     extraction: {
       lines: LINES.map((l) => ({
         description: l.description,
+        // The Costco receipt prints "<taxflag> <item> <name>" — the raw line.
+        receiptText: `${l.taxed ? 'A' : 'E'} ${l.item} ${l.description}`,
         unitCount: l.unitCount,
         lineTotalCents: l.cents,
+        taxable: l.taxed,
         confidence: 0.97,
       })),
       receiptTotalCents: TOTAL,
+      taxCents: TAX,
       retailer: 'Costco',
       purchasedAt: PURCHASED_AT,
     },
@@ -149,6 +161,7 @@ const RECEIPTS: { jpegName: string; html: string; extraction: Extraction }[] = [
     extraction: {
       lines: EDGE_LINES,
       receiptTotalCents: null,
+      taxCents: null,
       retailer: 'Edge Mart',
       purchasedAt: null,
     },
@@ -156,7 +169,13 @@ const RECEIPTS: { jpegName: string; html: string; extraction: Extraction }[] = [
   {
     jpegName: 'receipt-empty.jpg',
     html: emptyHtml,
-    extraction: { lines: [], receiptTotalCents: null, retailer: null, purchasedAt: null },
+    extraction: {
+      lines: [],
+      receiptTotalCents: null,
+      taxCents: null,
+      retailer: null,
+      purchasedAt: null,
+    },
   },
 ];
 

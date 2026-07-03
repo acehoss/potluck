@@ -137,7 +137,19 @@ model Restock {
   dateCode             String? // "260702", set at finalize
   seq                  Int? // NN, 1-based; display code = `${dateCode}-${pad2(seq)}`
   receiptTotalCents    Int?
-  varianceCents        Int? // receiptTotal − Σ lineTotal, set at finalize (D7)
+  // Non-inventory receipt amounts (blueprint 01 D7 — the tax-allocation door is
+  // now open). taxCents is split pro-rata across taxable lots at finalize;
+  // feesCents is split across ALL lots' pre-tax totals only when feesDistributed
+  // (otherwise the purchaser eats it). Both fold into each lot's frozen unitCost,
+  // so takes and credits are truly at-cost.
+  taxCents             Int?
+  feesCents            Int?
+  feesDistributed      Boolean   @default(false)
+  varianceCents        Int? // receiptTotal − (Σ lineTotal + tax + fees), set at finalize (D7)
+  // Set by restock.voidInError: an auditable "entered by mistake" — the active
+  // credit is reversed and every lot's remainingCount is zeroed (only allowed
+  // while no take references a lot). The row stays FINALIZED for the audit trail.
+  voidedAt             DateTime?
   // ---- slice 5: VLM extraction (blueprint 01/04 §3). Advisory only — the
   // raw result is stored for audit/re-extraction; lines materialize solely
   // through user-confirmed saveLine calls. Editable even after finalize
@@ -228,18 +240,35 @@ model LedgerEntry {
 model Lot {
   id             String    @id @default(cuid())
   restockId      String
-  productId      String
+  // Null ONLY for an excluded line (see `excluded`): a receipt line that
+  // counts toward the tax/fee distribution weight but never becomes inventory.
+  productId      String?
   position       Int // line order on the receipt
-  purchasedCount Int // eaches bought (bulk packs pre-broken at entry)
+  purchasedCount Int // eaches bought (bulk packs pre-broken at entry); 0 for excluded
   receivedCount  Int // eaches into the pantry; 0..purchasedCount (hold-backs = difference)
   lineTotalCents Int // as printed, covers all purchasedCount units
-  unitCostCents  Int? // frozen at finalize (D1); null while DRAFT
+  // Whether this line was taxed — earns a pro-rata share of the receipt tax at
+  // finalize, folded into unitCost. Excluded lines can be taxable too (their
+  // share is the purchaser's own cost, not credited to anyone).
+  taxable        Boolean   @default(false)
+  // A non-inventory line: no product, no units into the pantry — present only
+  // so the receipt reconciles and fee distribution is accurate. receivedCount
+  // and purchasedCount are 0; unitCost stays null.
+  excluded       Boolean   @default(false)
+  // Raw receipt line text (from extraction), kept for display beside the
+  // product on the review card and detail. Null for manually entered lines.
+  receiptText    String?
+  unitCostCents  Int? // frozen at finalize (D1); null while DRAFT or excluded
+  // Tax / fee cents folded into this lot's unitCost at finalize (audit + display
+  // of "unit cost incl. tax"); null while DRAFT.
+  taxCentsAllocated Int?
+  feeCentsAllocated Int?
   remainingCount Int       @default(0) // set to receivedCount at finalize (D3)
   bestBy         DateTime?
   unitPhotoPath  String?
 
   restock     Restock      @relation(fields: [restockId], references: [id], onDelete: Cascade)
-  product     Product      @relation(fields: [productId], references: [id])
+  product     Product?     @relation(fields: [productId], references: [id])
   takes       Take[]
   adjustments Adjustment[]
 

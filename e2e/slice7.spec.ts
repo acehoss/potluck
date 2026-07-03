@@ -747,7 +747,7 @@ test('take flow: scanning at the pantry opens the take sheet for the matched pro
   const takeSheet = page.getByTestId('take-sheet');
   await expect(takeSheet).toBeVisible();
   await expect(takeSheet).toContainText(productName);
-  await expect(takeSheet).toContainText('FIFO');
+  await expect(takeSheet).toContainText('oldest');
   await takeSheet.getByRole('button', { name: 'Cancel' }).click();
 });
 

@@ -2,78 +2,103 @@
   "lines": [
     {
       "description": "KS ORG EVOO 2L",
+      "receiptText": "E 96716 KS ORG EVOO 2L",
       "unitCount": 1,
       "lineTotalCents": 1749,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "KS MARINARA 3CT",
+      "receiptText": "E 30669 KS MARINARA 3CT",
       "unitCount": 3,
       "lineTotalCents": 899,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "ROTISSERIE CHICKEN",
+      "receiptText": "E 87745 ROTISSERIE CHICKEN",
       "unitCount": 1,
       "lineTotalCents": 499,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "KS BATH TISSUE 30CT",
+      "receiptText": "A 555221 KS BATH TISSUE 30CT",
       "unitCount": 30,
       "lineTotalCents": 2299,
+      "taxable": true,
       "confidence": 0.97
     },
     {
       "description": "KS PAPER TOWELS 12CT",
+      "receiptText": "A 723105 KS PAPER TOWELS 12CT",
       "unitCount": 12,
       "lineTotalCents": 1949,
+      "taxable": true,
       "confidence": 0.97
     },
     {
       "description": "ORG BANANAS 3LB",
+      "receiptText": "E 30271 ORG BANANAS 3LB",
       "unitCount": 1,
       "lineTotalCents": 249,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "KS ALMOND BUTTER",
+      "receiptText": "E 964212 KS ALMOND BUTTER",
       "unitCount": 1,
       "lineTotalCents": 799,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "CAGE FREE EGGS 24CT",
+      "receiptText": "E 173840 CAGE FREE EGGS 24CT",
       "unitCount": 24,
       "lineTotalCents": 679,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "KS SPARKLING WATER 35CT",
+      "receiptText": "A 883311 KS SPARKLING WATER 35CT",
       "unitCount": 35,
       "lineTotalCents": 1299,
+      "taxable": true,
       "confidence": 0.97
     },
     {
       "description": "FROZEN BLUEBERRIES 4LB",
+      "receiptText": "E 55780 FROZEN BLUEBERRIES 4LB",
       "unitCount": 1,
       "lineTotalCents": 1099,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "KS BEEF BROTH 6CT",
+      "receiptText": "E 621904 KS BEEF BROTH 6CT",
       "unitCount": 6,
       "lineTotalCents": 999,
+      "taxable": false,
       "confidence": 0.97
     },
     {
       "description": "TORTILLA CHIPS 2LB",
+      "receiptText": "E 447589 TORTILLA CHIPS 2LB",
       "unitCount": 1,
       "lineTotalCents": 549,
+      "taxable": false,
       "confidence": 0.97
     }
   ],
   "receiptTotalCents": 13355,
+  "taxCents": 287,
   "retailer": "Costco",
   "purchasedAt": "2026-06-28"
 }

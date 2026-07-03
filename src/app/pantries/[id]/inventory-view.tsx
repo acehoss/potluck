@@ -116,9 +116,16 @@ export function InventoryView({
         <Link href="/" aria-label="Back to pantries" className="text-lg text-text-muted">
           ←
         </Link>
-        <h1 className="text-xl font-semibold tracking-tight">
+        <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">
           {pantry.name} <span className="font-normal text-text-muted">({pantry.householdName})</span>
         </h1>
+        <Link
+          href={`/pantries/${pantry.id}/restocks`}
+          data-testid="restock-history-link"
+          className="shrink-0 rounded-lg border border-border-strong px-3 py-1.5 text-sm font-medium text-text transition-colors hover:bg-surface-sunken"
+        >
+          History
+        </Link>
       </header>
 
       {draft && (
@@ -166,24 +173,35 @@ export function InventoryView({
       <main className="flex flex-col gap-3">
         {groups.length === 0 && (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
-            <p className="text-sm font-medium text-text">Nothing here yet.</p>
             {isOwn ? (
               <>
+                <p className="text-4xl" aria-hidden>
+                  🧺
+                </p>
+                <p className="text-base font-medium text-text">Your pantry&apos;s empty — for now.</p>
                 <p className="text-sm text-text-muted">
-                  Receive a shopping run and every lot lands here, priced at cost.
+                  Snap a receipt from your last shopping trip and everything on it shows up here,
+                  ready to share at cost. Takes about two minutes.
                 </p>
                 <button
                   type="button"
                   onClick={() => setStartOpen(true)}
                   className="mt-1 min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
                 >
-                  Receive a restock
+                  Receive a shopping trip
                 </button>
               </>
             ) : (
-              <p className="text-sm text-text-muted">
-                The {pantry.householdName} haven&apos;t stocked this pantry yet.
-              </p>
+              <>
+                <p className="text-4xl" aria-hidden>
+                  🧺
+                </p>
+                <p className="text-base font-medium text-text">Nothing to browse yet.</p>
+                <p className="text-sm text-text-muted">
+                  The {pantry.householdName} household hasn&apos;t added anything here yet. Once
+                  they receive a shopping trip, you&apos;ll be able to grab what you need.
+                </p>
+              </>
             )}
           </div>
         )}
@@ -454,7 +472,7 @@ function TakeSheet({
             Lot
             {isFifo && (
               <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
-                FIFO ✓
+oldest ✓
               </span>
             )}
           </span>

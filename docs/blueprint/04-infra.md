@@ -112,16 +112,23 @@ import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';  // supports zod v4 in current SDK
 import { z } from 'zod';
 
+// As shipped (amended 2026-07-03 polish round): description is the CLEAN product
+// name (SKU/tax-flag stripped — it becomes the product name); receiptText is the
+// raw line as printed; taxable drives the tax split; taxCents is the printed tax.
 const ExtractedLine = z.object({
-  description: z.string(),          // as printed on the receipt
+  description: z.string(),          // clean product name (no SKU/item number or tax flag)
+  receiptText: z.string().nullable(), // the whole line exactly as printed
   unitCount: z.number().int(),      // eaches in the pack; 1 if unknown
-  unitPriceCents: z.number().int().nullable(),
-  lineTotalCents: z.number().int(), // integer cents per SPEC §6
+  lineTotalCents: z.number().int(), // integer cents per SPEC §6 (discounts netted in)
+  taxable: z.boolean().nullable(),  // receipt marks this line taxed (T/E/A flag)
+  confidence: z.number().nullable(),
 });
 const Extraction = z.object({
   retailer: z.string().nullable(),
   purchasedAt: z.string().nullable(),          // YYYY-MM-DD if legible
-  lines: z.array(ExtractedLine), receiptTotalCents: z.number().int().nullable(),
+  lines: z.array(ExtractedLine),
+  receiptTotalCents: z.number().int().nullable(),
+  taxCents: z.number().int().nullable(),       // printed sales tax; split across taxable lines at finalize
 });
 export type ExtractionResult =
   | { status: 'ok'; data: z.infer<typeof Extraction> }

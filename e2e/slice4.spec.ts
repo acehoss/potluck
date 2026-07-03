@@ -40,7 +40,7 @@ async function openPantryOf(page: Page, household: string | 'own') {
       : page.getByTestId('pantry-group').filter({ hasText: household });
   await group.getByTestId('pantry-row').first().click();
   await expect(
-    page.getByTestId('product-row').first().or(page.getByText('Nothing here yet.')),
+    page.getByTestId('product-row').first().or(page.getByText(/empty|Nothing to browse/i)),
   ).toBeVisible();
 }
 

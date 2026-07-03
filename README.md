@@ -131,10 +131,15 @@ Controlled by `EXTRACTION_MODE` (default `off` — manual entry only):
   environment (`ANTHROPIC_API_KEY=… EXTRACTION_MODE=live docker compose up -d`).
   **Never bake the key into the image or commit it** — compose passes it
   through from the host environment at runtime. `EXTRACTION_MODEL` overrides
-  the default model (`claude-opus-4-8`).
+  the default model (`claude-opus-4-8`). To keep a local stack on live across
+  restarts, put `EXTRACTION_MODE=live` in the gitignored `.env` (compose loads
+  it automatically) rather than prefixing every `up`.
 
 Extraction is advisory: proposed lines land on the review screen for per-line
-confirm/edit/dismiss, and any failure degrades to manual entry.
+confirm/edit/dismiss, and any failure degrades to manual entry. Each line comes
+back as a **clean product name** plus the **raw receipt text** (shown for
+reconciliation); the printed tax is offered as a one-tap add, never applied
+silently (it feeds the tax-inclusive unit cost).
 
 ## Install & notifications (PWA)
 

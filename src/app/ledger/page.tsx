@@ -129,7 +129,7 @@ export default async function LedgerPage({
 
     const describeTake = (takeId: string) => {
       const t = takeById.get(takeId);
-      return t ? `${t.quantity}× ${t.lot.product.name}` : 'take';
+      return t ? `${t.quantity}× ${t.lot.product?.name ?? 'item'}` : 'take';
     };
 
     switch (entry.type) {
