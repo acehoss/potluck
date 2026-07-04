@@ -83,6 +83,12 @@ type ConnectionRow = {
   bGrantsReshare: boolean;
 };
 
+/** The 6 write-ready Connection columns for one side's grant set. */
+export function grantColumns(side: 'a' | 'b', grants: GrantSet) {
+  const cap = (g: string) => g.charAt(0).toUpperCase() + g.slice(1);
+  return Object.fromEntries(GRANTS.map((g) => [`${side}Grants${cap(g)}`, grants[g]]));
+}
+
 /** The grant set `granter` extends to the other side of `connection`. */
 export function grantsFrom(connection: ConnectionRow, granterHouseholdId: string): GrantSet {
   const side = connection.householdAId === granterHouseholdId ? 'a' : 'b';

@@ -277,6 +277,7 @@ export function ConnectionsCard() {
           Connect a household…
         </button>
       )}
+      {canManage && <InviteHousehold />}
       {canManage && connectOpen && (
         <form
           className="flex flex-col gap-3 rounded-lg border border-border p-3"
@@ -320,6 +321,77 @@ export function ConnectionsCard() {
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * Mint a NEW-household invite (REWORK A1): the accepted link founds a
+ * household whose first connection edge is ours, carrying this grant set on
+ * both sides. The server enforces the instance-admin growth toggle.
+ */
+function InviteHousehold() {
+  const trpc = useTRPC();
+  const [open, setOpen] = useState(false);
+  const [grants, setGrants] = useState<GrantSet>(PRESETS[1].grants);
+  const [link, setLink] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const mint = useMutation(
+    trpc.invite.createHousehold.mutationOptions({
+      onSuccess: (data) => {
+        setError(null);
+        setLink(`${window.location.origin}${data.path}`);
+      },
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        data-testid="invite-household-open"
+        onClick={() => setOpen(true)}
+        className={secondaryBtn}
+      >
+        Invite a NEW household…
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
+      <p className="text-sm text-text-muted">
+        For a family that isn&apos;t on this server yet: the link lets them start their own
+        household, connected to yours from day one. Works once, expires in 7 days.
+      </p>
+      <p className="text-sm font-medium text-text">What you&apos;ll grant each other to start:</p>
+      <GrantEditor value={grants} onChange={setGrants} />
+      {link ? (
+        <p data-testid="household-invite-url" className="break-all rounded-lg bg-surface-sunken p-3 font-mono text-xs text-text">
+          {link}
+        </p>
+      ) : (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            data-testid="invite-household-submit"
+            disabled={mint.isPending}
+            onClick={() => mint.mutate({ grants })}
+            className={primaryBtn}
+          >
+            Create invite link
+          </button>
+          <button type="button" onClick={() => setOpen(false)} className={secondaryBtn}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -8,13 +8,22 @@ import { useTRPC } from '@/lib/trpc';
 const inputClass =
   'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
 
-export function AcceptInviteForm({ token, defaultName }: { token: string; defaultName: string }) {
+export function AcceptInviteForm({
+  token,
+  defaultName,
+  kind,
+}: {
+  token: string;
+  defaultName: string;
+  kind: 'member' | 'household';
+}) {
   const trpc = useTRPC();
   const router = useRouter();
   const [name, setName] = useState(defaultName);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [householdName, setHouseholdName] = useState('');
 
   const accept = useMutation(
     trpc.auth.acceptInvite.mutationOptions({
@@ -30,9 +39,33 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
       className="flex w-full flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
-        accept.mutate({ token, name, username, email, password });
+        accept.mutate({
+          token,
+          name,
+          username,
+          email,
+          password,
+          householdName: householdName || undefined,
+        });
       }}
     >
+      {kind === 'household' && (
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          Your household&apos;s name
+          <input
+            type="text"
+            name="householdName"
+            required
+            data-testid="invite-household-name"
+            value={householdName}
+            onChange={(e) => setHouseholdName(e.target.value)}
+            className={inputClass}
+          />
+          <span className="text-xs font-normal text-text-muted">
+            How your household appears to the people you connect with.
+          </span>
+        </label>
+      )}
       <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Your name
         <input
@@ -100,7 +133,11 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
         disabled={accept.isPending}
         className="min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:bg-accent/50 disabled:text-accent-contrast/70"
       >
-        {accept.isPending ? 'Creating account…' : 'Join household'}
+        {accept.isPending
+          ? 'Creating account…'
+          : kind === 'member'
+            ? 'Join household'
+            : 'Start my household'}
       </button>
     </form>
   );

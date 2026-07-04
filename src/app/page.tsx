@@ -5,6 +5,7 @@ import { getSessionUser } from '@/server/auth';
 import { activeConnectionsOf } from '@/server/authz';
 import { db } from '@/server/db';
 import { netByCounterparty } from '@/server/ledger';
+import { AddPantry } from './add-pantry';
 import { BrandMark } from './brand-mark';
 
 /**
@@ -159,6 +160,7 @@ export default async function PantriesPage() {
                   <li className="py-3 text-sm text-text-muted">No pantries yet</li>
                 )}
               </ul>
+              {isYours && user.activeMembership.manageHousehold && <AddPantry />}
             </section>
           );
         })}

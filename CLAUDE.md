@@ -2,23 +2,45 @@
 
 Private Coop: a self-hosted web app (PWA) for a small circle of trusted households to share pantry goods and equipment at cost, with a netted per-household-pair ledger.
 
-## Current state (2026-07-03)
+## Current state (2026-07-04)
 
-**v1 is built, committed, and green.** All seven slices (skeleton → receiving → takes/ledger → settlements/adjustments → VLM extraction → lending → PWA) plus a pre-handoff hardening pass are on `main`. Two iteration rounds have since shipped on top. 18 Prisma models across 10 migrations; Playwright e2e green on both Chromium-light and WebKit-dark against the real container.
+**v1 shipped (all seven slices + hardening + two iteration rounds), and the "Potluck"
+mutual-aid rework is now underway** — an overnight autonomous session (2026-07-03→04)
+carried Round 1 through **slice 4 of 5**. `main` has: R1S1 network-core schema + data
+migration, R1S2 capability/grant authz + acting-household switcher + username login, R1S3
+connection management UI + shared flags, R1S4 onboarding + instance admin. Each shipped
+committed and green on both engines against the real container. **Remaining in Round 1:
+slice 5 (rebrand → Potluck + SPEC/blueprint rewrite).** Then Rounds 2–4 (shares →
+recipes → planner). See PLAN.md's Round-1 notes (newest first) for the full record.
 
-**Phase now: iterating with Aaron in the loop** — not autonomous slice-building. Rounds shipped 2026-07-03 (see PLAN.md):
+What the rework changed structurally (read PLAN.md + docs/REWORK.md before touching):
+- **Membership replaces `User.householdId`** — a user belongs to N households, each with
+  11 capability flags (`src/server/capabilities.ts`); `getSessionUser()` resolves the
+  sticky **acting household** (`coop_household` cookie) behind the legacy `householdId`
+  shape, so every consumer still reads `ctx.user.householdId` (now = acting household).
+- **`Connection`** (pairwise, two directional grant sets, PENDING/ACTIVE/SEVERED) is the
+  visibility+reach primitive; **`src/server/authz.ts`** is the choke point
+  (`requireCapability`, `hasActiveGrant`, `activeConnectionsOf`, `loadAccessiblePantry`).
+  Error convention: missing capability = 403, missing visibility = 404 (never leak
+  existence). Money reach is re-checked at the money moment (pickup/finalize).
+- **Per-household `Product`**, `Pantry.shared`/`Item.shared`, `Take.householdId` /
+  `Loan.borrowerHouseholdId` attribution snapshots, instance-settings + `isInstanceAdmin`.
+- Identity is username-or-email; demo seed grew to **three households** (Heise, In-Laws,
+  Neighbors) with Teen/multi-membership fixtures — see `prisma/seed.ts`.
 
-- **Receiving tweaks** — lot code shown up front (reverses D6), tax/fees folded into a **tax-inclusive** at-cost unit price (opens D7), excluded non-coop lines, auto-extraction, and a restock-history list with **auditable** finalized corrections (preview the exact ledger change; never a raw reopen). Migration `20260703060000_tax_fees_receipt_text`.
-- **Orders & requests** — receiving proposals now split Confirm-a-match vs **Process** (unmatched lines must pick/create a real product, no auto-create). The take flow became **orders**: everything is a request with reservation — `DRAFT → REQUESTED (reserve) → PICKING (lock) → READY → PICKED_UP (money posts here) / CANCELED (release)`. `Lot.reservedCount` (availability = `remaining − reserved`), `Order`/`OrderLine`, an `order` router, an **Orders** tab, and `/orders` + `/orders/[id]`. The instant `take.create` was **removed** (it ignored reservations); `take.undo` stays for returns. Money still posts exactly at goods-transfer (now pickup), append-only, via `dbTransaction` + `clientKey`. Migration `20260703080000_orders_reserved`.
+Migrations added this rework: `20260703100000_network_core` (the big data-preserving one),
+`20260703120000_household_invites`. **Every money invariant and the append-only ledger
+survived untouched** — the migrations are additive/data-preserving and proven against the
+real accumulated dev volume as well as a fresh stack.
 
-Do not start large autonomous workflows without an explicit ask.
+Do not start large autonomous workflows without an explicit ask. Rounds 2–4 are still
+"design locked, not built" — resume from PLAN.md + docs/REWORK.md.
 
-**Next up (design locked 2026-07-03): the "Potluck" mutual-aid rework** — households as
-nodes in a connection network (multi-household instances, directional per-connection
-grants, multi-membership RBAC-lite), needs/surpluses gifting, recipes, PTE-style meal
-planning/shopping, rename to Potluck. **Read [docs/REWORK.md](./docs/REWORK.md) first** —
-it is the implementation seed (decisions, vocabularies, round plan: network core →
-shares → recipes → planner). SPEC.md is partially superseded until its Round-1 rewrite.
+**SPEC.md and docs/blueprint/ are stale w.r.t. the rework** — they still describe the
+closed two-household "everyone sees everything" model. Their rewrite is R1S5 (not yet
+done). Until then, PLAN.md's Round-1 notes + docs/REWORK.md are authoritative for
+network/capability/connection behavior; the blueprints remain authoritative only for the
+unchanged money/lifecycle mechanics.
 
 ## Read first
 

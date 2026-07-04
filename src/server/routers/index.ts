@@ -1,5 +1,6 @@
 import { router } from '../trpc';
 import { adjustmentRouter } from './adjustment';
+import { adminRouter } from './admin';
 import { authRouter } from './auth';
 import { connectionRouter } from './connection';
 import { householdRouter } from './household';
@@ -15,6 +16,7 @@ import { takeRouter } from './take';
 
 export const appRouter = router({
   adjustment: adjustmentRouter,
+  admin: adminRouter,
   auth: authRouter,
   connection: connectionRouter,
   household: householdRouter,

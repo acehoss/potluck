@@ -194,9 +194,16 @@ model Invite {
   id          String    @id @default(cuid())
   // sha256 hex of the invite token; the raw token lives only in the shared link
   tokenHash   String    @unique
+  // "member" joins householdId; "household" (REWORK A1) founds a NEW
+  // household whose first connection edge is householdId — growth along
+  // trust edges, never open registration.
+  kind        String    @default("member")
   householdId String
   createdById String
   invitedName String?
+  // Household invites: the initial grant set (GrantSet JSON) both sides start
+  // with; each side tunes unilaterally afterwards (B2).
+  grantsJson  String?
   expiresAt   DateTime
   usedAt      DateTime?
   usedById    String?

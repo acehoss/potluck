@@ -1,7 +1,14 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
-import { GRANTS, type GrantSet, getConnection, grantsFrom, requireCapability } from '../authz';
+import {
+  GRANTS,
+  type GrantSet,
+  getConnection,
+  grantColumns,
+  grantsFrom,
+  requireCapability,
+} from '../authz';
 import { db, dbTransaction } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
@@ -24,12 +31,6 @@ const grantSetSchema = z.object(
 /** Column prefix for the side of `connection` that `householdId` occupies. */
 function sideOf(connection: { householdAId: string }, householdId: string): 'a' | 'b' {
   return connection.householdAId === householdId ? 'a' : 'b';
-}
-
-/** The 6 write-ready columns for one side's grant set. */
-function grantColumns(side: 'a' | 'b', grants: GrantSet) {
-  const cap = (g: string) => g.charAt(0).toUpperCase() + g.slice(1);
-  return Object.fromEntries(GRANTS.map((g) => [`${side}Grants${cap(g)}`, grants[g]]));
 }
 
 /**

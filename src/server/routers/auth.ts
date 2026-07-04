@@ -10,9 +10,11 @@ import {
   setSessionCookie,
   verifyPasswordLimited,
 } from '../auth';
+import type { Prisma } from '@/generated/prisma/client';
+import { GRANT_PRESETS, type GrantSet, grantColumns } from '../authz';
 import { OWNER_PRESET } from '../capabilities';
 import { db, dbTransaction } from '../db';
-import { USERNAME_PATTERN } from '../identity';
+import { USERNAME_PATTERN, firstAvailableHandle, slugBaseFromName } from '../identity';
 import { checkRateLimit, resetRateLimit } from '../rate-limit';
 import { protectedProcedure, publicProcedure, router } from '../trpc';
 
@@ -111,12 +113,18 @@ export const authRouter = router({
           ),
         email: z.string().trim().toLowerCase().email(),
         password: z.string().min(10, 'Password must be at least 10 characters.').max(256),
+        // Household invites (REWORK A1) found a NEW household: its name comes
+        // from the person accepting, not the inviter.
+        householdName: z.string().trim().min(1).max(100).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const invite = await db.invite.findUnique({ where: { tokenHash: hashToken(input.token) } });
       if (!invite || invite.usedAt || invite.expiresAt.getTime() < Date.now()) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite is invalid or expired.' });
+      }
+      if (invite.kind === 'household' && !input.householdName?.trim()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Name your household.' });
       }
       if (await db.user.findUnique({ where: { email: input.email } })) {
         throw new TRPCError({
@@ -138,26 +146,101 @@ export const authRouter = router({
             passwordHash,
           },
         });
-        // A joining member gets the full-capability (Owner) preset — the
-        // pre-rework trust model. Invite-carried capability presets are R1S4.
-        await tx.membership.create({
-          data: {
-            userId: created.id,
-            householdId: invite.householdId,
-            ...OWNER_PRESET,
-          },
-        });
-        const claimed = await tx.invite.updateMany({
-          where: { id: invite.id, usedAt: null },
-          data: { usedAt: new Date(), usedById: created.id },
-        });
-        if (claimed.count === 0) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite is invalid or expired.' });
-        }
+        await joinViaInvite(tx, invite, created.id, input.householdName);
         return created;
       });
 
       await setSessionCookie(await createSession(user.id), ctx.secure);
       return { id: user.id, name: user.name };
     }),
+
+  /**
+   * A SIGNED-IN user accepts an invite (REWORK A3 multi-membership): a member
+   * invite adds a membership in that household; a household invite founds a
+   * new household with this user as its first member. Either way the acting
+   * household switches to the new one so the next screen shows it.
+   */
+  acceptInviteExisting: protectedProcedure
+    .input(
+      z.object({
+        token: z.string().min(1),
+        householdName: z.string().trim().min(1).max(100).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const invite = await db.invite.findUnique({ where: { tokenHash: hashToken(input.token) } });
+      if (!invite || invite.usedAt || invite.expiresAt.getTime() < Date.now()) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite is invalid or expired.' });
+      }
+      if (invite.kind === 'household' && !input.householdName?.trim()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Name your household.' });
+      }
+      if (
+        invite.kind === 'member' &&
+        ctx.user.memberships.some((m) => m.householdId === invite.householdId)
+      ) {
+        throw new TRPCError({ code: 'CONFLICT', message: "You're already a member there." });
+      }
+      const householdId = await dbTransaction((tx) =>
+        joinViaInvite(tx, invite, ctx.user.id, input.householdName),
+      );
+      await setActingHouseholdCookie(householdId, ctx.secure);
+      return { householdId };
+    }),
 });
+
+/**
+ * Apply an invite for `userId` inside an open transaction: member invites add
+ * an Owner-preset membership in the invite's household (pre-rework trust
+ * parity — per-invite capability presets remain a door); household invites
+ * (A1) found the new household, make the user its first Owner, and mint the
+ * ACTIVE first-edge connection to the inviter's household with the invite's
+ * grant set on BOTH sides (each side tunes unilaterally afterwards). The
+ * one-shot claim guard makes concurrent accepts fail closed. Returns the
+ * household the user ended up in.
+ */
+async function joinViaInvite(
+  tx: Prisma.TransactionClient,
+  invite: { id: string; kind: string; householdId: string; grantsJson: string | null },
+  userId: string,
+  householdName: string | undefined,
+): Promise<string> {
+  let householdId = invite.householdId;
+  if (invite.kind === 'household') {
+    const slug = await firstAvailableHandle(
+      slugBaseFromName(householdName!),
+      async (c) => (await tx.household.findUnique({ where: { slug: c } })) !== null,
+    );
+    const household = await tx.household.create({
+      data: { name: householdName!.trim(), slug },
+    });
+    householdId = household.id;
+    const grants = (
+      invite.grantsJson ? JSON.parse(invite.grantsJson) : GRANT_PRESETS.friend
+    ) as GrantSet;
+    const [householdAId, householdBId] = [household.id, invite.householdId].sort();
+    await tx.connection.create({
+      data: {
+        householdAId,
+        householdBId,
+        status: 'ACTIVE',
+        activatedAt: new Date(),
+        // requestedByHouseholdId stays null: this edge was born from an
+        // invite, not an in-app request.
+        ...grantColumns('a', grants),
+        ...grantColumns('b', grants),
+      },
+    });
+  }
+  await tx.membership.create({
+    data: { userId, householdId, ...OWNER_PRESET },
+  });
+  const claimed = await tx.invite.updateMany({
+    where: { id: invite.id, usedAt: null },
+    data: { usedAt: new Date(), usedById: userId },
+  });
+  if (claimed.count === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite is invalid or expired.' });
+  }
+  return householdId;
+}

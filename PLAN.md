@@ -140,6 +140,53 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+### Round 1 slice 4 — onboarding + instance admin
+
+**2026-07-04 — done.** New households join along trust edges (A1), signed-in users pick up
+additional memberships (A3), and the first user has an instance-admin surface (A4/D2).
+Migration `20260703120000_household_invites` adds `Invite.kind` (`member`|`household`) +
+`Invite.grantsJson` (plain ADD COLUMNs, defaults preserve every existing invite as
+`member`). Gate: fresh `down -v && build && up` stack, **176 passed + 3 intentional skips,
+playwright exit 0, both engines** (the one webkit "flaky" is the known browser-age
+first-`goto` hang on the slice5 off-mode test, which self-skips on retry).
+
+- **Household invites (A1).** `invite.createHousehold` (manageConnections-gated, plus the
+  instance-admin growth toggle — members mint household invites only while
+  `allowMemberHouseholdInvites` is on; the admin always can) creates a `kind:'household'`
+  invite carrying a grant set. Accepting founds the household and mints an **ACTIVE
+  first-edge connection** to the inviter with those grants on both sides
+  (`requestedByHouseholdId` null — born of an invite, not a request). Two accept paths,
+  both through the shared `joinViaInvite` tx: anonymous (`auth.acceptInvite` gained
+  `householdName`) and signed-in (`auth.acceptInviteExisting` — the multi-membership
+  path; switches the acting household to the new one).
+- **Member invites now work signed-in (A3).** The old "sign out first" block is gone; a
+  logged-in user accepting a member invite gains a second membership (Owner preset;
+  per-invite capability presets remain a door) and the acting household switches. The
+  accept page branches on `invite.kind`: household invites ask the newcomer to name
+  their household; a member invite for a household you're already in says so.
+- **Founding UX.** New households start pantry-less, so the Pantries tab gains an inline
+  `AddPantry` (own household + manageHousehold; new `pantry.create`). The /more household
+  card shows your own `@handle` to share.
+- **Instance admin (A4/D2).** `/admin` (first-user-only; non-admins redirect home) is a
+  server component: per-household **usage** — members/pantries/restocks/items, extraction
+  counts with a rough $ estimate (operator's API key), image bytes on disk (operator's
+  disk) — and the A1 growth toggle (`admin.setAllowMemberHouseholdInvites`,
+  instance-admin-only). Trust + visibility, no quota machinery (D2): the admin sees
+  operational data, never another household's content. /more shows an admin card only to
+  the admin. The connections card gained an "Invite a NEW household…" flow (grant preset
+  + copyable link).
+- **e2e (`onboarding.spec.ts`,** 4 tests): a household invite founding a connected
+  household through the anonymous UI form (register → land signed-in → both sides see the
+  Friend-granted edge → add first pantry → one-shot link); a signed-in member accepting a
+  second membership and getting the switcher; the admin usage view + growth-toggle gating
+  (member 403 when off, admin still 200, back on → 200) + non-admin redirect + API 403;
+  and the manageConnections gate on household-invite minting. Ephemeral casa-* households
+  are swept via the container seam (every FK-child table cleared before the household
+  row). Suite-health notes for the next session: the anonymous form's Username field
+  wraps a hint span, so its accessible name isn't "Username" — `getByLabel` must be
+  non-exact; the admin checkbox is optimistic and UI toggles in tests wait on the tRPC
+  response before probing a second user.
+
 ### Round 1 slice 3 — connection management UI + shared flags
 
 **2026-07-03 — done.** Connections are now self-service: request/accept/sever by

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
 import { activeConnectionsOf } from '@/server/authz';
@@ -86,6 +87,22 @@ export default async function MorePage() {
         })}
 
         <ConnectionsCard />
+
+        {user.isInstanceAdmin && (
+          <Link
+            href="/admin"
+            data-testid="admin-link"
+            className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised p-4 shadow-sm"
+          >
+            <div>
+              <h2 className="text-lg font-semibold">Instance admin</h2>
+              <p className="text-sm text-text-muted">
+                Usage by household, and who may invite new households.
+              </p>
+            </div>
+            <span className="text-text-muted">→</span>
+          </Link>
+        )}
 
         <h2 className="mt-2 text-xs font-medium uppercase tracking-wide text-text-muted">
           This device

@@ -300,24 +300,35 @@ Aaron answers so the reasoning trail survives.
 
 ## Round plan (J3, decided 2026-07-03)
 
+**Progress (2026-07-04): Round 1 slices 1–4 are BUILT, committed, and green on both
+engines** (overnight autonomous session). Slice 5 is the only Round-1 remainder. Full
+per-slice record — decisions, deviations, review findings, e2e — is in PLAN.md's Round-1
+section (newest first). Rounds 2–4 are unstarted.
+
 **Round 1 — Network core** (the big migration; internally sliced, app works identically
 for the existing two households at every step):
 
-1. **Schema + data migration** — `Membership` (user↔household, capability flags) replaces
+1. ✅ **Schema + data migration** — `Membership` (capability flags) replaces
    `User.householdId`; `Connection` (pairwise, two directional grant sets);
    `User.username` + `Household.slug`; `Product.householdId`; `Pantry.shared` /
-   `Item.shared`; instance-settings row + admin flag. Data migration per J2. Behavior
-   preserved by auto-creating the full-grant connection between the two existing
-   households.
-2. **Authz/capability layer + acting household** — every mutation/query goes through
-   membership-capability checks and connection-grant checks; sticky household switcher;
-   username login.
-3. **Connection management UI** — request/accept/sever by handle, grant editing with
-   presets, shared flags on pantries/items.
-4. **Onboarding + admin** — new-household invites (invite = first edge), admin toggle for
-   who may invite households, admin usage view (D2), bootstrap rework (D3).
-5. **Rebrand → Potluck** — manifest, brand mark, copy sweep (I1/I3), SPEC §2 principles
-   rewrite (I2), SPEC/blueprint updates for everything this doc changed.
+   `Item.shared`; instance-settings + admin flag. Shipped as migration
+   `20260703100000_network_core` (data-preserving; proven against the real dev volume).
+   `Take.householdId` / `Loan.borrowerHouseholdId` attribution snapshots added too.
+2. ✅ **Authz/capability layer + acting household** — `src/server/authz.ts`
+   (`requireCapability` × `hasActiveGrant`); sticky `coop_household` switcher; username-
+   or-email login. Read-scoping (B4) replaced "everyone sees everything." Money reach
+   re-verified at the money moment.
+3. ✅ **Connection management UI** — request/accept/sever by handle, unilateral grant
+   editing with Neighbor/Friend/Family presets, `Pantry.shared`/`Item.shared` toggles.
+   Sever runs B6 fallout (auto-cancel open orders, release reservations) in one tx.
+4. ✅ **Onboarding + admin** — household invites (invite = ACTIVE first edge, A1),
+   signed-in multi-membership acceptance (A3), `/admin` usage view + growth toggle (D2),
+   `AddPantry` for founded households. Migration `20260703120000_household_invites`.
+   **Bootstrap rework (D3) already landed in slice 1** (`scripts/bootstrap.ts` creates
+   instance-settings + slug + username + Owner membership + first-user admin).
+5. ⬜ **Rebrand → Potluck** — manifest, brand mark, copy sweep (I1/I3), SPEC §2 principles
+   rewrite (I2), SPEC/blueprint updates for everything this doc changed. **NOT DONE — the
+   next task.** SPEC.md + docs/blueprint/ still describe the pre-rework model.
 
 **Round 2 — Needs & surpluses** (F): posts (need/surplus, optional quantity, expiry,
 linked lots), claim flow (signal + confirm, quantity claims), reshare chain (anonymized,
