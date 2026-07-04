@@ -11,7 +11,7 @@ declare global {
      * which needs physical hardware). Present only while a scan sheet is
      * mounted; calling it does nothing a user couldn't do by scanning.
      */
-    __coopScanEmit?: (rawValue: string) => boolean;
+    __potluckScanEmit?: (rawValue: string) => boolean;
   }
 }
 
@@ -76,9 +76,9 @@ export function ScanSheet({
 
   // e2e seam — see the global declaration above.
   useEffect(() => {
-    window.__coopScanEmit = deliver;
+    window.__potluckScanEmit = deliver;
     return () => {
-      delete window.__coopScanEmit;
+      delete window.__potluckScanEmit;
     };
   }, [deliver]);
 

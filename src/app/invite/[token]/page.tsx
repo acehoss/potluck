@@ -30,7 +30,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
     <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
       <div className="flex flex-col items-center text-center">
         <BrandMark className="size-16 text-accent" />
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Private Coop</h1>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Potluck</h1>
         {invite ? (
           isHouseholdInvite ? (
             <p className="mt-2 max-w-sm text-sm text-text-muted">

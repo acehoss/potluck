@@ -92,8 +92,8 @@ test('manifest is served with the install-critical fields', async ({ page }) => 
   expect(res.status()).toBe(200);
   expect(res.headers()['content-type']).toContain('application/manifest+json');
   const manifest = await res.json();
-  expect(manifest.name).toBe('Private Coop');
-  expect(manifest.short_name).toBe('Coop');
+  expect(manifest.name).toBe('Potluck');
+  expect(manifest.short_name).toBe('Potluck');
   expect(manifest.display).toBe('standalone');
   expect(manifest.start_url).toBe('/');
   expect(manifest.theme_color).toBe('#1c1917');
@@ -147,7 +147,7 @@ test('layout carries PWA meta: per-scheme theme-color, viewport-fit, apple tags'
   );
   await expect(page.locator('meta[name="apple-mobile-web-app-title"]')).toHaveAttribute(
     'content',
-    'Coop',
+    'Potluck',
   );
   await expect(page.locator('meta[name="apple-mobile-web-app-status-bar-style"]')).toHaveAttribute(
     'content',
@@ -637,15 +637,15 @@ async function stubCameraUnavailable(page: Page) {
 
 /**
  * Emit a raw scanned value into an ALREADY-OPEN scan sheet via its seam
- * (window.__coopScanEmit feeds the sheet's real normalize→flash→deliver
+ * (window.__potluckScanEmit feeds the sheet's real normalize→flash→deliver
  * pipeline — everything below the camera frame loop, which needs physical
  * hardware). Emits the 13-digit EAN form so normalization is exercised for
  * real.
  */
 async function emitWhenReady(page: Page, rawValue: string) {
   await expect(page.getByTestId('scan-sheet')).toBeVisible();
-  await page.waitForFunction(() => typeof window.__coopScanEmit === 'function');
-  const accepted = await page.evaluate((raw) => window.__coopScanEmit!(raw), rawValue);
+  await page.waitForFunction(() => typeof window.__potluckScanEmit === 'function');
+  const accepted = await page.evaluate((raw) => window.__potluckScanEmit!(raw), rawValue);
   expect(accepted).toBe(true);
   await expect(page.getByTestId('scan-sheet')).not.toBeVisible();
 }

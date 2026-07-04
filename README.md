@@ -1,6 +1,9 @@
-# Private Coop
+# Potluck
 
-A self-hosted web app (PWA) for a small circle of trusted households to share pantry goods and equipment at cost, with a netted per-household-pair ledger.
+A self-hosted web app (PWA) for **mutual aid between households**: each household is a
+node, pairwise connections carry per-side grants, and connected households share pantry
+goods and equipment **at cost** with a netted per-pair ledger. (Formerly "Private Coop" —
+renamed with the Round-1 network rework.)
 
 - **[SPEC.md](./SPEC.md)** — scope, domain model, flows, technical requirements
 - **[PLAN.md](./PLAN.md)** — build slices, status, progress notes
@@ -29,7 +32,11 @@ npm run test:unit
 npm run e2e:off
 ```
 
-Demo logins (only when seeded): `aaron@demo.coop` / `dana@demo.coop`, password `demo-password`.
+Demo logins (only when seeded): usernames `aaron`, `marie`, `dana`, `nia`, `theo`
+(emails like `aaron@demo.coop` also work), password `demo-password`. Three seeded
+households exercise the network: Heise ↔ In-Laws (full grants), Heise ↔ Neighbors
+(share-only), In-Laws ↔ Neighbors (unconnected). Marie belongs to two households
+(the acting-household switcher lives on More); Theo is a Teen-preset member.
 
 ## Go live (real deployment)
 
@@ -51,10 +58,20 @@ docker compose exec app npx tsx scripts/bootstrap.ts \
   "Heise" "Aaron" "aaron@example.com" "a-strong-password" "Basement Pantry"
 ```
 
-That owner logs in and invites the rest of their household from the app (**More
-→ invite**); a second household's first member is added by running `bootstrap`
-again with a new household name. Everyone else joins by invite — never re-run
-`bootstrap` for an existing person.
+Bootstrap creates the instance settings, the household (with its `@handle`
+slug), a pantry, and the owner — whose username derives from the email
+local-part, and who becomes the **instance admin** (the More tab gains an
+admin card: per-household usage, plus the toggle for who may invite new
+households). From there everything grows in-app:
+
+- **More → Invite a member** adds people to your household (a signed-in
+  person accepting one gains a second membership).
+- **More → Connections → Invite a NEW household** onboards another family —
+  they name their own household and arrive already connected to yours.
+- **More → Connections → Connect a household** links two households that are
+  already on the server, by the `@handle` shown on their More tab.
+
+Never re-run `bootstrap` for an existing person.
 
 ### 2. Reset / recover a password
 

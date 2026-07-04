@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <!--
-    Private Coop app icon (blueprint 02 PWA section): a simple bold pantry-jar
+    Potluck app icon (blueprint 02 PWA section): a simple bold pantry-jar
     mark, emerald on warm stone-900. All artwork stays inside the maskable
     safe zone (radius ~205px around center), so the same art serves both
     purpose:any and purpose:maskable. Regenerate the PNGs with:

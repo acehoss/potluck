@@ -24,7 +24,7 @@ services:
       # (`npx web-push generate-vapid-keys`) and set these in the host env.
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:coop@example.com}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:potluck@example.com}
     volumes:
       - coop-data:/data
     healthcheck:

@@ -12,8 +12,8 @@ import type { MetadataRoute } from 'next';
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Private Coop',
-    short_name: 'Coop',
+    name: 'Potluck',
+    short_name: 'Potluck',
     description: 'Share your pantry with people you trust, at cost.',
     start_url: '/',
     display: 'standalone',

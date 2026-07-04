@@ -17,7 +17,7 @@ import { useEffect } from 'react';
 declare global {
   interface Window {
     /** Deferred beforeinstallprompt event, if the browser offered one. */
-    __coopInstallPrompt?: Event & { prompt: () => Promise<void> };
+    __potluckInstallPrompt?: Event & { prompt: () => Promise<void> };
   }
 }
 
@@ -39,8 +39,8 @@ export function PwaSetup() {
 
     const onBeforeInstallPrompt = (e: Event) => {
       e.preventDefault(); // keep Chrome's mini-infobar quiet; we offer it on /more
-      window.__coopInstallPrompt = e as Window['__coopInstallPrompt'];
-      window.dispatchEvent(new CustomEvent('coop:installprompt'));
+      window.__potluckInstallPrompt = e as Window['__potluckInstallPrompt'];
+      window.dispatchEvent(new CustomEvent('potluck:installprompt'));
     };
     window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
     return () => window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);

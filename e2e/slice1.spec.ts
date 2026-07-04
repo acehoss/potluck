@@ -15,7 +15,7 @@ const RUN = Date.now().toString(36);
 test('anonymous visitors are redirected to login', async ({ page }) => {
   await page.goto('/');
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole('heading', { name: 'Private Coop' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Potluck' })).toBeVisible();
 });
 
 test('a member signs in and sees the households their connections grant', async ({ page }) => {

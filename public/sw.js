@@ -14,9 +14,9 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data.json();
   } catch {
-    data = { title: 'Private Coop', body: event.data.text() };
+    data = { title: 'Potluck', body: event.data.text() };
   }
-  const title = data.title || 'Private Coop';
+  const title = data.title || 'Potluck';
   const options = {
     body: data.body || '',
     icon: '/icon-192.png',

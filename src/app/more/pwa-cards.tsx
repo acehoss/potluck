@@ -33,7 +33,7 @@ const secondaryBtn =
 const primaryBtn =
   'min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast transition-colors hover:bg-accent-strong disabled:bg-accent/50 disabled:text-accent-contrast/70';
 
-const DISMISS_KEY = 'coop-install-card-dismissed';
+const DISMISS_KEY = 'potluck-install-card-dismissed';
 
 /** iOS share pictogram (box with up arrow), drawn inline so it matches tokens. */
 function ShareIcon() {
@@ -74,12 +74,12 @@ export function InstallCard() {
       setState({
         show: !standalone && !dismissed,
         isIOS,
-        canPrompt: window.__coopInstallPrompt !== undefined,
+        canPrompt: window.__potluckInstallPrompt !== undefined,
       });
     sync();
     // beforeinstallprompt may land after mount; PwaSetup re-announces it.
-    window.addEventListener('coop:installprompt', sync);
-    return () => window.removeEventListener('coop:installprompt', sync);
+    window.addEventListener('potluck:installprompt', sync);
+    return () => window.removeEventListener('potluck:installprompt', sync);
   }, []);
 
   if (!state?.show) return null;
@@ -87,7 +87,7 @@ export function InstallCard() {
   return (
     <section data-testid="install-card" className={card}>
       <div className="flex items-start justify-between gap-2">
-        <h2 className="text-lg font-semibold">Put Coop on your home screen</h2>
+        <h2 className="text-lg font-semibold">Put Potluck on your home screen</h2>
         <button
           type="button"
           aria-label="Dismiss install help"
@@ -129,8 +129,8 @@ export function InstallCard() {
           type="button"
           data-testid="install-prompt"
           onClick={async () => {
-            await window.__coopInstallPrompt?.prompt();
-            window.__coopInstallPrompt = undefined;
+            await window.__potluckInstallPrompt?.prompt();
+            window.__potluckInstallPrompt = undefined;
             setState((s) => (s ? { ...s, canPrompt: false } : s));
           }}
           className={primaryBtn}

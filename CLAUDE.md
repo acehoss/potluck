@@ -1,22 +1,23 @@
 # CLAUDE.md
 
-Private Coop: a self-hosted web app (PWA) for a small circle of trusted households to share pantry goods and equipment at cost, with a netted per-household-pair ledger.
+Potluck (formerly "Private Coop"): a self-hosted web app (PWA) for mutual aid between households — nodes in a network of pairwise connections sharing pantry goods and equipment at cost, with a netted per-household-pair ledger.
 
 ## Current state (2026-07-04)
 
 **v1 shipped (all seven slices + hardening + two iteration rounds), and the "Potluck"
-mutual-aid rework is now underway** — an overnight autonomous session (2026-07-03→04)
-carried Round 1 through **slice 4 of 5**. `main` has: R1S1 network-core schema + data
+mutual-aid rework's Round 1 (network core) is COMPLETE** — an overnight autonomous
+session (2026-07-03→04) shipped all five slices: R1S1 network-core schema + data
 migration, R1S2 capability/grant authz + acting-household switcher + username login, R1S3
-connection management UI + shared flags, R1S4 onboarding + instance admin. Each shipped
-committed and green on both engines against the real container. **Remaining in Round 1:
-slice 5 (rebrand → Potluck + SPEC/blueprint rewrite).** Then Rounds 2–4 (shares →
-recipes → planner). See PLAN.md's Round-1 notes (newest first) for the full record.
+connection management UI + shared flags, R1S4 onboarding + instance admin, R1S5 rebrand →
+Potluck + SPEC/blueprint rewrite. Each committed and green on both engines against the
+real container. **Next: Rounds 2–4 (needs & surpluses → recipes → planner/shopping)** —
+design locked in docs/REWORK.md, not built. See PLAN.md's Round-1 notes (newest first)
+for the full record.
 
 What the rework changed structurally (read PLAN.md + docs/REWORK.md before touching):
 - **Membership replaces `User.householdId`** — a user belongs to N households, each with
   11 capability flags (`src/server/capabilities.ts`); `getSessionUser()` resolves the
-  sticky **acting household** (`coop_household` cookie) behind the legacy `householdId`
+  sticky **acting household** (`potluck_household` cookie) behind the legacy `householdId`
   shape, so every consumer still reads `ctx.user.householdId` (now = acting household).
 - **`Connection`** (pairwise, two directional grant sets, PENDING/ACTIVE/SEVERED) is the
   visibility+reach primitive; **`src/server/authz.ts`** is the choke point
@@ -36,11 +37,12 @@ real accumulated dev volume as well as a fresh stack.
 Do not start large autonomous workflows without an explicit ask. Rounds 2–4 are still
 "design locked, not built" — resume from PLAN.md + docs/REWORK.md.
 
-**SPEC.md and docs/blueprint/ are stale w.r.t. the rework** — they still describe the
-closed two-household "everyone sees everything" model. Their rewrite is R1S5 (not yet
-done). Until then, PLAN.md's Round-1 notes + docs/REWORK.md are authoritative for
-network/capability/connection behavior; the blueprints remain authoritative only for the
-unchanged money/lifecycle mechanics.
+**SPEC.md was rewritten and the blueprints amended for Round 1 (R1S5)** — they describe
+the running app again. Rebrand notes: cookies are `potluck_session`/`potluck_household`
+and the manifest is "Potluck", but `/data/coop.db`, the `coop-data` volume, and the repo
+directory deliberately keep their names (renaming would orphan existing deployments'
+data; repo rename is Aaron's call). Demo seed emails stay `@demo.coop` (fixtures, keyed
+by upsert). The jar brand mark stayed — a new mark can ride the domain hunt.
 
 ## Read first
 
@@ -56,7 +58,10 @@ SEED_DEMO=1 EXTRACTION_MODE=fixture docker compose up -d --wait   # then localho
 npm run e2e                                                        # full suite, both engines
 ```
 
-Demo logins (seeded only): `aaron@demo.coop` / `dana@demo.coop`, password `demo-password`.
+Demo logins (seeded only): usernames `aaron` / `marie` / `dana` / `nia` / `theo` (or
+their `@demo.coop` emails), password `demo-password`. Marie is the multi-membership
+switcher fixture; Theo is Teen-preset; Neighbors is share-only-connected to Heise and
+unconnected to In-Laws.
 
 ## Working rules (still in force)
 

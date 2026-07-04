@@ -3,14 +3,14 @@ import { hash as argon2Hash, hashSync, verify as argon2Verify } from '@node-rs/a
 import { cookies } from 'next/headers';
 import { db } from './db';
 
-export const SESSION_COOKIE = 'coop_session';
+export const SESSION_COOKIE = 'potluck_session';
 /**
  * Sticky acting-household cookie (REWORK A3b): which of the user's
  * memberships they are currently acting as. Read and VALIDATED against the
  * membership rows on every request; an absent/stale value falls back to the
  * first membership, so single-membership users never notice it.
  */
-export const ACTING_HOUSEHOLD_COOKIE = 'coop_household';
+export const ACTING_HOUSEHOLD_COOKIE = 'potluck_household';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const SESSION_RENEW_BELOW_MS = 15 * 24 * 60 * 60 * 1000; // renew when < 15 days left
 

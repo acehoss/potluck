@@ -2,6 +2,15 @@
 
 Facts verified against `node_modules/next/dist/docs/` (Next 16.2.10), `npm view` (2026-07-02), and the claude-api skill (pricing/API shapes cached 2026-06). No guessed APIs.
 
+> **Potluck rebrand (Round 1, 2026-07-04).** User-facing and app-namespaced identifiers moved
+> to **Potluck**: PWA manifest `name`/`short_name` = "Potluck" (§4); session cookie
+> **`potluck_session`** and acting-household cookie **`potluck_household`** (`src/server/auth.ts`);
+> the install/scan seams are `window.__potluckInstallPrompt` / `window.__potluckScanEmit`, the
+> re-announce event `potluck:installprompt`, and localStorage key
+> `potluck-install-card-dismissed` (§4). **Deliberate non-renames** — renaming would orphan an
+> existing deployment's data — the SQLite file stays **`/data/coop.db`** and the Docker volume
+> stays **`coop-data`** (§5); the repo-directory rename is optional/later.
+
 ## 1. Image pipeline
 
 **Capture:** plain `<input type="file" accept="image/*" capture="environment">` — native camera UI on iOS
@@ -42,7 +51,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ kind: s
   const buf = Buffer.from(await file.arrayBuffer());
   if (buf.length > 8 * 1024 * 1024) return new Response('too large', { status: 413 });
   if (!(buf[0] === 0xff && buf[1] === 0xd8)) return new Response('not jpeg', { status: 415 }); // magic bytes
-  const name = `${createId()}.jpg`;                          // server names files; client name is ignored
+  const name = `${randomBytes(16).toString('hex')}.jpg`;     // server names files (16 random bytes); client name ignored
   await fs.mkdir(path.join(IMAGES_DIR, kind), { recursive: true });
   await fs.writeFile(path.join(IMAGES_DIR, kind, name), buf);
   return Response.json({ path: `${kind}/${name}` });         // stored in DB as the relative path
@@ -53,7 +62,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ kind: s
 Only JPEG exists on disk (client always re-encodes). DB columns store `receipts/abc123.jpg`.
 
 **Serving:** authenticated route handler; immutable cache is safe because filenames are unique-per-content
-(a new photo is a new cuid) — but `private` because responses are per-session.
+(a new photo is a fresh 16-random-byte name) — but `private` because responses are per-session.
+
+**Round-1 scoping decision (2026-07-04).** `/api/images` stays **session-only**: any
+authenticated member may fetch any image *path*. Connection-scoping it (so a household's
+receipt/unit photos are reachable only by households its grants reach) is a **recorded
+follow-up**, not shipped in Round 1 — mitigated meanwhile by the **unguessable 16-random-byte
+filenames** (a path can't be enumerated or guessed; it only leaks if someone with a real
+reference reshares the URL).
 
 ```ts
 // src/app/api/images/[...path]/route.ts
@@ -176,8 +192,8 @@ receipt set with a "re-run" button; no queue, no background jobs.
 
 Source: `node_modules/next/dist/docs/01-app/02-guides/progressive-web-apps.md` (read in full).
 
-**Manifest:** `src/app/manifest.ts` returning `MetadataRoute.Manifest`: `name: "Private Coop"`,
-`short_name: "Coop"`, `start_url: "/"`, `display: "standalone"`, `background_color`/`theme_color`, icons
+**Manifest:** `src/app/manifest.ts` returning `MetadataRoute.Manifest`: `name: "Potluck"`,
+`short_name: "Potluck"` (renamed 2026-07-04), `start_url: "/"`, `display: "standalone"`, `background_color`/`theme_color`, icons
 192/512 PNG (+ a 512 `purpose: "maskable"` variant). **Icons:** drawn once as `assets/icon.svg`, rasterized
 locally (`magick icon.svg -resize 192x192 public/icon-192.png`, etc.) and **committed** — no build tooling.
 
@@ -205,8 +221,11 @@ model PushSubscription {
 ```
 
 Sender: `webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)`; on send error 404/410
-delete the row (expired). **Who gets notified (minimal, per SPEC):** settlement recorded → all users of both
-involved households; manual ledger adjustment → all users of the affected household. Nothing else in v1.
+delete the row (expired). **Who gets notified (minimal, per SPEC):** settlement recorded → both pair
+households; manual ledger adjustment → the affected household. **Recipients resolve via `Membership` rows
+with per-user dedupe** (Round 1, 2026-07-04): a person who is a member of both pair households gets **one**
+push, not two, and the **acting user is excluded per-user** (you don't get pinged for your own action).
+Nothing else in v1.
 iOS caveats (surface in UI copy): push needs the *installed* PWA (iOS 16.4+), the permission prompt must
 follow a user tap, and deleting the icon silently drops the subscription — hence pruning on 404/410.
 
@@ -215,7 +234,16 @@ follow a user tap, and deleting the icon silently drops the subscription — hen
 - **Dockerfile:** unchanged (no native deps — sharp rejected, zxing is client-side WASM).
 - **docker-entrypoint.sh:** add `mkdir -p /data/images/{receipts,units,items}` (expanded, sh has no braces).
 - **docker-compose.yml:** images live on the existing `coop-data` volume at `/data/images` — no new volume,
-  healthcheck unchanged. Pass through the env vars below.
+  healthcheck unchanged (volume/DB names kept deliberately — see the rebrand preamble). Pass through the env vars below.
+- **Bootstrap (Round 1, 2026-07-04):** `scripts/bootstrap.ts` (the first-account path, run once on an empty
+  DB — everyone else joins by invite) now creates the **InstanceSettings** singleton, the first household
+  **+ its slug**, the first user **+ username + argon2id hash + `isInstanceAdmin`**, and the user's **Owner-preset
+  Membership** — the user + membership in **one transaction** so a half-created membership-less admin can't
+  exist. `docker-entrypoint.sh` runs `prisma migrate deploy` first.
+- **Migrations (Round 1):** the hand-timestamped list grew **`20260703100000_network_core`** (Membership,
+  Connection, username/slug, `Product.householdId`, `Pantry.shared`/`Item.shared`, instance settings + admin
+  flag, attribution snapshots — a data-preserving rebuild) and **`20260703120000_household_invites`**
+  (`Invite.kind` + `Invite.grantsJson`, plain `ADD COLUMN`).
 - **Backups** (SPEC §6): one `tar` of `/data` covers DB + images together; document at slice 4.
 
 `.env.example` additions:

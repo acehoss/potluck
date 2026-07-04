@@ -140,6 +140,50 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+### Round 1 slice 5 — rebrand → Potluck + SPEC/blueprint rewrite
+
+**2026-07-04 — done. Round 1 (network core) is COMPLETE.** Gate: rebuilt image, fresh
+`down -v` stack, **175 passed + 4 intentional skips, playwright exit 0, both engines**
+(one known-pattern webkit element-wait flake, retry-passed), plus a real-browser look at
+the renamed login (`.playwright-mcp/network-core/s5-potluck-login.png`).
+
+- **Rename (I1/I3).** User-facing brand and app-namespaced identifiers moved to
+  **Potluck**: manifest name/short_name, layout/appleWebApp titles, login/invite/home
+  headings, install-card copy, sw.js fallback push title, package.json name, cookies
+  (`potluck_session`/`potluck_household` — invalidates existing sessions, a re-login),
+  the install/scan seams (`__potluckInstallPrompt`/`__potluckScanEmit`,
+  `potluck:installprompt`, `potluck-install-card-dismissed`), and the icon.svg comment.
+  **Deliberate non-renames:** `/data/coop.db`, the `coop-data` volume, and the repo
+  directory keep their names — renaming would orphan an existing deployment's data (repo
+  rename stays Aaron's optional/later call, likely alongside the domain hunt). Demo seed
+  emails stay `@demo.coop` (upsert-keyed fixtures; changing them would collide usernames
+  on existing volumes). The jar **brand mark stayed** (it reads fine for Potluck; a new
+  mark can ride the domain decision) — so no recolor, and 03's contrast table stands.
+- **SPEC.md rewritten** (the Round-1 rewrite REWORK's header promised): mutual-aid
+  framing, the I2 principles (at-cost · orders-at-cost/shares-gifts · transparency
+  within granted scope · sovereignty · low ceremony · net-number · demonstrably-works),
+  network domain model (Membership/Connection/invites/admin + the attribution rule),
+  updated flows (connect/onboard/switch), auth/testing requirements as built, and the
+  four-round build plan with Round 1 marked shipped.
+- **Blueprints amended** (00 decision 9/10 rewrite + Round-1 preamble; 01 gained the
+  "Round 1 deltas" section, the capability × grant authz matrix replacing
+  "everyone sees everything", amended invariants 3/4/5/10 with the snapshot-household
+  attribution + money-moment reach re-verification, and the two new migrations; 02
+  section-by-section scoping/switcher/connections/onboarding amendments with superseded
+  v1 text struck through in place; 03 rebrand-was-names-only note + stale tab-set
+  comment fixed; 04 rebrand/non-rename preamble, per-user push dedupe, bootstrap-as-
+  admin-genesis, and the recorded decision that `/api/images` stays session-only for
+  now, mitigated by unguessable 16-random-byte filenames). 00/02/04 were subagent-
+  drafted against REWORK/PLAN/the code and spot-verified; 01/03 hand-edited.
+- README retitled with the network framing, seeded-login/topology notes, and a "grow
+  in-app" onboarding section under Go live (bootstrap = instance genesis; member vs
+  household invites; connect by @handle). CLAUDE.md current-state refreshed.
+
+**Round 2 (needs & surpluses) is next** — design locked in REWORK.md §F, nothing built.
+The deferred list (notifications round, federation build-out, capability-hiding polish
+for non-Owner affordances, connection-scoped image serving, per-invite capability
+presets) is unchanged and recorded across REWORK.md + the slice notes above.
+
 ### Round 1 slice 4 — onboarding + instance admin
 
 **2026-07-04 — done.** New households join along trust edges (A1), signed-in users pick up

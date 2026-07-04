@@ -4,6 +4,10 @@ Fixes the dark-mode breakage: slice-1 pages hardcode light palette classes (`bg-
 `globals.css` flips `body` colors via `prefers-color-scheme` → white cards on near-black text-inverted pages.
 Fix = semantic tokens only. System preference only, **no theme toggle in v1**.
 
+**Potluck rebrand (2026-07-04): names/copy only.** Tokens, the emerald accent, and the
+jar brand mark all stayed — the contrast table below remains verified as-is. Any future
+recolor or new mark must redo §5's rationale and §7's WCAG rows, not just swap values.
+
 Feel: warm, calm, domestic — stone neutrals + emerald, generous whitespace, no SaaS chrome. High contrast for
 phone-in-a-basement use: every text pair below clears WCAG AA 4.5:1 (ratios verified with the WCAG formula, table at end).
 
@@ -126,7 +130,7 @@ phone-in-a-basement use: every text pair below clears WCAG AA 4.5:1 (ratios veri
 // Badge ("your household", "on loan", lot codes)
 <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
 
-// Tab bar (bottom nav, arrives slice 3: Pantries · Receive · Ledger · Lending)
+// Tab bar (bottom nav; live set since the orders round: Pantries · Orders · Ledger · Items · More)
 <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)]">
   <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-accent">        {/* active */}
   <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-text-muted">    {/* inactive */}

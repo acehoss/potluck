@@ -16,14 +16,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Private Coop",
+  title: "Potluck",
   description: "Share your pantry with people you trust, at cost.",
   // iOS installed-PWA chrome (blueprint 04 §4). The apple-touch-icon is a
   // committed PNG in public/ (regenerate via scripts/generate-icons.ts).
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Coop",
+    title: "Potluck",
   },
   icons: {
     apple: "/apple-touch-icon.png",

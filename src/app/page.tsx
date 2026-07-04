@@ -81,7 +81,7 @@ export default async function PantriesPage() {
       <header className="flex items-center justify-between gap-4">
         <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
           <BrandMark className="size-6 text-accent" />
-          Private Coop
+          Potluck
         </h1>
         <p className="text-sm text-text-muted">{user.name}</p>
       </header>

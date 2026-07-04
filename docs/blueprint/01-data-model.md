@@ -1,8 +1,13 @@
-# 01 — Data model & money invariants (slices 2–6)
+# 01 — Data model & money invariants (slices 2–6, amended for Potluck Round 1)
 
 Extends the live slice-1 schema (`prisma/schema.prisma`). One migration per slice, additive only.
 SQLite via Prisma 7: **no native enums** — enum-ish columns are `String`, validated by zod at the
 tRPC boundary with exported string-literal unions in `src/server/domain.ts`.
+
+**Round 1 (network core, shipped 2026-07-04) amendments are folded in below** — see the
+"Round 1 deltas" section for the new models and the attribution rule, the rewritten authz
+matrix, and the amended invariants 3/4/5/10. The v1 model snippets are kept as history;
+`prisma/schema.prisma` is the source of truth.
 
 ## Decisions (rationale inline below)
 
@@ -148,7 +153,42 @@ model Loan {
 }
 ```
 
-Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_ledger` (Take, LedgerEntry) · `slice4_adjustments` (Adjustment, `User.ledgerSeenAt DateTime?`) · `slice5_extraction` (3 nullable columns on Restock + `RestockImage.originalSha256 String?` for fixture-mode extraction, 04 §3) · `slice6_lending` (Item, Loan) · `slice7_push` (PushSubscription) · `tax_fees_receipt_text` (2026-07-03 polish: tax/fee/excluded columns) · `orders_reserved` (2026-07-03: `Lot.reservedCount`, `Order`, `OrderLine`; D9). Back-relations on Household/User/Pantry added in the same migration that needs them.
+Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_ledger` (Take, LedgerEntry) · `slice4_adjustments` (Adjustment, `User.ledgerSeenAt DateTime?`) · `slice5_extraction` (3 nullable columns on Restock + `RestockImage.originalSha256 String?` for fixture-mode extraction, 04 §3) · `slice6_lending` (Item, Loan) · `slice7_push` (PushSubscription) · `tax_fees_receipt_text` (2026-07-03 polish: tax/fee/excluded columns) · `orders_reserved` (2026-07-03: `Lot.reservedCount`, `Order`, `OrderLine`; D9) · `20260703100000_network_core` (Round 1: Membership/Connection/InstanceSettings, username/slug, per-household Product with duplication backfill, shared flags, attribution snapshots, LedgerSeen re-key — data-preserving, proven against a live volume) · `20260703120000_household_invites` (`Invite.kind` + `grantsJson`). Back-relations on Household/User/Pantry added in the same migration that needs them.
+
+## Round 1 deltas (network core, 2026-07-04)
+
+New models — see `prisma/schema.prisma` for full definitions; REWORK.md for rationale:
+
+- **`Membership`** (user↔household, `@@unique([userId, householdId])`) replaces
+  `User.householdId`. Eleven boolean capability flags (`src/server/capabilities.ts`;
+  REWORK's `order` flag ships as `placeOrders` — SQL-keyword collision); Owner/Adult/
+  Teen/Child are presets, not schema. Requests resolve a sticky ACTING household
+  (cookie, validated against live memberships) behind the legacy `ctx.user.householdId`
+  shape.
+- **`Connection`** (canonical pair `householdAId < householdBId`, unique; status
+  `PENDING | ACTIVE | SEVERED`) with two directional grant sets (`aGrants*`/`bGrants*`:
+  pantry, lending, recipes, shareTo, shareFrom, reshare). The grant/capability choke
+  point is `src/server/authz.ts`. Severing auto-cancels open orders across the pair and
+  releases reservations in the same transaction (B6); ledger history and net survive.
+- **`InstanceSettings`** (singleton `id='instance'`) + `User.isInstanceAdmin` +
+  `User.username` / `Household.slug` (unique, `[a-z0-9_-]`) + `Invite.kind`/`grantsJson`
+  (member vs found-a-household invites) + `Pantry.shared`/`Item.shared` +
+  `Product.householdId` (catalog owner = the household whose pantry holds its lots).
+
+**The attribution rule (supersedes the "household derived via taker/borrower" comments
+in the v1 snippets below):** a user may hold N memberships, so money-bearing rows
+snapshot their household at the money moment and NEVER re-derive it from the user —
+`Take.householdId` (stamped at pickup from `Order.householdId`, which is also the TAKE
+entry's debtor), `Loan.borrowerHouseholdId` (stamped at checkout = the LOAN_FEE debtor),
+`Restock.purchaserHouseholdId` (already explicit), `Order.householdId` (already
+explicit). `LedgerSeen` is keyed `(userId, ownHouseholdId, counterpartyHouseholdId)`.
+Undo/return authz reads the snapshots.
+
+**Reach is re-verified at the money moment**, not only at draft/submit time: order
+pickup asserts the pantry grant is still ACTIVE; restock finalize asserts the purchaser
+connection is still ACTIVE before posting the credit; settle/adjust require a connection
+edge in ANY status (severed pairs stay settleable per B6; never-connected households are
+unreachable and read as 404).
 
 ## Key server logic (canonical snippets)
 
@@ -197,20 +237,34 @@ const [{ net }] = await db.$queryRaw<[{ net: number | null }]>`
      OR (creditorHouseholdId = ${them} AND debtorHouseholdId = ${me})`;
 ```
 
-## Authz matrix (everyone sees everything; writes below)
+## Authz matrix (rewritten for Round 1: capability × grant × shared flag)
 
-| Operation | Allowed |
-| --- | --- |
-| Create/edit a DRAFT restock | any coop member (trust assumed; purchaser may differ from owner) |
-| Finalize / delete a DRAFT restock | restock `createdBy`, or member of the purchaser household (finalize posts money and delete destroys receipt images — not open to everyone) |
-| Correct a RESTOCK_CREDIT | member of purchaser **or** pantry-owner household (see Immutability) |
-| Take from any lot | any coop member |
-| Undo/edit a take | member of the taking household |
-| Recount / write-off | member of the **pantry-owning household only** (ancestral spec) |
-| Manual ADJUSTMENT entry | any member, but own household must be creditor or debtor; creation **notifies the counterparty household** (SPEC §4) — in-app "new" flag at slice 4, push at slice 7 |
-| Record SETTLEMENT | member of payer or payee household |
-| Create/edit Item, edit feeCents | member of owning household |
-| Loan checkout (borrower = self) / return | checkout: any member; return: borrower's or owner's household |
+The v1 premise "everyone sees everything" is gone (REWORK B4). **Reads** are
+connection-scoped: your households' data, plus what ACTIVE connections grant (their
+SHARED pantries/items under the pantry/lending grants; a pair's ledger visible only to
+its two households). Visibility failures read as **404** (existence never leaks);
+capability failures on visible things are **403**. **Writes** ("acting" = the acting
+household's membership flags):
+
+| Operation | Capability (acting membership) | Cross-household reach |
+| --- | --- | --- |
+| Create/edit/finalize/abandon a DRAFT restock; removeImage; setUnitPhoto | `receiveStock`, **acting household must own the pantry** (a connected purchaser is credited via `purchaserHouseholdId`, not by driving the wizard) | purchaser must be the acting household or an ACTIVELY connected one; re-verified at finalize |
+| Correct a RESTOCK_CREDIT / void-in-error | `settleMoney`, member of purchaser **or** pantry-owner household | — |
+| Order draft/edit/cancel | `placeOrders` | pantry grant + `Pantry.shared` (via `loadOrderableLot`) |
+| Order submit, and any edit to a SUBMITTED cross-household order | `spend` (own-pantry: `placeOrders`) | pantry grant, re-verified at pickup |
+| Order startPicking / markReady / decline | `fulfill`, pantry-owner household | — |
+| Order pickup (THE money event) | requester side: `spend` (cross) / `placeOrders` (own); owner side: `fulfill` | pantry grant re-asserted before posting |
+| Undo a take | `placeOrders`, acting household = `Take.householdId` snapshot | — |
+| Recount / write-off | `adjustInventory`, pantry-owner household only | — |
+| Manual ADJUSTMENT / SETTLEMENT | `settleMoney`, own household one of the pair | connection edge in ANY status (severed pairs settleable, B6) |
+| Create/edit Item | `lendBorrow`, owner household; fee > 0 / fee changes add `settleMoney`; shared-flag changes add `manageHousehold` | — |
+| Loan checkout (borrower = acting user) | `lendBorrow`; + `spend` when a fee posts cross-household | lending grant + `Item.shared` |
+| Loan return / undo checkout | `lendBorrow`, borrower-snapshot or owner household | works across a severed edge (loans run to return) |
+| Member invites | `manageHousehold` | — |
+| Household invites (found a new household) | `manageConnections` + the instance-admin growth toggle | accepted invite mints the ACTIVE first edge |
+| Connection request/respond/setGrants/sever | `manageConnections`; grants edited unilaterally, own side only | — |
+| Pantry create / shared flag | `manageHousehold`, own household | — |
+| Instance settings (growth toggle) / admin usage view | instance admin (`User.isInstanceAdmin`) | sees operational usage only, never content |
 
 ## Immutability once referenced
 
@@ -225,13 +279,13 @@ const [{ net }] = await db.$queryRaw<[{ net: number | null }]>`
 
 1. Every `LedgerEntry.amountCents` is a positive integer; `creditorHouseholdId ≠ debtorHouseholdId`. No floats anywhere; all `*Cents` are `Int`.
 2. Antisymmetry is by construction: net(A,B) from the query above equals −net(B,A) (single table, symmetric predicate).
-3. For every TAKE entry: `amountCents = take.quantity × lot.unitCostCents` exactly, and taker household ≠ lot's pantry-owner household.
-4. Own-household takes have `costCents = 0` and **no** ledger entry.
-5. Exactly one **unreversed** RESTOCK_CREDIT per finalized restock where purchaser ≠ pantry owner, with `amountCents = Σ(receivedCount × unitCostCents)` over its lots; none otherwise. Reversed credits from the correct-credit op keep their `restockId` for the audit trail. Held-back units never appear in any ledger amount.
+3. For every TAKE entry: `amountCents = take.quantity × lot.unitCostCents` exactly, and the take's **snapshot** household (`Take.householdId`, = the order's requester household = the entry's debtor) ≠ lot's pantry-owner household. Cross-household takes additionally required an ACTIVE pantry grant at pickup time (Round 1).
+4. Own-household takes (snapshot household = pantry owner) have `costCents = 0` and **no** ledger entry.
+5. Exactly one **unreversed** RESTOCK_CREDIT per finalized restock where purchaser ≠ pantry owner, with `amountCents = Σ(receivedCount × unitCostCents)` over its lots; none otherwise. Reversed credits from the correct-credit op keep their `restockId` for the audit trail. Held-back units never appear in any ledger amount. The purchaser's connection must be ACTIVE at finalize (Round 1).
 6. Every REVERSAL has a unique `reversesId`, identical `amountCents`, swapped creditor/debtor; when it reverses a TAKE, the take's `quantity` was returned to `lot.remainingCount` in the same tx.
 7. `unitCostCents = Math.round(lineTotalCents / purchasedCount)`; per-lot paper drift `|lineTotalCents − purchasedCount × unitCostCents| ≤ ⌈purchasedCount / 2⌉` cents.
 8. Recounts and write-offs never create ledger entries in v1 (owner eats the cost); the `WRITE_OFF` ledger type is reserved for the post-v1 shared write-off door.
 9. For every lot: `remainingCount = receivedCount − Σ(active take quantities) + Σ(adjustment countAfter − countBefore)`, and `remainingCount ≥ 0` at all times (guarded by the conditional decrement).
-10. LOAN_FEE posts at checkout iff `loan.feeCents > 0` **and** borrower household ≠ item household, with `amountCents = loan.feeCents` (creditor = item owner).
+10. LOAN_FEE posts at checkout iff `loan.feeCents > 0` **and** the borrower **snapshot** household (`Loan.borrowerHouseholdId`, stamped at checkout) ≠ item household, with `amountCents = loan.feeCents` (creditor = item owner). Cross-household checkouts additionally required the lending grant + `Item.shared` (Round 1).
 11. SETTLEMENT: creditor = payer, debtor = payee — recording "$X from A to B" moves net(A,B) up by X (reduces A's debt).
 12. `restock.varianceCents = receiptTotalCents − Σ lineTotalCents`, informational only: it never enters the ledger (purchaser bears it in v1).
