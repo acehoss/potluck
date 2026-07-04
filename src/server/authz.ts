@@ -65,50 +65,52 @@ export const GRANT_PRESETS = {
 
 export type GrantPresetName = keyof typeof GRANT_PRESETS;
 
-type ConnectionRow = {
-  householdAId: string;
-  householdBId: string;
-  status: string;
-  aGrantsPantry: boolean;
-  aGrantsLending: boolean;
-  aGrantsRecipes: boolean;
-  aGrantsShareTo: boolean;
-  aGrantsShareFrom: boolean;
-  aGrantsReshare: boolean;
-  bGrantsPantry: boolean;
-  bGrantsLending: boolean;
-  bGrantsRecipes: boolean;
-  bGrantsShareTo: boolean;
-  bGrantsShareFrom: boolean;
-  bGrantsReshare: boolean;
+/** The six circle grant columns — a circle's stored bundle. */
+type CircleGrants = {
+  grantsPantry: boolean;
+  grantsLending: boolean;
+  grantsRecipes: boolean;
+  grantsShareTo: boolean;
+  grantsShareFrom: boolean;
+  grantsReshare: boolean;
 };
 
-/** The 6 write-ready Connection columns for one side's grant set. */
-export function grantColumns(side: 'a' | 'b', grants: GrantSet) {
-  const cap = (g: string) => g.charAt(0).toUpperCase() + g.slice(1);
-  return Object.fromEntries(GRANTS.map((g) => [`${side}Grants${cap(g)}`, grants[g]]));
+/** A circle's grant columns as a GrantSet; a null circle grants nothing. */
+export function circleToGrantSet(circle: CircleGrants | null): GrantSet {
+  if (!circle) return grantPreset([]);
+  return {
+    pantry: circle.grantsPantry,
+    lending: circle.grantsLending,
+    recipes: circle.grantsRecipes,
+    shareTo: circle.grantsShareTo,
+    shareFrom: circle.grantsShareFrom,
+    reshare: circle.grantsReshare,
+  };
 }
 
-/** The grant set `granter` extends to the other side of `connection`. */
-export function grantsFrom(connection: ConnectionRow, granterHouseholdId: string): GrantSet {
+/** A connection with both sides' assigned circles loaded (grantsFrom's input). */
+type ConnectionWithCircles = {
+  householdAId: string;
+  householdBId: string;
+  aCircle: CircleGrants | null;
+  bCircle: CircleGrants | null;
+};
+
+/** The Prisma include that makes a Connection usable by grantsFrom. */
+const CIRCLE_INCLUDE = { aCircle: true, bCircle: true } as const;
+
+/**
+ * The grant set `granter` extends to the other side of `connection` (P4): the
+ * bundle of the circle the granter placed the counterparty into. API-stable
+ * with the pre-circles version — same name, same GrantSet return — so every
+ * consumer keeps working once the connection row carries its circles.
+ */
+export function grantsFrom(
+  connection: ConnectionWithCircles,
+  granterHouseholdId: string,
+): GrantSet {
   const side = connection.householdAId === granterHouseholdId ? 'a' : 'b';
-  return side === 'a'
-    ? {
-        pantry: connection.aGrantsPantry,
-        lending: connection.aGrantsLending,
-        recipes: connection.aGrantsRecipes,
-        shareTo: connection.aGrantsShareTo,
-        shareFrom: connection.aGrantsShareFrom,
-        reshare: connection.aGrantsReshare,
-      }
-    : {
-        pantry: connection.bGrantsPantry,
-        lending: connection.bGrantsLending,
-        recipes: connection.bGrantsRecipes,
-        shareTo: connection.bGrantsShareTo,
-        shareFrom: connection.bGrantsShareFrom,
-        reshare: connection.bGrantsReshare,
-      };
+  return circleToGrantSet(side === 'a' ? connection.aCircle : connection.bCircle);
 }
 
 /** The connection row for a pair (canonical order), any status, or null. */
@@ -116,7 +118,85 @@ export function getConnection(dbc: Dbc, householdId1: string, householdId2: stri
   const [householdAId, householdBId] = [householdId1, householdId2].sort();
   return dbc.connection.findUnique({
     where: { householdAId_householdBId: { householdAId, householdBId } },
+    include: CIRCLE_INCLUDE,
   });
+}
+
+export type CircleReach = { circleId: string; grants: GrantSet };
+
+/**
+ * The circle `ownerHouseholdId` placed `viewerHouseholdId` into on their ACTIVE
+ * edge — the resolution behind every cross-household reach check. Returns the
+ * circle id (for SELECT-scope lookups) plus its grants, or null when there is
+ * no ACTIVE edge or the owner's side is unassigned. Own-household is never a
+ * grant question — callers branch on it first.
+ */
+export async function resolveGrantingCircle(
+  dbc: Dbc,
+  ownerHouseholdId: string,
+  viewerHouseholdId: string,
+): Promise<CircleReach | null> {
+  if (ownerHouseholdId === viewerHouseholdId) return null;
+  const conn = await getConnection(dbc, ownerHouseholdId, viewerHouseholdId);
+  if (!conn || conn.status !== 'ACTIVE') return null;
+  const ownerIsA = conn.householdAId === ownerHouseholdId;
+  const circleId = ownerIsA ? conn.aCircleId : conn.bCircleId;
+  const circle = ownerIsA ? conn.aCircle : conn.bCircle;
+  if (!circleId || !circle) return null;
+  return { circleId, grants: circleToGrantSet(circle) };
+}
+
+/**
+ * The circle-visibility half of the reach rule (P4): a resource is visible to a
+ * circle when its mode is ALL, never when PRIVATE, and for SELECT only when a
+ * scope row ties it to that circle (`scoped`).
+ */
+export function visibleUnderCircle(visibility: string, scoped: boolean): boolean {
+  if (visibility === 'ALL') return true;
+  if (visibility === 'PRIVATE') return false;
+  return scoped; // SELECT
+}
+
+/**
+ * Full single-resource reach (P4): the viewer reaches the owner's resource iff
+ * an ACTIVE edge's circle grants `grant` AND the resource is visible to that
+ * circle. `isScoped` is consulted ONLY for SELECT resources — callers pass a
+ * thunk that looks up the resource↔circle join so ALL/PRIVATE cost no query.
+ */
+export async function reachesResource(
+  dbc: Dbc,
+  ownerHouseholdId: string,
+  viewerHouseholdId: string,
+  grant: Grant,
+  resource: { visibility: string },
+  isScoped: (circleId: string) => Promise<boolean> | boolean,
+): Promise<boolean> {
+  const circle = await resolveGrantingCircle(dbc, ownerHouseholdId, viewerHouseholdId);
+  if (!circle || !circle.grants[grant]) return false;
+  if (resource.visibility !== 'SELECT') return visibleUnderCircle(resource.visibility, false);
+  return !!(await isScoped(circle.circleId));
+}
+
+/**
+ * Contact-layer member reach (REWORK P4/P5) — exported for Round C. A member is
+ * NOT gated by one of the six grants (members ride the ACTIVE edge itself), only
+ * by the member's own visibility mode against the circle the owner placed the
+ * viewer into. The card UI is Round C's; this is the reach primitive.
+ */
+export async function reachesMember(
+  dbc: Dbc,
+  ownerHouseholdId: string,
+  viewerHouseholdId: string,
+  member: { id: string; visibility: string },
+): Promise<boolean> {
+  const circle = await resolveGrantingCircle(dbc, ownerHouseholdId, viewerHouseholdId);
+  if (!circle) return false;
+  if (member.visibility !== 'SELECT') return visibleUnderCircle(member.visibility, false);
+  return (
+    (await dbc.membershipCircle.findUnique({
+      where: { membershipId_circleId: { membershipId: member.id, circleId: circle.circleId } },
+    })) !== null
+  );
 }
 
 /**
@@ -145,9 +225,11 @@ export async function activeConnectionsOf(dbc: Dbc, householdId: string) {
       status: 'ACTIVE',
       OR: [{ householdAId: householdId }, { householdBId: householdId }],
     },
+    include: CIRCLE_INCLUDE,
   });
   return rows.map((row) => {
-    const counterpartyId = row.householdAId === householdId ? row.householdBId : row.householdAId;
+    const iAmA = row.householdAId === householdId;
+    const counterpartyId = iAmA ? row.householdBId : row.householdAId;
     return {
       connectionId: row.id,
       counterpartyId,
@@ -155,6 +237,11 @@ export async function activeConnectionsOf(dbc: Dbc, householdId: string) {
       theyGrant: grantsFrom(row, counterpartyId),
       /** What we let the counterparty do with ours. */
       weGrant: grantsFrom(row, householdId),
+      /** The circle the counterparty placed US into — for SELECT-visibility of
+       *  THEIR resources (a bulk-scan counterpart to resolveGrantingCircle). */
+      theirCircleId: iAmA ? row.bCircleId : row.aCircleId,
+      /** The circle WE placed the counterparty into (Round C member scoping). */
+      ourCircleId: iAmA ? row.aCircleId : row.bCircleId,
     };
   });
 }
@@ -172,8 +259,17 @@ export async function loadAccessiblePantry(dbc: Dbc, user: SessionUser, pantryId
   if (!pantry) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pantry not found.' });
   const isOwn = pantry.householdId === user.householdId;
   if (!isOwn) {
-    const visible =
-      pantry.shared && (await hasActiveGrant(dbc, pantry.householdId, user.householdId, 'pantry'));
+    const visible = await reachesResource(
+      dbc,
+      pantry.householdId,
+      user.householdId,
+      'pantry',
+      pantry,
+      (circleId) =>
+        dbc.pantryCircle
+          .findUnique({ where: { pantryId_circleId: { pantryId: pantry.id, circleId } } })
+          .then(Boolean),
+    );
     if (!visible) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pantry not found.' });
   }
   return { pantry, isOwn };

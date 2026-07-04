@@ -20,6 +20,7 @@ import 'dotenv/config';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { hashSync } from '@node-rs/argon2';
 import { OWNER_PRESET } from '../src/server/capabilities';
+import { ensurePresetCircles } from '../src/server/circles';
 import {
   firstAvailableHandle,
   slugBaseFromName,
@@ -72,6 +73,8 @@ async function main() {
       ),
     },
   });
+  // Every household starts with the three preset circles (REWORK P4).
+  await ensurePresetCircles(db, household.id);
 
   // The very first user of the instance is the instance admin (REWORK A1/A4).
   const isFirstUser = (await db.user.count()) === 0;

@@ -6,63 +6,43 @@ import { useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
 /**
- * Connection management (REWORK B1/B2/B6): the /more card where a household
- * requests, answers, tunes, and severs its edges. Every grant checkbox is OUR
- * side only — what we let THEM do with our stuff — editable unilaterally at
- * any time. Presets are starting points, not walls.
+ * Connection management (REWORK P4 circles): the /more card where a household
+ * requests, answers, re-circles, and severs its edges. Grants are no longer
+ * edited per-connection — each side places the OTHER household into one of ITS
+ * OWN circles (a named grant bundle) and can move them anytime, unilaterally.
+ * What THEY grant us is shown as a plain readable summary; their circle NAME is
+ * their private business and never surfaces here.
  */
 
-const GRANT_LABELS = [
-  ['pantry', 'Pantry — browse & order our shared pantries'],
-  ['lending', 'Lending — borrow our shared items'],
-  ['recipes', 'Recipes — browse our recipe book (soon)'],
-  ['shareTo', 'They receive our needs & surpluses (soon)'],
-  ['shareFrom', 'We receive theirs (soon)'],
-  ['reshare', 'They may reshare our posts onward (soon)'],
-] as const;
+export type Grant = 'pantry' | 'lending' | 'recipes' | 'shareTo' | 'shareFrom' | 'reshare';
+export type GrantSet = Record<Grant, boolean>;
+type Circle = { id: string; name: string; grants: GrantSet };
 
-type GrantSet = Record<(typeof GRANT_LABELS)[number][0], boolean>;
-
-const PRESETS: { name: string; label: string; grants: GrantSet }[] = [
-  {
-    name: 'neighbor',
-    label: 'Neighbor',
-    grants: {
-      pantry: false,
-      lending: false,
-      recipes: false,
-      shareTo: true,
-      shareFrom: true,
-      reshare: false,
-    },
-  },
-  {
-    name: 'friend',
-    label: 'Friend',
-    grants: {
-      pantry: true,
-      lending: true,
-      recipes: true,
-      shareTo: true,
-      shareFrom: true,
-      reshare: false,
-    },
-  },
-  {
-    name: 'family',
-    label: 'Family',
-    grants: {
-      pantry: true,
-      lending: true,
-      recipes: true,
-      shareTo: true,
-      shareFrom: true,
-      reshare: true,
-    },
-  },
+/** Plain-language grant labels (Walt rule) for the circle create/edit sheet. */
+export const GRANT_LABELS: { key: Grant; label: string }[] = [
+  { key: 'pantry', label: 'They can browse & order from shared pantries' },
+  { key: 'lending', label: 'They can borrow shared items' },
+  { key: 'recipes', label: 'They can see shared recipes' },
+  { key: 'shareTo', label: 'They see our needs & surpluses' },
+  { key: 'shareFrom', label: 'We see their needs & surpluses' },
+  { key: 'reshare', label: 'They can pass our posts along' },
 ];
 
-const cardClass = 'flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-4 shadow-sm';
+/** A short plain-language summary of what a grant bundle extends. */
+export function grantsSummary(g: GrantSet): string {
+  const parts: string[] = [];
+  if (g.pantry) parts.push('pantry');
+  if (g.lending) parts.push('lending');
+  if (g.recipes) parts.push('recipes');
+  if (g.shareTo || g.shareFrom) parts.push('shares');
+  if (g.reshare) parts.push('resharing');
+  if (parts.length === 0) return 'no access';
+  if (parts.length === 1 && parts[0] === 'shares') return 'shares only';
+  return parts.join(', ');
+}
+
+const cardClass =
+  'flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-4 shadow-sm';
 const primaryBtn =
   'min-h-11 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-contrast hover:bg-accent-strong disabled:bg-accent/50 disabled:text-accent-contrast/70';
 const secondaryBtn =
@@ -72,53 +52,63 @@ const dangerBtn =
 const inputClass =
   'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
 
-function GrantEditor({
+/**
+ * A radio-style circle picker (request / accept / move). Rows show the circle
+ * name plus a plain summary of what it grants — the same everywhere a household
+ * chooses which of ITS circles to place a counterparty in.
+ */
+function CirclePicker({
+  circles,
   value,
   onChange,
 }: {
-  value: GrantSet;
-  onChange: (next: GrantSet) => void;
+  circles: Circle[];
+  value: string | null;
+  onChange: (id: string) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-2">
-        {PRESETS.map((p) => (
-          <button
-            key={p.name}
-            type="button"
-            data-testid={`preset-${p.name}`}
-            onClick={() => onChange(p.grants)}
-            className="min-h-11 rounded-full border border-border-strong px-4 py-1.5 text-sm font-medium text-text hover:bg-surface-sunken"
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
-      <ul className="flex flex-col gap-1">
-        {GRANT_LABELS.map(([key, label]) => (
-          <li key={key}>
-            <label className="flex min-h-11 items-center gap-3 text-sm text-text">
-              <input
-                type="checkbox"
-                data-testid={`grant-${key}`}
-                checked={value[key]}
-                onChange={(e) => onChange({ ...value, [key]: e.target.checked })}
-                className="size-5 accent-[var(--color-accent)]"
-              />
-              {label}
-            </label>
-          </li>
-        ))}
-      </ul>
+    <div
+      className="flex flex-col gap-1"
+      data-testid="connection-circle-picker"
+      role="radiogroup"
+      aria-label="Circle"
+    >
+      {circles.map((c) => (
+        <label
+          key={c.id}
+          className="flex min-h-11 items-center gap-3 rounded-lg border border-border px-3 text-sm text-text"
+        >
+          <input
+            type="radio"
+            name="connection-circle"
+            data-testid={`connection-circle-option-${c.id}`}
+            checked={value === c.id}
+            onChange={() => onChange(c.id)}
+            className="size-5 accent-[var(--color-accent)]"
+          />
+          <span className="min-w-0">
+            <span className="font-medium">{c.name}</span>
+            <span className="block text-xs text-text-muted">{grantsSummary(c.grants)}</span>
+          </span>
+        </label>
+      ))}
     </div>
   );
 }
 
 function statusPill(status: string, requestedByUs: boolean) {
   if (status === 'ACTIVE')
-    return <span className="rounded-full bg-success-soft px-2.5 py-0.5 text-xs font-medium text-success">connected</span>;
+    return (
+      <span className="rounded-full bg-success-soft px-2.5 py-0.5 text-xs font-medium text-success">
+        connected
+      </span>
+    );
   if (status === 'SEVERED')
-    return <span className="rounded-full bg-danger-soft px-2.5 py-0.5 text-xs font-medium text-danger">severed</span>;
+    return (
+      <span className="rounded-full bg-danger-soft px-2.5 py-0.5 text-xs font-medium text-danger">
+        severed
+      </span>
+    );
   return (
     <span className="rounded-full bg-warn-soft px-2.5 py-0.5 text-xs font-medium text-text">
       {requestedByUs ? 'request sent' : 'wants to connect'}
@@ -126,17 +116,31 @@ function statusPill(status: string, requestedByUs: boolean) {
   );
 }
 
+/** Pick a sensible default circle to preselect (Friends-ish, else the first). */
+function defaultCircleId(circles: Circle[]): string | null {
+  if (circles.length === 0) return null;
+  const friend = circles.find((c) => c.name.toLowerCase() === 'friends');
+  return (friend ?? circles[0]).id;
+}
+
 export function ConnectionsCard() {
   const trpc = useTRPC();
   const router = useRouter();
   const queryClient = useQueryClient();
   const list = useQuery(trpc.connection.list.queryOptions());
+  const canManage = list.data?.canManage ?? false;
+  const circlesQuery = useQuery({
+    ...trpc.circle.list.queryOptions(),
+    enabled: canManage,
+    retry: false,
+  });
+  const circles: Circle[] = circlesQuery.data?.circles ?? [];
 
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [draftGrants, setDraftGrants] = useState<GrantSet | null>(null);
+  const [moveId, setMoveId] = useState<string | null>(null);
+  const [moveTo, setMoveTo] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [handle, setHandle] = useState('');
-  const [requestGrants, setRequestGrants] = useState<GrantSet>(PRESETS[1].grants);
+  const [requestCircle, setRequestCircle] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
@@ -159,11 +163,11 @@ export function ConnectionsCard() {
   const respond = useMutation(
     trpc.connection.respond.mutationOptions({ onSuccess: refresh, onError }),
   );
-  const setGrants = useMutation(
-    trpc.connection.setGrants.mutationOptions({
+  const assign = useMutation(
+    trpc.connection.assign.mutationOptions({
       onSuccess: () => {
-        setOpenId(null);
-        setDraftGrants(null);
+        setMoveId(null);
+        setMoveTo(null);
         refresh();
       },
       onError,
@@ -172,23 +176,20 @@ export function ConnectionsCard() {
   const sever = useMutation(trpc.connection.sever.mutationOptions({ onSuccess: refresh, onError }));
 
   if (!list.data) return null;
-  const { canManage, connections } = list.data;
+  const { connections } = list.data;
 
   return (
     <section data-testid="connections-card" className={cardClass}>
       <h2 className="text-lg font-semibold">Connections</h2>
       <p className="text-sm text-text-muted">
-        Households you&apos;re linked with. Each side controls what the other may do with its
-        own pantries, items, and posts — and can change that at any time.
+        Households you&apos;re linked with. You place each into one of your circles — that&apos;s
+        what decides how much they can do with your things — and can move them anytime.
       </p>
 
-      {connections.length === 0 && (
-        <p className="text-sm text-text-muted">No connections yet.</p>
-      )}
+      {connections.length === 0 && <p className="text-sm text-text-muted">No connections yet.</p>}
       <ul className="flex flex-col">
         {connections.map((c) => {
-          const expanded = openId === c.id;
-          const grants = draftGrants ?? c.weGrant;
+          const moving = moveId === c.id;
           return (
             <li
               key={c.id}
@@ -200,63 +201,114 @@ export function ConnectionsCard() {
                   <p className="truncate font-medium text-text">{c.counterparty.name}</p>
                   <p className="text-xs text-text-muted">@{c.counterparty.slug}</p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {statusPill(c.status, c.requestedByUs)}
-                  {canManage && c.status !== 'SEVERED' && !(c.status === 'PENDING' && !c.requestedByUs) && (
-                    <button
-                      type="button"
-                      data-testid="connection-edit"
-                      onClick={() => {
-                        setOpenId(expanded ? null : c.id);
-                        setDraftGrants(expanded ? null : { ...c.weGrant });
-                        setError(null);
-                      }}
-                      className="min-h-11 rounded-lg px-3 text-sm font-medium text-accent-strong hover:bg-surface-sunken"
-                    >
-                      {expanded ? 'Close' : 'Edit'}
-                    </button>
-                  )}
-                </div>
+                {statusPill(c.status, c.requestedByUs)}
               </div>
 
-              {/* Incoming request: answer it. */}
+              {/* ACTIVE / outgoing-PENDING: which of OUR circles they sit in,
+                  plus what THEY grant us (readable — never their circle name). */}
+              {c.status !== 'SEVERED' && !(c.status === 'PENDING' && !c.requestedByUs) && (
+                <div className="flex flex-col gap-1 text-sm">
+                  {c.myCircle && (
+                    <p className="text-text">
+                      In:{' '}
+                      <span data-testid="connection-circle" className="font-medium">
+                        {c.myCircle.name}
+                      </span>{' '}
+                      <span className="text-text-muted">({grantsSummary(c.myCircle.grants)})</span>
+                    </p>
+                  )}
+                  {c.status === 'ACTIVE' && (
+                    <p className="text-text-muted">
+                      They grant us: {grantsSummary(c.theyGrant)}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Incoming request: answer it, choosing a circle first. */}
               {canManage && c.status === 'PENDING' && !c.requestedByUs && (
                 <IncomingResponder
-                  onAccept={(g) =>
-                    respond.mutate({ connectionId: c.id, accept: true, grants: g })
+                  circles={circles}
+                  onAccept={(circleId) =>
+                    respond.mutate({ connectionId: c.id, accept: true, circleId })
                   }
                   onDecline={() => respond.mutate({ connectionId: c.id, accept: false })}
                   pending={respond.isPending}
                 />
               )}
 
-              {expanded && draftGrants && (
-                <div className="flex flex-col gap-3">
-                  <GrantEditor value={grants} onChange={setDraftGrants} />
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      data-testid="grants-save"
-                      disabled={setGrants.isPending}
-                      onClick={() => setGrants.mutate({ connectionId: c.id, grants })}
-                      className={primaryBtn}
-                    >
-                      Save grants
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="connection-sever"
-                      disabled={sever.isPending}
-                      onClick={() => {
-                        const verb = c.status === 'PENDING' ? 'Withdraw this request?' :
-                          'Sever this connection? Open orders are canceled; loans run to return; the balance and history stay.';
-                        if (window.confirm(verb)) sever.mutate({ connectionId: c.id });
-                      }}
-                      className={dangerBtn}
-                    >
-                      {c.status === 'PENDING' ? 'Withdraw' : 'Sever'}
-                    </button>
-                  </div>
+              {/* Move + sever controls (our side, any non-severed edge). */}
+              {canManage && c.status !== 'SEVERED' && !(c.status === 'PENDING' && !c.requestedByUs) && (
+                <div className="flex flex-col gap-2">
+                  {moving ? (
+                    <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+                      <p className="text-sm font-medium text-text">Move to which circle?</p>
+                      {circlesQuery.isError ? (
+                        <p role="alert" className="text-sm text-danger">
+                          {circlesQuery.error.message}
+                        </p>
+                      ) : (
+                        <CirclePicker
+                          circles={circles}
+                          value={moveTo}
+                          onChange={setMoveTo}
+                        />
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          data-testid="connection-move-save"
+                          disabled={assign.isPending || !moveTo}
+                          onClick={() =>
+                            moveTo && assign.mutate({ connectionId: c.id, circleId: moveTo })
+                          }
+                          className={primaryBtn}
+                        >
+                          Move
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMoveId(null);
+                            setMoveTo(null);
+                          }}
+                          className={secondaryBtn}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        data-testid="connection-move"
+                        onClick={() => {
+                          setMoveId(c.id);
+                          setMoveTo(c.myCircle?.id ?? defaultCircleId(circles));
+                          setError(null);
+                        }}
+                        className={secondaryBtn}
+                      >
+                        Move…
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="connection-sever"
+                        disabled={sever.isPending}
+                        onClick={() => {
+                          const verb =
+                            c.status === 'PENDING'
+                              ? 'Withdraw this request?'
+                              : 'Sever this connection? Open orders are canceled; loans run to return; the balance and history stay.';
+                          if (window.confirm(verb)) sever.mutate({ connectionId: c.id });
+                        }}
+                        className={dangerBtn}
+                      >
+                        {c.status === 'PENDING' ? 'Withdraw' : 'Sever'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </li>
@@ -270,6 +322,7 @@ export function ConnectionsCard() {
           data-testid="connect-open"
           onClick={() => {
             setConnectOpen(true);
+            setRequestCircle(defaultCircleId(circles));
             setError(null);
           }}
           className={secondaryBtn}
@@ -283,7 +336,11 @@ export function ConnectionsCard() {
           className="flex flex-col gap-3 rounded-lg border border-border p-3"
           onSubmit={(e) => {
             e.preventDefault();
-            request.mutate({ slug: handle, grants: requestGrants });
+            if (!requestCircle) {
+              setError('Pick a circle for them.');
+              return;
+            }
+            request.mutate({ slug: handle, circleId: requestCircle });
           }}
         >
           <label className="flex flex-col gap-1 text-sm font-medium text-text">
@@ -302,10 +359,21 @@ export function ConnectionsCard() {
               Ask them for it — there&apos;s no browsing or discovery, on purpose.
             </span>
           </label>
-          <p className="text-sm font-medium text-text">What they may do with our things:</p>
-          <GrantEditor value={requestGrants} onChange={setRequestGrants} />
+          <p className="text-sm font-medium text-text">Put them in which circle?</p>
+          {circlesQuery.isError ? (
+            <p role="alert" className="text-sm text-danger">
+              {circlesQuery.error.message}
+            </p>
+          ) : (
+            <CirclePicker circles={circles} value={requestCircle} onChange={setRequestCircle} />
+          )}
           <div className="flex gap-2">
-            <button type="submit" data-testid="connect-submit" disabled={request.isPending} className={primaryBtn}>
+            <button
+              type="submit"
+              data-testid="connect-submit"
+              disabled={request.isPending}
+              className={primaryBtn}
+            >
               Send request
             </button>
             <button type="button" onClick={() => setConnectOpen(false)} className={secondaryBtn}>
@@ -325,14 +393,23 @@ export function ConnectionsCard() {
 }
 
 /**
- * Mint a NEW-household invite (REWORK A1): the accepted link founds a
- * household whose first connection edge is ours, carrying this grant set on
- * both sides. The server enforces the instance-admin growth toggle.
+ * Mint a NEW-household invite (REWORK A1): the accepted link founds a household
+ * whose first connection edge is ours, carrying this grant set on both sides.
+ * This bootstrap path still takes a raw grant bundle (there is no circle to
+ * pick on the far side yet); the server maps it to a circle. The instance-admin
+ * growth toggle is enforced server-side.
  */
 function InviteHousehold() {
   const trpc = useTRPC();
   const [open, setOpen] = useState(false);
-  const [grants, setGrants] = useState<GrantSet>(PRESETS[1].grants);
+  const [grants, setGrants] = useState<GrantSet>({
+    pantry: true,
+    lending: true,
+    recipes: true,
+    shareTo: true,
+    shareFrom: true,
+    reshare: false,
+  });
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -365,9 +442,27 @@ function InviteHousehold() {
         household, connected to yours from day one. Works once, expires in 7 days.
       </p>
       <p className="text-sm font-medium text-text">What you&apos;ll grant each other to start:</p>
-      <GrantEditor value={grants} onChange={setGrants} />
+      <ul className="flex flex-col gap-1">
+        {GRANT_LABELS.map(({ key, label }) => (
+          <li key={key}>
+            <label className="flex min-h-11 items-center gap-3 text-sm text-text">
+              <input
+                type="checkbox"
+                data-testid={`invite-grant-${key}`}
+                checked={grants[key]}
+                onChange={(e) => setGrants({ ...grants, [key]: e.target.checked })}
+                className="size-5 accent-[var(--color-accent)]"
+              />
+              {label}
+            </label>
+          </li>
+        ))}
+      </ul>
       {link ? (
-        <p data-testid="household-invite-url" className="break-all rounded-lg bg-surface-sunken p-3 font-mono text-xs text-text">
+        <p
+          data-testid="household-invite-url"
+          className="break-all rounded-lg bg-surface-sunken p-3 font-mono text-xs text-text"
+        >
           {link}
         </p>
       ) : (
@@ -395,17 +490,19 @@ function InviteHousehold() {
   );
 }
 
-/** Accept-with-grants / decline block for an incoming request. */
+/** Accept-with-circle / decline block for an incoming request. */
 function IncomingResponder({
+  circles,
   onAccept,
   onDecline,
   pending,
 }: {
-  onAccept: (grants: GrantSet) => void;
+  circles: Circle[];
+  onAccept: (circleId: string) => void;
   onDecline: () => void;
   pending: boolean;
 }) {
-  const [grants, setGrants] = useState<GrantSet>(PRESETS[1].grants);
+  const [circleId, setCircleId] = useState<string | null>(defaultCircleId(circles));
   const [choosing, setChoosing] = useState(false);
   if (!choosing) {
     return (
@@ -413,7 +510,10 @@ function IncomingResponder({
         <button
           type="button"
           data-testid="connection-accept"
-          onClick={() => setChoosing(true)}
+          onClick={() => {
+            setCircleId(defaultCircleId(circles));
+            setChoosing(true);
+          }}
           className={primaryBtn}
         >
           Accept…
@@ -432,17 +532,17 @@ function IncomingResponder({
   }
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm font-medium text-text">What THEY may do with our things:</p>
-      <GrantEditor value={grants} onChange={setGrants} />
+      <p className="text-sm font-medium text-text">Put them in which circle?</p>
+      <CirclePicker circles={circles} value={circleId} onChange={setCircleId} />
       <div className="flex gap-2">
         <button
           type="button"
           data-testid="connection-accept-confirm"
-          disabled={pending}
-          onClick={() => onAccept(grants)}
+          disabled={pending || !circleId}
+          onClick={() => circleId && onAccept(circleId)}
           className={primaryBtn}
         >
-          Accept & connect
+          Accept &amp; connect
         </button>
         <button type="button" onClick={() => setChoosing(false)} className={secondaryBtn}>
           Back

@@ -1,36 +1,35 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
-import {
-  GRANTS,
-  type GrantSet,
-  getConnection,
-  grantColumns,
-  grantsFrom,
-  requireCapability,
-} from '../authz';
+import { circleToGrantSet, getConnection, grantsFrom, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
 /**
- * Connection management (REWORK B1/B2/B6): request/accept/sever by household
- * handle, plus unilateral grant editing. One row per pair (canonical order);
- * each side owns exactly its own grant set — "the resource owner is
- * authoritative" — and may tighten or revoke at any time without the other's
- * consent. All mutations need the manageConnections capability on the ACTING
- * membership.
+ * Connection management (REWORK B1/B6, Phase-2 P4 circles): request/accept/
+ * sever by household handle. Grants are no longer edited per-connection — each
+ * side assigns the OTHER household into one of ITS OWN circles (a named grant
+ * bundle) and re-assigns unilaterally, without the other's consent ("resource
+ * owner is authoritative"). All mutations need the manageConnections capability
+ * on the ACTING membership.
  */
 
-const grantSetSchema = z.object(
-  Object.fromEntries(GRANTS.map((g) => [g, z.boolean()])) as Record<
-    (typeof GRANTS)[number],
-    z.ZodBoolean
-  >,
-);
-
-/** Column prefix for the side of `connection` that `householdId` occupies. */
+/** Which side of `connection` the acting household occupies. */
 function sideOf(connection: { householdAId: string }, householdId: string): 'a' | 'b' {
   return connection.householdAId === householdId ? 'a' : 'b';
+}
+
+/** Load an OWN circle by id, else 404 (a foreign/absent circle never resolves). */
+async function requireOwnCircle(
+  tx: Prisma.TransactionClient,
+  householdId: string,
+  circleId: string,
+) {
+  const circle = await tx.circle.findUnique({ where: { id: circleId } });
+  if (!circle || circle.householdId !== householdId) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No such circle.' });
+  }
+  return circle;
 }
 
 /**
@@ -83,6 +82,8 @@ export const connectionRouter = router({
       include: {
         householdA: { select: { id: true, name: true, slug: true } },
         householdB: { select: { id: true, name: true, slug: true } },
+        aCircle: true,
+        bCircle: true,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -90,14 +91,21 @@ export const connectionRouter = router({
       yourHouseholdId: me,
       canManage: ctx.user.activeMembership.manageConnections,
       connections: rows.map((row) => {
-        const counterparty = row.householdAId === me ? row.householdB : row.householdA;
+        const iAmA = row.householdAId === me;
+        const counterparty = iAmA ? row.householdB : row.householdA;
+        const myCircle = iAmA ? row.aCircle : row.bCircle;
         return {
           id: row.id,
           counterparty: { id: counterparty.id, name: counterparty.name, slug: counterparty.slug },
           status: row.status,
           /** Whether the ACTING household initiated the (pending) request. */
           requestedByUs: row.requestedByHouseholdId === me,
-          weGrant: grantsFrom(row, me),
+          /** The circle WE placed them into — id/name/grants, ours to show. */
+          myCircle: myCircle
+            ? { id: myCircle.id, name: myCircle.name, grants: circleToGrantSet(myCircle) }
+            : null,
+          /** What they extend to US — effective grants only; their circle NAME
+           *  is their private organization and never leaks here. */
           theyGrant: grantsFrom(row, counterparty.id),
           activatedAt: row.activatedAt?.toISOString() ?? null,
           severedAt: row.severedAt?.toISOString() ?? null,
@@ -114,11 +122,17 @@ export const connectionRouter = router({
    * returns to PENDING with both grant sets reset.
    */
   request: protectedProcedure
-    .input(z.object({ slug: z.string().trim().toLowerCase().min(1).max(64), grants: grantSetSchema }))
+    .input(
+      z.object({
+        slug: z.string().trim().toLowerCase().min(1).max(64),
+        circleId: z.string().min(1),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'manageConnections');
       const me = ctx.user.householdId;
       return dbTransaction(async (tx) => {
+        await requireOwnCircle(tx, me, input.circleId);
         const target = await tx.household.findUnique({ where: { slug: input.slug } });
         if (!target) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'No household with that handle.' });
@@ -138,14 +152,15 @@ export const connectionRouter = router({
         }
         const [householdAId, householdBId] = [me, target.id].sort();
         const mySide = householdAId === me ? 'a' : 'b';
-        const otherSide = mySide === 'a' ? 'b' : 'a';
+        // Requester's side = their chosen circle; the addressee's stays null
+        // until they accept (PENDING carries exactly one assigned side).
         const data = {
           status: 'PENDING',
           requestedByHouseholdId: me,
           activatedAt: null,
           severedAt: null,
-          ...grantColumns(mySide, input.grants),
-          ...grantColumns(otherSide, Object.fromEntries(GRANTS.map((g) => [g, false])) as GrantSet),
+          aCircleId: mySide === 'a' ? input.circleId : null,
+          bCircleId: mySide === 'b' ? input.circleId : null,
         };
         const connection = existing
           ? await tx.connection.update({ where: { id: existing.id }, data })
@@ -164,8 +179,9 @@ export const connectionRouter = router({
       z.object({
         connectionId: z.string().min(1),
         accept: z.boolean(),
-        // Required when accepting; ignored on decline.
-        grants: grantSetSchema.optional(),
+        // The OWN circle to place them into. Required when accepting; ignored
+        // on decline.
+        circleId: z.string().min(1).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -189,15 +205,29 @@ export const connectionRouter = router({
           await tx.connection.delete({ where: { id: connection.id } });
           return { status: 'DECLINED' as const };
         }
-        if (!input.grants) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Pick what you grant them.' });
+        if (!input.circleId) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Pick a circle for them.' });
+        }
+        await requireOwnCircle(tx, me, input.circleId);
+        const mySide = sideOf(connection, me);
+        // ACTIVE ⇒ both sides non-null: the requester's side was set at request,
+        // this sets the addressee's. Guard the requester's side just in case a
+        // migrated/edge-case row left it null.
+        const requesterCircleId = mySide === 'a' ? connection.bCircleId : connection.aCircleId;
+        if (!requesterCircleId) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This request is missing the other side — it may have been withdrawn.',
+          });
         }
         await tx.connection.update({
           where: { id: connection.id },
           data: {
             status: 'ACTIVE',
             activatedAt: new Date(),
-            ...grantColumns(sideOf(connection, me), input.grants),
+            ...(mySide === 'a'
+              ? { aCircleId: input.circleId }
+              : { bCircleId: input.circleId }),
           },
         });
         return { status: 'ACTIVE' as const };
@@ -205,11 +235,13 @@ export const connectionRouter = router({
     }),
 
   /**
-   * Edit OUR side's grant set — unilateral, any time, no consent (B2). Works
-   * on PENDING (the requester adjusting their offer) and ACTIVE edges.
+   * Move the counterparty into another of MY circles — unilateral, any time, no
+   * consent (P4 replaces setGrants: editing which circle they're in IS how I
+   * change what I grant them). Works on PENDING (the requester adjusting) and
+   * ACTIVE edges; my side only.
    */
-  setGrants: protectedProcedure
-    .input(z.object({ connectionId: z.string().min(1), grants: grantSetSchema }))
+  assign: protectedProcedure
+    .input(z.object({ connectionId: z.string().min(1), circleId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'manageConnections');
       const me = ctx.user.householdId;
@@ -221,9 +253,11 @@ export const connectionRouter = router({
         if (connection.status === 'SEVERED') {
           throw new TRPCError({ code: 'CONFLICT', message: 'This connection is severed.' });
         }
+        await requireOwnCircle(tx, me, input.circleId);
+        const mySide = sideOf(connection, me);
         await tx.connection.update({
           where: { id: connection.id },
-          data: grantColumns(sideOf(connection, me), input.grants),
+          data: mySide === 'a' ? { aCircleId: input.circleId } : { bCircleId: input.circleId },
         });
         return { ok: true };
       });

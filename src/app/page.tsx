@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
-import { activeConnectionsOf } from '@/server/authz';
+import { activeConnectionsOf, visibleUnderCircle } from '@/server/authz';
 import { db } from '@/server/db';
 import { netByCounterparty } from '@/server/ledger';
 import { AddPantry } from './add-pantry';
@@ -20,6 +20,22 @@ export default async function PantriesPage() {
   const connections = await activeConnectionsOf(db, user.householdId);
   const pantryGranters = new Set(
     connections.filter((c) => c.theyGrant.pantry).map((c) => c.counterpartyId),
+  );
+  // The circle each counterparty placed US into — the yardstick for their
+  // SELECT-visibility pantries (REWORK P4).
+  const circleByCounterparty = new Map(connections.map((c) => [c.counterpartyId, c.theirCircleId]));
+  const theirCircleIds = [...circleByCounterparty.values()].filter(
+    (id): id is string => id !== null,
+  );
+  const scopedPantryKeys = new Set(
+    theirCircleIds.length
+      ? (
+          await db.pantryCircle.findMany({
+            where: { circleId: { in: theirCircleIds } },
+            select: { pantryId: true, circleId: true },
+          })
+        ).map((r) => `${r.pantryId}:${r.circleId}`)
+      : [],
   );
   // Net strips also cover SEVERED pairs with a nonzero balance (B6: the net
   // survives forever and settlement still works — the strip is its only
@@ -48,8 +64,16 @@ export default async function PantriesPage() {
     })
   ).map((h) => ({
     ...h,
-    // Others' private pantries are invisible (B3); your own are always shown.
-    pantries: h.id === user.householdId ? h.pantries : h.pantries.filter((p) => p.shared),
+    // Own pantries always show; a counterparty's show only when visible to the
+    // circle they placed us in (ALL, or SELECT scoped to it; never PRIVATE).
+    pantries:
+      h.id === user.householdId
+        ? h.pantries
+        : h.pantries.filter((p) => {
+            const circleId = circleByCounterparty.get(h.id);
+            if (!circleId) return false;
+            return visibleUnderCircle(p.visibility, scopedPantryKeys.has(`${p.id}:${circleId}`));
+          }),
   }));
   households.sort((a, b) => (a.id === user.householdId ? -1 : b.id === user.householdId ? 1 : 0));
 

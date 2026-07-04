@@ -25,6 +25,7 @@ model Household {
   products    Product[]
   connectionsA Connection[] @relation("connectionA")
   connectionsB Connection[] @relation("connectionB")
+  circles      Circle[]
   sharePosts   SharePost[]
   recipes      Recipe[]
   ingredientLinks IngredientLink[]
@@ -85,20 +86,32 @@ model Membership {
   editRecipes       Boolean @default(false) // recipe book, planner, shopping list writes (Rounds 3–4)
   settleMoney       Boolean @default(false) // settlements, manual adjustments, correct-credit, void-in-error
 
+  // Contact-layer visibility (REWORK P4/P5) — which connections see this member
+  // on a household card. "ALL" (every circle) | "SELECT" | "PRIVATE"; SELECT
+  // consults MembershipCircle. Schema + reach helper land here in Round B; the
+  // management UI is Round C's.
+  visibility String @default("ALL")
+
   createdAt DateTime @default(now())
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   household Household @relation(fields: [householdId], references: [id])
+  circleScopes MembershipCircle[]
 
   @@unique([userId, householdId])
   @@index([householdId])
 }
 
-// Pairwise household↔household edge (REWORK B1/B2). Canonically ordered
-// (householdAId < householdBId) so the pair is unique. Two DIRECTIONAL grant
-// sets: aGrants* is what A permits B to do with A's resources, bGrants* the
-// reverse — each side edits only its own set and may tighten/revoke at any
-// time without the other's consent ("resource owner is authoritative").
+// Pairwise household↔household edge (REWORK B1/B2, Phase-2 P4 circles).
+// Canonically ordered (householdAId < householdBId) so the pair is unique.
+// Grants no longer live on the edge: each side assigns the OTHER household into
+// one of ITS OWN circles (a named grant bundle), and that circle's six flags
+// ARE the directional grant set. aCircleId = the circle household A placed B
+// into (A's outgoing grants toward B); bCircleId the mirror. Directionality is
+// preserved; either side re-assigns unilaterally, without the other's consent
+// ("resource owner is authoritative"). PENDING sets the requester's side at
+// request and the addressee's at accept; ACTIVE ⇒ BOTH non-null (enforced in
+// the accept handler, not the schema — the nullability carries PENDING).
 // Lifecycle: PENDING (requested) → ACTIVE (accepted) → SEVERED (unilateral;
 // terminal — a new edge is a fresh request).
 model Connection {
@@ -110,18 +123,9 @@ model Connection {
   // system created (data migration, new-household invites).
   requestedByHouseholdId String?
 
-  aGrantsPantry    Boolean @default(false) // B may browse A's shared pantries + order against them
-  aGrantsLending   Boolean @default(false) // B may browse A's shared items + borrow them
-  aGrantsRecipes   Boolean @default(false) // B may browse A's non-private recipes (Round 3)
-  aGrantsShareTo   Boolean @default(false) // A's posts reach B (Round 2)
-  aGrantsShareFrom Boolean @default(false) // B's posts are shown to A (Round 2)
-  aGrantsReshare   Boolean @default(false) // B may reshare A's posts onward (Round 2)
-  bGrantsPantry    Boolean @default(false)
-  bGrantsLending   Boolean @default(false)
-  bGrantsRecipes   Boolean @default(false)
-  bGrantsShareTo   Boolean @default(false)
-  bGrantsShareFrom Boolean @default(false)
-  bGrantsReshare   Boolean @default(false)
+  // Circle A placed B into (A's grants toward B) / circle B placed A into.
+  aCircleId String?
+  bCircleId String?
 
   createdAt   DateTime  @default(now())
   activatedAt DateTime?
@@ -129,9 +133,81 @@ model Connection {
 
   householdA Household @relation("connectionA", fields: [householdAId], references: [id])
   householdB Household @relation("connectionB", fields: [householdBId], references: [id])
+  aCircle    Circle?   @relation("connectionACircle", fields: [aCircleId], references: [id])
+  bCircle    Circle?   @relation("connectionBCircle", fields: [bCircleId], references: [id])
 
   @@unique([householdAId, householdBId])
   @@index([householdBId])
+  @@index([aCircleId])
+  @@index([bCircleId])
+}
+
+// Phase 2 (REWORK P4): a household's named visibility/grant group. A circle IS
+// a grant bundle — the six directional grants that used to live per-connection.
+// Each side of a connection assigns the OTHER side into one of ITS OWN circles
+// (directionality preserved); resource scoping (pantry/item/member) targets
+// circles. Seeded per household: Neighbors / Friends / Family.
+model Circle {
+  id          String  @id @default(cuid())
+  householdId String
+  name        String
+  position    Int     @default(0) // display order
+
+  grantsPantry    Boolean @default(false)
+  grantsLending   Boolean @default(false)
+  grantsRecipes   Boolean @default(false)
+  grantsShareTo   Boolean @default(false)
+  grantsShareFrom Boolean @default(false)
+  grantsReshare   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  household        Household          @relation(fields: [householdId], references: [id])
+  connectionsAsA   Connection[]       @relation("connectionACircle")
+  connectionsAsB   Connection[]       @relation("connectionBCircle")
+  pantryScopes     PantryCircle[]
+  itemScopes       ItemCircle[]
+  membershipScopes MembershipCircle[]
+
+  @@unique([householdId, name])
+  @@index([householdId])
+}
+
+// SELECT-visibility scope rows (REWORK P4). A row means "this pantry is visible
+// to this circle"; consulted ONLY when the pantry's visibility is 'SELECT'
+// (ALL/PRIVATE ignore them). Circle and pantry always belong to the SAME
+// household — a household scopes its own resources to its own circles.
+model PantryCircle {
+  pantryId String
+  circleId String
+
+  pantry Pantry @relation(fields: [pantryId], references: [id], onDelete: Cascade)
+  circle Circle @relation(fields: [circleId], references: [id], onDelete: Cascade)
+
+  @@id([pantryId, circleId])
+  @@index([circleId])
+}
+
+model ItemCircle {
+  itemId   String
+  circleId String
+
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  circle Circle @relation(fields: [circleId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, circleId])
+  @@index([circleId])
+}
+
+model MembershipCircle {
+  membershipId String
+  circleId     String
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  circle     Circle     @relation(fields: [circleId], references: [id], onDelete: Cascade)
+
+  @@id([membershipId, circleId])
+  @@index([circleId])
 }
 
 // Singleton (id = "instance"): operator-level settings (REWORK A1/A4/D2).
@@ -223,15 +299,17 @@ model Pantry {
   id          String   @id @default(cuid())
   householdId String
   name        String
-  // Household-wide shared/private flag (REWORK B3): a connection holding the
-  // pantry grant sees exactly the shared set, identically for every
-  // connection. Private pantries are visible to the owning household only.
-  shared      Boolean  @default(true)
+  // Circle-scoped visibility (REWORK P4, replaces B3's shared flag): "ALL"
+  // (visible to every circle that holds the pantry grant) | "SELECT" (only the
+  // circles joined via PantryCircle) | "PRIVATE" (owning household only). A
+  // connection still needs its circle's `grantsPantry` on top of visibility.
+  visibility  String   @default("ALL")
   createdAt   DateTime @default(now())
 
-  household Household @relation(fields: [householdId], references: [id])
+  household Household      @relation(fields: [householdId], references: [id])
   restocks  Restock[]
   orders    Order[]
+  circles   PantryCircle[]
 }
 
 // ---- slice 2: receiving (blueprint 01) ------------------------------------
@@ -464,13 +542,16 @@ model Item {
   photoPath   String? // under IMAGES_DIR volume, kind "items"
   notes       String?
   feeCents    Int      @default(0)
-  // Shared/private flag (REWORK B3), mirroring Pantry.shared: connections with
-  // the lending grant see exactly the shared items.
-  shared      Boolean  @default(true)
+  // Circle-scoped visibility (REWORK P4, replaces B3's shared flag), mirroring
+  // Pantry.visibility: "ALL" | "SELECT" (ItemCircle) | "PRIVATE". Items are
+  // household-level — no pantry-style inherit. A connection needs its circle's
+  // `grantsLending` on top.
+  visibility  String   @default("ALL")
   createdAt   DateTime @default(now())
 
-  household Household @relation(fields: [householdId], references: [id])
+  household Household    @relation(fields: [householdId], references: [id])
   loans     Loan[]
+  circles   ItemCircle[]
 
   @@index([householdId])
 }

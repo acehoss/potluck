@@ -58,6 +58,13 @@ const sweep = `
     db.prepare("DELETE FROM LedgerSeen WHERE counterpartyHouseholdId = ? OR ownHouseholdId = ?").run(id, id);
     db.prepare("DELETE FROM LedgerEntry WHERE creditorHouseholdId = ? OR debtorHouseholdId = ?").run(id, id);
     db.prepare("DELETE FROM Connection WHERE householdAId = ? OR householdBId = ?").run(id, id);
+    // Founded households get the three preset circles (REWORK P4); a Connection
+    // references them, so drop scopes + circles after the connection, before the
+    // household (Circle FKs Household with no cascade).
+    db.prepare("DELETE FROM PantryCircle WHERE circleId IN (SELECT id FROM Circle WHERE householdId = ?)").run(id);
+    db.prepare("DELETE FROM ItemCircle WHERE circleId IN (SELECT id FROM Circle WHERE householdId = ?)").run(id);
+    db.prepare("DELETE FROM MembershipCircle WHERE circleId IN (SELECT id FROM Circle WHERE householdId = ?)").run(id);
+    db.prepare("DELETE FROM Circle WHERE householdId = ?").run(id);
     db.prepare("DELETE FROM Household WHERE id = ?").run(id);
   }
   for (const id of users) {

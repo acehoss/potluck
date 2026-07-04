@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from '../auth';
-import { hasActiveGrant, requireCapability } from '../authz';
+import { hasActiveGrant, reachesResource, requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
@@ -42,7 +42,7 @@ async function loadOrderableLot(
           pantryId: true,
           status: true,
           voidedAt: true,
-          pantry: { select: { householdId: true, shared: true } },
+          pantry: { select: { householdId: true, visibility: true } },
         },
       },
     },
@@ -52,9 +52,17 @@ async function loadOrderableLot(
   }
   const ownerHouseholdId = lot.restock.pantry.householdId;
   if (ownerHouseholdId !== user.householdId) {
-    const visible =
-      lot.restock.pantry.shared &&
-      (await hasActiveGrant(tx, ownerHouseholdId, user.householdId, 'pantry'));
+    const visible = await reachesResource(
+      tx,
+      ownerHouseholdId,
+      user.householdId,
+      'pantry',
+      lot.restock.pantry,
+      (circleId) =>
+        tx.pantryCircle
+          .findUnique({ where: { pantryId_circleId: { pantryId, circleId } } })
+          .then(Boolean),
+    );
     if (!visible) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found in this pantry.' });
     }

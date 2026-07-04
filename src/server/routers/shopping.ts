@@ -76,18 +76,34 @@ export const shoppingRouter = router({
       ]),
     );
 
-    // Reachable pantries for availability: own (all, private included) + SHARED
-    // pantries of ACTIVE connections that grant ME `pantry`. Nothing else.
+    // Reachable pantries for availability: own (all, PRIVATE included) + the
+    // pantries of ACTIVE connections that grant ME `pantry` and are VISIBLE to
+    // the circle they placed me in (REWORK P4). Nothing else.
     const conns = await activeConnectionsOf(db, H);
-    const granterIds = conns.filter((c) => c.theyGrant.pantry).map((c) => c.counterpartyId);
-    const pantries = await db.pantry.findMany({
+    const pantryCircleByHousehold = new Map(
+      conns.filter((c) => c.theyGrant.pantry).map((c) => [c.counterpartyId, c.theirCircleId]),
+    );
+    const candidates = await db.pantry.findMany({
       where: {
         OR: [
           { householdId: H },
-          ...(granterIds.length ? [{ householdId: { in: granterIds }, shared: true }] : []),
+          ...(pantryCircleByHousehold.size
+            ? [{ householdId: { in: [...pantryCircleByHousehold.keys()] } }]
+            : []),
         ],
       },
-      include: { household: { select: { name: true } } },
+      include: {
+        household: { select: { name: true } },
+        circles: { select: { circleId: true } },
+      },
+    });
+    const pantries = candidates.filter((p) => {
+      if (p.householdId === H) return true;
+      const theirCircleId = pantryCircleByHousehold.get(p.householdId);
+      if (theirCircleId === undefined) return false;
+      if (p.visibility === 'ALL') return true;
+      if (p.visibility === 'PRIVATE') return false;
+      return p.circles.some((c) => c.circleId === theirCircleId); // SELECT
     });
     const pantryInfo = new Map(
       pantries.map((p) => [

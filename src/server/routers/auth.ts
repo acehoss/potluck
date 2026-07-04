@@ -11,8 +11,9 @@ import {
   verifyPasswordLimited,
 } from '../auth';
 import type { Prisma } from '@/generated/prisma/client';
-import { GRANT_PRESETS, type GrantSet, grantColumns } from '../authz';
+import { GRANT_PRESETS, type GrantSet } from '../authz';
 import { OWNER_PRESET } from '../capabilities';
+import { circleIdForGrants, ensurePresetCircles } from '../circles';
 import { db, dbTransaction } from '../db';
 import { USERNAME_PATTERN, firstAvailableHandle, slugBaseFromName } from '../identity';
 import { checkRateLimit, resetRateLimit } from '../rate-limit';
@@ -215,10 +216,31 @@ async function joinViaInvite(
       data: { name: householdName!.trim(), slug },
     });
     householdId = household.id;
+    // Both households start with the three preset circles (P4).
+    await ensurePresetCircles(tx, household.id);
+    await ensurePresetCircles(tx, invite.householdId);
+    const inviterHousehold = await tx.household.findUniqueOrThrow({
+      where: { id: invite.householdId },
+    });
     const grants = (
       invite.grantsJson ? JSON.parse(invite.grantsJson) : GRANT_PRESETS.friend
     ) as GrantSet;
+    // The first edge assigns BOTH sides per the invite's grant tuple, mapping it
+    // to each household's matching preset circle (or a fresh custom one).
+    const newSideCircleId = await circleIdForGrants(
+      tx,
+      household.id,
+      grants,
+      inviterHousehold.name,
+    );
+    const inviterSideCircleId = await circleIdForGrants(
+      tx,
+      invite.householdId,
+      grants,
+      household.name,
+    );
     const [householdAId, householdBId] = [household.id, invite.householdId].sort();
+    const newIsA = householdAId === household.id;
     await tx.connection.create({
       data: {
         householdAId,
@@ -227,8 +249,8 @@ async function joinViaInvite(
         activatedAt: new Date(),
         // requestedByHouseholdId stays null: this edge was born from an
         // invite, not an in-app request.
-        ...grantColumns('a', grants),
-        ...grantColumns('b', grants),
+        aCircleId: newIsA ? newSideCircleId : inviterSideCircleId,
+        bCircleId: newIsA ? inviterSideCircleId : newSideCircleId,
       },
     });
   }

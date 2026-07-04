@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
-import { activeConnectionsOf, hasActiveGrant } from '@/server/authz';
+import { activeConnectionsOf, reachesResource } from '@/server/authz';
 import { db } from '@/server/db';
 import { restockCode } from '@/lib/domain';
 import { InventoryView, type ProductGroup } from './inventory-view';
@@ -16,12 +16,22 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
     include: { household: { select: { id: true, name: true } } },
   });
   if (!pantry) notFound();
-  // View gate (REWORK B2/B3/B4): your own pantry, or a SHARED pantry of a
-  // household extending you the pantry grant over an ACTIVE connection.
-  // Anything else reads as not-found — scoping never leaks existence.
+  // View gate (REWORK P4): your own pantry, or a pantry of another household
+  // whose circle for you grants pantry AND that is visible to that circle (ALL,
+  // or SELECT scoped to it). Anything else reads as not-found — scoping never
+  // leaks existence.
   if (pantry.householdId !== user.householdId) {
-    const visible =
-      pantry.shared && (await hasActiveGrant(db, pantry.householdId, user.householdId, 'pantry'));
+    const visible = await reachesResource(
+      db,
+      pantry.householdId,
+      user.householdId,
+      'pantry',
+      pantry,
+      (circleId) =>
+        db.pantryCircle
+          .findUnique({ where: { pantryId_circleId: { pantryId: pantry.id, circleId } } })
+          .then(Boolean),
+    );
     if (!visible) notFound();
   }
 
@@ -100,6 +110,15 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
   }
 
   const isOwn = pantry.householdId === user.householdId;
+  // SELECT-scope prefill for the owner's visibility control (own pantry only).
+  const scopeCircleIds = isOwn
+    ? (
+        await db.pantryCircle.findMany({
+          where: { pantryId: pantry.id },
+          select: { circleId: true },
+        })
+      ).map((r) => r.circleId)
+    : [];
   // Resume banner only for drafts this user can actually edit and finalize —
   // owner-household receiving with the receiveStock capability (the restock
   // router's gate); otherwise it walks them into a FORBIDDEN wizard.
@@ -148,8 +167,9 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       yourHouseholdId={user.householdId}
       cart={cartInfo}
       cartQtyByLot={cartQtyByLot}
-      shared={pantry.shared}
-      canManageShared={isOwn && user.activeMembership.manageHousehold}
+      visibility={pantry.visibility as 'ALL' | 'SELECT' | 'PRIVATE'}
+      scopeCircleIds={scopeCircleIds}
+      canManageVisibility={isOwn && user.activeMembership.manageHousehold}
     />
   );
 }

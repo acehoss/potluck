@@ -2,6 +2,7 @@ import { router } from '../trpc';
 import { adjustmentRouter } from './adjustment';
 import { adminRouter } from './admin';
 import { authRouter } from './auth';
+import { circleRouter } from './circle';
 import { connectionRouter } from './connection';
 import { householdRouter } from './household';
 import { inviteRouter } from './invite';
@@ -22,6 +23,7 @@ export const appRouter = router({
   adjustment: adjustmentRouter,
   admin: adminRouter,
   auth: authRouter,
+  circle: circleRouter,
   connection: connectionRouter,
   household: householdRouter,
   invite: inviteRouter,

@@ -8,6 +8,7 @@ import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { centsToDollarsString, formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
+import { VisibilityControl } from '../../visibility-control';
 import { dueShortDate, isOverdue, localShortDate } from '../format';
 import { FeeBadge, OverdueBadge } from '../items-view';
 
@@ -17,8 +18,11 @@ export type ItemDetail = {
   photoPath: string | null;
   notes: string | null;
   feeCents: number;
-  /** Shared/private flag (REWORK B3) — private items are connection-invisible. */
-  shared: boolean;
+  /** Circle-scoped visibility (REWORK P4) — PRIVATE items are connection-
+   *  invisible; SELECT limits to the scoped circles. */
+  visibility: 'ALL' | 'SELECT' | 'PRIVATE';
+  /** Circles this item is scoped to when visibility is SELECT (owner prefill). */
+  scopeCircleIds: string[];
   householdId: string;
   householdName: string;
   isYours: boolean;
@@ -48,12 +52,12 @@ const secondaryBtn =
 export function ItemDetailView({
   item,
   yourHouseholdId,
-  canManageShared,
+  canManageVisibility,
 }: {
   item: ItemDetail;
   yourHouseholdId: string;
-  /** Owner + manageHousehold — gates the shared/private toggle (B3/A3a). */
-  canManageShared: boolean;
+  /** Owner + manageHousehold — gates the visibility control (P4/A3a). */
+  canManageVisibility: boolean;
 }) {
   const router = useRouter();
   const trpc = useTRPC();
@@ -98,6 +102,14 @@ export function ItemDetailView({
         <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">
           {item.name}
         </h1>
+        {canManageVisibility && (
+          <VisibilityControl
+            idPrefix="item"
+            targetId={item.id}
+            visibility={item.visibility}
+            circleIds={item.scopeCircleIds}
+          />
+        )}
         {item.isYours && (
           <button
             type="button"
@@ -248,7 +260,6 @@ export function ItemDetailView({
       {editOpen && (
         <EditItemSheet
           item={item}
-          canManageShared={canManageShared}
           onClose={() => setEditOpen(false)}
           onDone={() => {
             setEditOpen(false);
@@ -458,12 +469,10 @@ function ReturnSheet({
  */
 function EditItemSheet({
   item,
-  canManageShared,
   onClose,
   onDone,
 }: {
   item: ItemDetail;
-  canManageShared: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -472,7 +481,6 @@ function EditItemSheet({
   const [name, setName] = useState(item.name);
   const [notes, setNotes] = useState(item.notes ?? '');
   const [fee, setFee] = useState(item.feeCents === 0 ? '' : centsToDollarsString(item.feeCents));
-  const [shared, setSharedFlag] = useState(item.shared);
   const [newPhoto, setNewPhoto] = useState<{ path: string; preview: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -525,8 +533,6 @@ function EditItemSheet({
             name: name.trim(),
             notes: notes.trim() || null,
             feeCents,
-            // Only managers may move the flag — never send it otherwise.
-            shared: canManageShared ? shared : undefined,
             photoPath: newPhoto?.path, // undefined = keep the current photo
           });
         }}
@@ -600,24 +606,6 @@ function EditItemSheet({
             Applies to future loans only — fees already posted never change.
           </span>
         </label>
-        {canManageShared && (
-          <label className="flex min-h-11 items-center gap-3 text-sm font-medium text-text">
-            <input
-              type="checkbox"
-              data-testid="edit-item-shared"
-              checked={shared}
-              onChange={(e) => setSharedFlag(e.target.checked)}
-              className="size-5 accent-[var(--color-accent)]"
-            />
-            <span>
-              Shared with connections
-              <span className="block text-xs font-normal text-text-muted">
-                Off = invisible to every connected household, lending grant or not.
-              </span>
-            </span>
-          </label>
-        )}
-
         {error && (
           <p role="alert" className="text-sm text-danger">
             {error}

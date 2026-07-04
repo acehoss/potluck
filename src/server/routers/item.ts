@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { formatCents } from '@/lib/money';
-import { hasActiveGrant, requireCapability } from '../authz';
+import { reachesResource, requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { deleteImageFile, imageFileExists, isStoredImagePath } from '../images';
 import { protectedProcedure, router } from '../trpc';
@@ -129,8 +129,6 @@ export const itemRouter = router({
         notes: z.string().trim().max(500).nullish(),
         feeCents: z.number().int().min(0).max(MAX_CENTS).optional(),
         photoPath: z.string().min(1).max(300).nullish(),
-        // Shared/private flag (REWORK B3) — household management, not lending.
-        shared: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -148,10 +146,6 @@ export const itemRouter = router({
         if (input.feeCents !== undefined && input.feeCents !== item.feeCents) {
           requireCapability(ctx.user, 'settleMoney');
         }
-        // Shared flags belong to household managers (A3a).
-        if (input.shared !== undefined && input.shared !== item.shared) {
-          requireCapability(ctx.user, 'manageHousehold');
-        }
         if (typeof input.photoPath === 'string') {
           await assertFreshItemPhoto(tx, input.photoPath);
         }
@@ -160,7 +154,6 @@ export const itemRouter = router({
           data: {
             name: input.name,
             feeCents: input.feeCents,
-            shared: input.shared,
             // undefined = leave untouched; null/'' = clear.
             notes: input.notes === undefined ? undefined : input.notes || null,
             photoPath: input.photoPath === undefined ? undefined : input.photoPath,
@@ -175,6 +168,52 @@ export const itemRouter = router({
       // between the two leaves an orphan file, never a dangling row.
       if (oldPhoto) await dbTransaction((tx) => unlinkItemPhotoIfUnreferenced(tx, oldPhoto));
       return { ok: true };
+    }),
+
+  /**
+   * Circle-scoped visibility (REWORK P4, mirrors pantry.setVisibility): ALL
+   * exposes the item to every lending-granted circle; SELECT restricts it to
+   * the given OWN circles (≥1, foreign/absent → 404); PRIVATE hides it. Scope
+   * rows are replaced atomically. Household management (A3a — the old shared
+   * flag's gate).
+   */
+  setVisibility: protectedProcedure
+    .input(
+      z.object({
+        itemId: z.string().min(1),
+        visibility: z.enum(['ALL', 'SELECT', 'PRIVATE']),
+        circleIds: z.array(z.string().min(1)).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'manageHousehold');
+      const me = ctx.user.householdId;
+      return dbTransaction(async (tx) => {
+        const item = await tx.item.findUnique({ where: { id: input.itemId } });
+        if (!item || item.householdId !== me) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+        }
+        const circleIds = input.visibility === 'SELECT' ? [...new Set(input.circleIds ?? [])] : [];
+        if (input.visibility === 'SELECT' && circleIds.length === 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Pick at least one circle.' });
+        }
+        if (circleIds.length) {
+          const owned = await tx.circle.count({
+            where: { id: { in: circleIds }, householdId: me },
+          });
+          if (owned !== circleIds.length) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'No such circle.' });
+          }
+        }
+        await tx.item.update({ where: { id: item.id }, data: { visibility: input.visibility } });
+        await tx.itemCircle.deleteMany({ where: { itemId: item.id } });
+        if (circleIds.length) {
+          await tx.itemCircle.createMany({
+            data: circleIds.map((circleId) => ({ itemId: item.id, circleId })),
+          });
+        }
+        return { visibility: input.visibility };
+      });
     }),
 });
 
@@ -228,13 +267,21 @@ export const loanRouter = router({
           if (!item) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
 
           // Cross-household borrowing rides the LENDING grant over an ACTIVE
-          // connection, against a SHARED item (REWORK B2/B3) — invisible
-          // items read as not-found. A fee-bearing cross-household checkout
-          // posts money, so it additionally needs spend (A3a).
+          // connection, against an item VISIBLE to the circle we're in (REWORK
+          // P4) — invisible items read as not-found. A fee-bearing cross-
+          // household checkout posts money, so it additionally needs spend (A3a).
           if (item.householdId !== ctx.user.householdId) {
-            const visible =
-              item.shared &&
-              (await hasActiveGrant(tx, item.householdId, ctx.user.householdId, 'lending'));
+            const visible = await reachesResource(
+              tx,
+              item.householdId,
+              ctx.user.householdId,
+              'lending',
+              item,
+              (circleId) =>
+                tx.itemCircle
+                  .findUnique({ where: { itemId_circleId: { itemId: item.id, circleId } } })
+                  .then(Boolean),
+            );
             if (!visible) {
               throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
             }

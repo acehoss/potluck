@@ -10,11 +10,16 @@ export const householdRouter = router({
    * their SHARED pantries. Own pantries are always all visible.
    */
   overview: protectedProcedure.query(async ({ ctx }) => {
-    const connections = await activeConnectionsOf(db, ctx.user.householdId);
-    const pantryGranters = new Set(
-      connections.filter((c) => c.theyGrant.pantry).map((c) => c.counterpartyId),
+    const me = ctx.user.householdId;
+    const connections = await activeConnectionsOf(db, me);
+    // Per counterparty that grants us pantry: the circle THEY placed US into —
+    // the key for SELECT-visibility of their pantries (REWORK P4).
+    const pantryCircleByHousehold = new Map(
+      connections
+        .filter((c) => c.theyGrant.pantry)
+        .map((c) => [c.counterpartyId, c.theirCircleId]),
     );
-    const visibleIds = [ctx.user.householdId, ...connections.map((c) => c.counterpartyId)];
+    const visibleIds = [me, ...connections.map((c) => c.counterpartyId)];
     const households = await db.household.findMany({
       where: { id: { in: visibleIds } },
       orderBy: { createdAt: 'asc' },
@@ -23,22 +28,31 @@ export const householdRouter = router({
           select: { user: { select: { id: true, name: true } } },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         },
-        pantries: { select: { id: true, name: true, shared: true }, orderBy: { createdAt: 'asc' } },
+        pantries: {
+          select: { id: true, name: true, visibility: true, circles: { select: { circleId: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
     return {
-      yourHouseholdId: ctx.user.householdId,
-      households: households.map((h) => ({
-        id: h.id,
-        name: h.name,
-        members: h.memberships.map((m) => m.user),
-        pantries: h.pantries
-          .filter(
-            (p) =>
-              h.id === ctx.user.householdId || (p.shared && pantryGranters.has(h.id)),
-          )
-          .map((p) => ({ id: p.id, name: p.name })),
-      })),
+      yourHouseholdId: me,
+      households: households.map((h) => {
+        const theirCircleId = pantryCircleByHousehold.get(h.id);
+        return {
+          id: h.id,
+          name: h.name,
+          members: h.memberships.map((m) => m.user),
+          pantries: h.pantries
+            .filter((p) => {
+              if (h.id === me) return true; // own household: all pantries
+              if (theirCircleId === undefined) return false; // no pantry grant to us
+              if (p.visibility === 'ALL') return true;
+              if (p.visibility === 'PRIVATE') return false;
+              return p.circles.some((c) => c.circleId === theirCircleId); // SELECT
+            })
+            .map((p) => ({ id: p.id, name: p.name })),
+        };
+      }),
     };
   }),
 });

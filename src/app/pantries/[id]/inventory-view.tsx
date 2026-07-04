@@ -9,6 +9,7 @@ import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
+import { VisibilityControl } from '../../visibility-control';
 
 export type ProductGroup = {
   productId: string;
@@ -62,8 +63,9 @@ export function InventoryView({
   yourHouseholdId,
   cart,
   cartQtyByLot,
-  shared,
-  canManageShared,
+  visibility,
+  scopeCircleIds,
+  canManageVisibility,
 }: {
   pantry: { id: string; name: string; householdName: string };
   isOwn: boolean;
@@ -73,19 +75,16 @@ export function InventoryView({
   yourHouseholdId: string;
   cart: { orderId: string; count: number; units: number } | null;
   cartQtyByLot: Record<string, number>;
-  /** Pantry.shared (REWORK B3); toggle shown to owner managers only. */
-  shared: boolean;
-  canManageShared: boolean;
+  /** Pantry circle-scoped visibility (REWORK P4); control shown to owner
+   *  managers only. */
+  visibility: 'ALL' | 'SELECT' | 'PRIVATE';
+  scopeCircleIds: string[];
+  canManageVisibility: boolean;
 }) {
   const router = useRouter();
-  const trpc = useTRPC();
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [startOpen, setStartOpen] = useState(false);
-  // Shared/private flag (REWORK B3) — a household-management action.
-  const setShared = useMutation(
-    trpc.pantry.setShared.mutationOptions({ onSuccess: () => router.refresh() }),
-  );
   // Find-by-scan in the take flow (SPEC §5: "find product (search/scan)"):
   // a scan that matches a product's UPC jumps straight into its take sheet.
   // Same camera-API gate as the receive wizard's line sheet — hidden on
@@ -111,25 +110,13 @@ export function InventoryView({
         <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">
           {pantry.name} <span className="font-normal text-text-muted">({pantry.householdName})</span>
         </h1>
-        {canManageShared && (
-          <button
-            type="button"
-            data-testid="pantry-shared-toggle"
-            disabled={setShared.isPending}
-            onClick={() => setShared.mutate({ pantryId: pantry.id, shared: !shared })}
-            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-              shared
-                ? 'bg-accent-soft text-accent-strong'
-                : 'border border-border-strong text-text-muted hover:bg-surface-sunken'
-            }`}
-            title={
-              shared
-                ? 'Shared: pantry-granted connections can browse and order. Tap to make private.'
-                : 'Private: invisible to every connection. Tap to share.'
-            }
-          >
-            {shared ? 'shared' : 'private'}
-          </button>
+        {canManageVisibility && (
+          <VisibilityControl
+            idPrefix="pantry"
+            targetId={pantry.id}
+            visibility={visibility}
+            circleIds={scopeCircleIds}
+          />
         )}
         {isOwn && (
           <Link

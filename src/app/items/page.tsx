@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
-import { activeConnectionsOf } from '@/server/authz';
+import { activeConnectionsOf, visibleUnderCircle } from '@/server/authz';
 import { db } from '@/server/db';
 import { ItemsView, type ItemGroup } from './items-view';
 
@@ -14,13 +14,14 @@ export default async function ItemsPage() {
   const user = await getSessionUser();
   if (!user) redirect('/login');
 
-  // Scope (REWORK B2/B3/B4): the acting household's items plus — where an
-  // ACTIVE connection extends us the lending grant — SHARED items of the
-  // counterparty.
+  // Scope (REWORK P4): the acting household's items plus — where an ACTIVE
+  // connection places us in a circle that grants lending — the counterparty's
+  // items VISIBLE to that circle (ALL, or SELECT scoped to it; never PRIVATE).
   const connections = await activeConnectionsOf(db, user.householdId);
-  const lendingGranters = connections
-    .filter((c) => c.theyGrant.lending)
-    .map((c) => c.counterpartyId);
+  const lendingConns = connections.filter((c) => c.theyGrant.lending);
+  const lendingGranters = lendingConns.map((c) => c.counterpartyId);
+  // The circle each granter placed US into — the yardstick for their SELECT items.
+  const circleByGranter = new Map(lendingConns.map((c) => [c.counterpartyId, c.theirCircleId]));
   const households = await db.household.findMany({
     where: { id: { in: [user.householdId, ...lendingGranters] } },
     orderBy: { createdAt: 'asc' },
@@ -28,13 +29,21 @@ export default async function ItemsPage() {
   });
   households.sort((a, b) => (a.id === user.householdId ? -1 : b.id === user.householdId ? 1 : 0));
 
-  const items = await db.item.findMany({
-    where: {
-      OR: [
-        { householdId: user.householdId },
-        { householdId: { in: lendingGranters }, shared: true },
-      ],
-    },
+  // Which of the granters' SELECT items are scoped to the circle we sit in.
+  const granterCircleIds = [...circleByGranter.values()].filter((id): id is string => id !== null);
+  const scopedItemKeys = new Set(
+    granterCircleIds.length
+      ? (
+          await db.itemCircle.findMany({
+            where: { circleId: { in: granterCircleIds } },
+            select: { itemId: true, circleId: true },
+          })
+        ).map((r) => `${r.itemId}:${r.circleId}`)
+      : [],
+  );
+
+  const allItems = await db.item.findMany({
+    where: { householdId: { in: [user.householdId, ...lendingGranters] } },
     orderBy: { name: 'asc' },
     include: {
       loans: {
@@ -42,6 +51,12 @@ export default async function ItemsPage() {
         include: { borrower: { select: { name: true } } },
       },
     },
+  });
+  const items = allItems.filter((i) => {
+    if (i.householdId === user.householdId) return true;
+    const circleId = circleByGranter.get(i.householdId);
+    if (!circleId) return false;
+    return visibleUnderCircle(i.visibility, scopedItemKeys.has(`${i.id}:${circleId}`));
   });
 
   // Borrower household = the checkout-time snapshot on the loan (REWORK A3),

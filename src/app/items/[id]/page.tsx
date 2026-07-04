@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
-import { hasActiveGrant } from '@/server/authz';
+import { reachesResource } from '@/server/authz';
 import { db } from '@/server/db';
 import { ItemDetailView, type ItemDetail } from './item-detail-view';
 
@@ -21,11 +21,21 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     },
   });
   if (!item) notFound();
-  // View gate (REWORK B2/B3): own item, or a SHARED item of a household
-  // extending us the lending grant over an ACTIVE connection.
+  // View gate (REWORK P4): own item, or an item of another household whose
+  // circle for us grants lending AND that is visible to that circle (ALL, or
+  // SELECT scoped to it). Anything else reads as not-found.
   if (item.householdId !== user.householdId) {
-    const visible =
-      item.shared && (await hasActiveGrant(db, item.householdId, user.householdId, 'lending'));
+    const visible = await reachesResource(
+      db,
+      item.householdId,
+      user.householdId,
+      'lending',
+      item,
+      (circleId) =>
+        db.itemCircle
+          .findUnique({ where: { itemId_circleId: { itemId: item.id, circleId } } })
+          .then(Boolean),
+    );
     if (!visible) notFound();
   }
 
@@ -57,16 +67,28 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     feeEntries.filter((e) => reversedEntryIds.has(e.id)).map((e) => e.loanId!),
   );
 
+  const isYours = item.household.id === user.householdId;
+  // SELECT-scope prefill for the owner's visibility control (own item only).
+  const scopeCircleIds = isYours
+    ? (
+        await db.itemCircle.findMany({
+          where: { itemId: item.id },
+          select: { circleId: true },
+        })
+      ).map((r) => r.circleId)
+    : [];
+
   const detail: ItemDetail = {
     id: item.id,
     name: item.name,
     photoPath: item.photoPath,
     notes: item.notes,
     feeCents: item.feeCents,
-    shared: item.shared,
+    visibility: item.visibility as ItemDetail['visibility'],
+    scopeCircleIds,
     householdId: item.household.id,
     householdName: item.household.name,
-    isYours: item.household.id === user.householdId,
+    isYours,
     loans: item.loans.map((loan) => ({
       id: loan.id,
       borrowerName: loan.borrower.name,
@@ -90,7 +112,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     <ItemDetailView
       item={detail}
       yourHouseholdId={user.householdId}
-      canManageShared={detail.isYours && user.activeMembership.manageHousehold}
+      canManageVisibility={detail.isYours && user.activeMembership.manageHousehold}
     />
   );
 }

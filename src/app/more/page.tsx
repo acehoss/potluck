@@ -5,6 +5,7 @@ import { activeConnectionsOf } from '@/server/authz';
 import { db } from '@/server/db';
 import { InviteMember } from '../invite-member';
 import { LogoutButton } from '../logout-button';
+import { CirclesCard } from './circles-card';
 import { ConnectionsCard } from './connections-card';
 import { HouseholdSwitcher } from './household-switcher';
 import { InstallCard, NotificationsCard } from './pwa-cards';
@@ -87,6 +88,7 @@ export default async function MorePage() {
         })}
 
         <ConnectionsCard />
+        <CirclesCard />
 
         {user.isInstanceAdmin && (
           <Link

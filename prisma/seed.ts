@@ -24,6 +24,7 @@ import {
   TEEN_PRESET,
   type CapabilityFlags,
 } from '../src/server/capabilities';
+import { ensurePresetCircles } from '../src/server/circles';
 import { PrismaClient } from '../src/generated/prisma/client';
 
 const url = process.env.DATABASE_URL;
@@ -74,44 +75,38 @@ const FIXTURES = [
   }>;
 }>;
 
-const FULL_GRANTS = {
-  aGrantsPantry: true,
-  aGrantsLending: true,
-  aGrantsRecipes: true,
-  aGrantsShareTo: true,
-  aGrantsShareFrom: true,
-  aGrantsReshare: true,
-  bGrantsPantry: true,
-  bGrantsLending: true,
-  bGrantsRecipes: true,
-  bGrantsShareTo: true,
-  bGrantsShareFrom: true,
-  bGrantsReshare: true,
-};
+/** The circle id owned by `householdId` with `name` (presets are seeded first). */
+async function circleId(householdId: string, name: string): Promise<string> {
+  const circle = await db.circle.findUniqueOrThrow({
+    where: { householdId_name: { householdId, name } },
+  });
+  return circle.id;
+}
 
-const SHARE_ONLY_GRANTS = {
-  ...Object.fromEntries(Object.keys(FULL_GRANTS).map((k) => [k, false])),
-  aGrantsShareTo: true,
-  aGrantsShareFrom: true,
-  bGrantsShareTo: true,
-  bGrantsShareFrom: true,
-} as typeof FULL_GRANTS;
-
+/**
+ * An ACTIVE edge where each side places the other into one of its OWN preset
+ * circles (P4). `circleForA`/`circleForB` name the circle household 1 / 2 use.
+ */
 async function connect(
   householdId1: string,
+  circleName1: string,
   householdId2: string,
-  grants: typeof FULL_GRANTS,
+  circleName2: string,
 ) {
   const [householdAId, householdBId] = [householdId1, householdId2].sort();
+  const oneIsA = householdAId === householdId1;
+  const aCircleId = await circleId(householdAId, oneIsA ? circleName1 : circleName2);
+  const bCircleId = await circleId(householdBId, oneIsA ? circleName2 : circleName1);
   await db.connection.upsert({
     where: { householdAId_householdBId: { householdAId, householdBId } },
-    update: {},
+    update: { aCircleId, bCircleId },
     create: {
       householdAId,
       householdBId,
       status: 'ACTIVE',
       activatedAt: new Date(),
-      ...grants,
+      aCircleId,
+      bCircleId,
     },
   });
 }
@@ -164,6 +159,9 @@ async function main() {
     if (!pantry) {
       await db.pantry.create({ data: { name: fixture.pantry, householdId: household.id } });
     }
+
+    // Every household starts with the three preset circles (REWORK P4).
+    await ensurePresetCircles(db, household.id);
   }
 
   // Marie's second membership (Adult in Neighbors): the switcher fixture.
@@ -184,8 +182,21 @@ async function main() {
     },
   });
 
-  await connect(householdByName.get('Heise')!, householdByName.get('In-Laws')!, FULL_GRANTS);
-  await connect(householdByName.get('Heise')!, householdByName.get('Neighbors')!, SHARE_ONLY_GRANTS);
+  // Heise↔In-Laws: each places the other in Family (full mutual grants).
+  // Heise↔Neighbors: each places the other in Neighbors (share-only). These are
+  // the load-bearing topology the e2e suite asserts against.
+  await connect(
+    householdByName.get('Heise')!,
+    'Family',
+    householdByName.get('In-Laws')!,
+    'Family',
+  );
+  await connect(
+    householdByName.get('Heise')!,
+    'Neighbors',
+    householdByName.get('Neighbors')!,
+    'Neighbors',
+  );
   // In-Laws ↔ Neighbors deliberately NOT connected.
 
   console.log(`Seeded ${FIXTURES.length} demo households (password: ${PASSWORD})`);

@@ -140,6 +140,52 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 2 Round B — circles (2026-07-04)
+
+**Done** (REWORK Phase-2 §P4). Named per-household **circles replace per-connection
+grants entirely** — a circle IS the six-grant bundle; each side of a connection assigns
+the other into one of ITS circles (directionality preserved, the counterparty's circle
+NAME never leaks — only effective grants); resource scoping rides circles
+(pantry/item visibility ALL / SELECT[circles] / PRIVATE replaces the `shared` booleans;
+`Membership.visibility` schema hooks land now for Round C). Migration
+`20260704150000_circles` REBUILDS Connection/Pantry/Item (pragma-dance exemplar
+pattern): per household, seed preset circles (Neighbors: shares only · Friends: per
+GRANT_PRESETS incl. recipes — kept as the single source of truth, a deliberate
+deviation from the P4 shorthand · Family: all six), then map every connection side's
+grant tuple to a preset or a custom circle (dedup via materialized temp tables; all-false
+ACTIVE/SEVERED sides get a real "No access" circle; all-false PENDING addressee stays
+NULL). Proven by `scripts/verify-circles-migration.mjs` against a synthetic pathological
+world (tuple-sharing, preset-name collisions, zero-connection households) — behavior
+equivalence per connection side.
+
+- **Authz swap is API-stable**: `grantsFrom` keeps its name and GrantSet shape and now
+  resolves the granter's assigned circle; share/ledger/restock/recipe consumers were
+  untouched. New reach rule (one helper, unit-tested ×10): ACTIVE edge ∧ circle grants
+  the flag ∧ resource visible to that circle. **Grant revocation now reads 404, not
+  403** — grants are visibility, not capability (the convention, now uniform).
+  Pickup's money re-check stays grant-based (matching prior behavior).
+- Routers: new `circle` CRUD (delete 409s while referenced); connection request/respond
+  take `circleId`; `connection.assign` replaces `setGrants`; `pantry.setVisibility` /
+  `item.setVisibility` replace the shared flags. Invites still carry a raw grant bundle
+  (no circle exists on the unfounded side; the server maps both sides at acceptance —
+  the one deliberate raw-grants exception, in the household-invite mint UI).
+- UI: Circles card (create/edit/delete with plain-language grant labels — shared
+  GRANT_LABELS, the Walt rule), circle pickers on request/respond, per-connection
+  "In: {circle}" + Move, three-way visibility controls with circle multi-select on
+  pantry + item surfaces.
+- e2e: new `circles.spec.ts` (8 tests: seeded equivalence, CRUD+gates,
+  move-flips-reach-live both directions, edit-circle-grants-flips-live, SELECT needs
+  grant AND scope, invite first-edge presets, PENDING semantics, UI smoke);
+  `connections.spec.ts` reworked onto circles with B6 fallout intact; onboarding's
+  casa-sweep gained the circle-table FK deletes. Restore-invariant discipline: seeded
+  topology verified byte-identical after runs.
+- **Gate: fresh `down -v` stack (migration + new seed), 236 passed + 4 intentional
+  skips, playwright exit 0, both engines, zero flakes — this run is also Round A's
+  deferred full-suite proof.**
+- Deferred/noted: `circle.list` is manageConnections-gated (Round C may need a lighter
+  name-only read); an SSR-first-request-on-fresh-session intermittent 404 was seen and
+  routed around in specs (household.overview probes) — worth a look someday.
+
 ## Phase 2 Round A — receiving tweaks (2026-07-04)
 
 **Done** (Aaron's list, REWORK Phase-2 §P7). The wizard ✕ now CLOSES and keeps the

@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { restockCode, unitCostCents } from '@/lib/domain';
 import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
-import { hasActiveGrant } from '@/server/authz';
+import { reachesResource } from '@/server/authz';
 import { db } from '@/server/db';
 import { getActiveRestockCredit } from '@/server/ledger';
 import { AdjustmentsList, type AdjustmentRow } from './adjustments-list';
@@ -46,8 +46,18 @@ export default async function RestockDetailPage({
   if (!viewerIsParty) {
     const pantryRow = await db.pantry.findUnique({ where: { id: restock.pantryId } });
     const visible =
-      pantryRow?.shared &&
-      (await hasActiveGrant(db, restock.pantry.householdId, user.householdId, 'pantry'));
+      pantryRow &&
+      (await reachesResource(
+        db,
+        restock.pantry.householdId,
+        user.householdId,
+        'pantry',
+        pantryRow,
+        (circleId) =>
+          db.pantryCircle
+            .findUnique({ where: { pantryId_circleId: { pantryId: pantryRow.id, circleId } } })
+            .then(Boolean),
+      ));
     if (!visible) notFound();
   }
 
