@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
+import { activeConnectionsOf } from '@/server/authz';
 import { db } from '@/server/db';
 import { ItemsView, type ItemGroup } from './items-view';
 
@@ -13,13 +14,27 @@ export default async function ItemsPage() {
   const user = await getSessionUser();
   if (!user) redirect('/login');
 
+  // Scope (REWORK B2/B3/B4): the acting household's items plus — where an
+  // ACTIVE connection extends us the lending grant — SHARED items of the
+  // counterparty.
+  const connections = await activeConnectionsOf(db, user.householdId);
+  const lendingGranters = connections
+    .filter((c) => c.theyGrant.lending)
+    .map((c) => c.counterpartyId);
   const households = await db.household.findMany({
+    where: { id: { in: [user.householdId, ...lendingGranters] } },
     orderBy: { createdAt: 'asc' },
     select: { id: true, name: true },
   });
   households.sort((a, b) => (a.id === user.householdId ? -1 : b.id === user.householdId ? 1 : 0));
 
   const items = await db.item.findMany({
+    where: {
+      OR: [
+        { householdId: user.householdId },
+        { householdId: { in: lendingGranters }, shared: true },
+      ],
+    },
     orderBy: { name: 'asc' },
     include: {
       loans: {

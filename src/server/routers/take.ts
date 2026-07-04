@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
@@ -21,6 +22,9 @@ export const takeRouter = router({
   undo: protectedProcedure
     .input(z.object({ takeId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      // Returns ride the ordering capability: undoing a take reverses an
+      // order pickup (money flows BACK to the acting household, so no spend).
+      requireCapability(ctx.user, 'placeOrders');
       return dbTransaction(async (tx) => {
         const take = await tx.take.findUnique({ where: { id: input.takeId } });
         if (!take) throw new TRPCError({ code: 'NOT_FOUND' });

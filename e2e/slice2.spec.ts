@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { login } from './helpers';
 
 /**
  * Slice 2 acceptance (blueprint 02 anchors): the full receiving wizard —
@@ -15,22 +16,10 @@ import { expect, test, type Page } from '@playwright/test';
  * existing yet).
  */
 
-const PASSWORD = 'demo-password';
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const RUN = Date.now().toString(36);
 
 const uniq = (name: string, project: string) => `${name} ${project}-${RUN}`;
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  // Wait for the actual navigation — 'your household' alone would match the
-  // login footer ("…a member of your household…") before the session lands.
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 /** Open the signed-in user's own Basement Pantry from the Pantries tab. */
 async function openOwnPantry(page: Page) {
@@ -79,7 +68,7 @@ async function addLine(
 
 test('full receive wizard: photos, lines with hold-back, unit photo, reconcile, code', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
 
   // Step 1: start sheet. Lines will sum to $26.48 vs receipt $27.47 → $0.99 short.
@@ -148,7 +137,7 @@ test('full receive wizard: photos, lines with hold-back, unit photo, reconcile, 
 test('cross-household purchaser is credited at cost for received units', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
   // Dana receives into the In-Laws pantry a trip that Heise paid for.
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `CrossShop-${P}-${RUN}`, purchaser: 'Heise' });
 
@@ -177,7 +166,7 @@ test('cross-household purchaser is credited at cost for received units', async (
 
 test('a draft survives refresh, resumes from the pantry, and can be abandoned', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   const pantryUrl = page.url();
   await startRestock(page, { retailer: `Resume-${P}-${RUN}` });
@@ -206,7 +195,7 @@ test('a draft survives refresh, resumes from the pantry, and can be abandoned', 
 
 test('draft lines, photos, and header details stay editable until finalize', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   // The receipt total is typoed at step 1 and fixed later via Edit details.
   const restockId = await startRestock(page, { retailer: `Edit-${P}-${RUN}`, receiptTotal: '68.02' });
@@ -275,7 +264,7 @@ test('draft lines, photos, and header details stay editable until finalize', asy
 
 test('the server rejects a missing or stale variance acknowledgment', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   const restockId = await startRestock(page, {
     retailer: `Variance-${P}-${RUN}`,
@@ -310,25 +299,28 @@ test('the server rejects a missing or stale variance acknowledgment', async ({ p
   await expect(page.getByTestId('restock-code')).toBeVisible();
 });
 
-test('finalize and abandon are gated to the creator or purchaser household', async ({ page, browser }, testInfo) => {
+test('finalize and abandon are gated to the pantry-owner household', async ({ page, browser }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   const pantryUrl = page.url();
-  // Purchaser defaults to Heise: Dana is neither creator nor purchaser member.
+  // Purchaser defaults to Heise: Dana has NO standing on this draft, so per
+  // the B4 convention she reads not-found — a draft's existence never leaks
+  // to households outside the owner/purchaser pair (Potluck R1S2; pre-rework
+  // this was a 403).
   const restockId = await startRestock(page, { retailer: `Gate-${P}-${RUN}` });
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const danaPage = await danaContext.newPage();
-  await login(danaPage, 'dana@demo.coop');
+  await login(danaPage, 'dana');
   const finalize = await danaPage.request.post('/api/trpc/restock.finalize', {
     data: { restockId, acknowledgedVarianceCents: null },
   });
-  expect(finalize.status()).toBe(403);
+  expect(finalize.status()).toBe(404);
   const abandon = await danaPage.request.post('/api/trpc/restock.deleteDraft', {
     data: { restockId },
   });
-  expect(abandon.status()).toBe(403);
+  expect(abandon.status()).toBe(404);
   await danaContext.close();
 
   // The creator can still abandon their own draft.
@@ -350,7 +342,7 @@ test('image serving and uploads reject unauthenticated and invalid requests', as
   });
   expect(unauthUpload.status()).toBe(401);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   // Path traversal out of the images root is refused even when signed in.
   const traversal = await page.request.get('/api/images/receipts%2F..%2F..%2Fcoop.db');
   expect(traversal.status()).toBe(400);

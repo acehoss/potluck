@@ -9,6 +9,8 @@ import {
   restockCode,
   varianceAutoPasses,
 } from '@/lib/domain';
+import type { SessionUser } from '../auth';
+import { getConnection, loadAccessiblePantry, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
 import {
   extractReceipt,
@@ -112,13 +114,36 @@ const lineSchema = z.object({
  * Status checks and their dependent writes always run inside the same
  * dbTransaction (which holds the app-wide DB lock), so a concurrent finalize
  * cannot land between the DRAFT check and the write.
+ *
+ * Also the draft-edit authz choke point (REWORK A3a/D1): receiving is a
+ * PANTRY-OWNER-household action — drafts are created and edited while acting
+ * as the household that owns the pantry (a connected purchaser is credited
+ * via purchaserHouseholdId, not by driving the wizard), and the acting
+ * membership needs receiveStock.
  */
-async function getDraftOrThrow(tx: Prisma.TransactionClient, restockId: string) {
+async function getDraftOrThrow(
+  tx: Prisma.TransactionClient,
+  user: SessionUser,
+  restockId: string,
+) {
   const restock = await tx.restock.findUnique({
     where: { id: restockId },
     include: { pantry: true },
   });
   if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
+  // Visibility BEFORE status: a household with no standing must read 404 —
+  // never the draft-vs-finalized distinction. The purchaser household can SEE
+  // the restock (restock.get) but never drive the wizard.
+  if (restock.pantry.householdId !== user.householdId) {
+    if (restock.purchaserHouseholdId !== user.householdId) {
+      throw new TRPCError({ code: 'NOT_FOUND' });
+    }
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Receiving runs as the household that owns the pantry.',
+    });
+  }
+  requireCapability(user, 'receiveStock');
   if (restock.status !== 'DRAFT') {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restock is already finalized.' });
   }
@@ -167,20 +192,29 @@ async function withCodeRetry<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Finalize/delete gate (blueprint 01 authz matrix): the restock's creator, or
- * a member of the purchaser household. Finalize posts money and delete
- * destroys receipt images — not open to everyone.
+ * Finalize/delete/removeImage gate: the ACTING household must own the pantry,
+ * with receiveStock. Receiving — including landing or abandoning a draft and
+ * destroying receipt images — is an owner-side flow; the pre-rework
+ * creator/purchaser standings are gone (adversarial review: bare-creator
+ * standing let a user demoted in the owner household finalize on a capability
+ * from an UNRELATED household's membership, and purchaser-side finalize let a
+ * teen post a credit in their own household's favor). The purchaser reads its
+ * credit on the restock detail instead.
  */
-function assertMayFinalize(
-  restock: { createdById: string; purchaserHouseholdId: string },
-  user: { id: string; householdId: string },
+function assertOwnerReceiving(
+  restock: { purchaserHouseholdId: string; pantry: { householdId: string } },
+  user: SessionUser,
 ) {
-  if (restock.createdById !== user.id && restock.purchaserHouseholdId !== user.householdId) {
+  if (restock.pantry.householdId !== user.householdId) {
+    if (restock.purchaserHouseholdId !== user.householdId) {
+      throw new TRPCError({ code: 'NOT_FOUND' });
+    }
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'Only the creator or the purchaser household can do this.',
+      message: 'Receiving runs as the household that owns the pantry.',
     });
   }
+  requireCapability(user, 'receiveStock');
 }
 
 /**
@@ -222,16 +256,39 @@ async function unlinkIfUnreferenced(path: string) {
 }
 
 export const restockRouter = router({
-  /** Step 1: create the server-side draft. Any coop member (trust assumed). */
+  /**
+   * Step 1: create the server-side draft. Receiving is a pantry-owner action
+   * (the acting household must own the pantry, with receiveStock); the
+   * PURCHASER may be the acting household or any ACTIVELY-connected one —
+   * that attribution is what posts the cross-household credit at finalize,
+   * so it can't be a free-form household id.
+   */
   create: protectedProcedure
     .input(draftHeaderSchema.extend({ pantryId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const pantry = await db.pantry.findUnique({ where: { id: input.pantryId } });
-      if (!pantry) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pantry not found.' });
-      const purchaser = await db.household.findUnique({
-        where: { id: input.purchaserHouseholdId },
-      });
-      if (!purchaser) throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
+      requireCapability(ctx.user, 'receiveStock');
+      // 404 for pantries the acting household can't SEE at all; 403 for
+      // visible-but-foreign ones (a granted counterparty may browse, never
+      // receive) — the B4 convention.
+      const { isOwn } = await loadAccessiblePantry(db, ctx.user, input.pantryId);
+      if (!isOwn) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Receiving runs as the household that owns the pantry.',
+        });
+      }
+      // Purchaser attribution posts money at finalize: the acting household
+      // itself, or an ACTIVELY connected one. Anything else — including a
+      // household id that doesn't exist — reads uniformly as not-found (a
+      // split response would be a household-id existence oracle).
+      if (
+        input.purchaserHouseholdId !== ctx.user.householdId &&
+        !(await getConnection(db, input.purchaserHouseholdId, ctx.user.householdId).then(
+          (c) => c?.status === 'ACTIVE',
+        ))
+      ) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
+      }
 
       const id = await withCodeRetry(() =>
         dbTransaction(async (tx) => {
@@ -259,11 +316,27 @@ export const restockRouter = router({
   /** Header edits while DRAFT (fix a mistyped total/date without abandoning). */
   updateDraft: protectedProcedure
     .input(draftHeaderSchema.partial().extend({ restockId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { restockId, ...data } = input;
       await withCodeRetry(() =>
         dbTransaction(async (tx) => {
-          await getDraftOrThrow(tx, restockId);
+          const draft = await getDraftOrThrow(tx, ctx.user, restockId);
+          // Purchaser CHANGES carry the same connected-household constraint
+          // as create (the attribution posts money at finalize). Keeping the
+          // existing purchaser is always allowed — the edit-details sheet
+          // resubmits it alongside unrelated header fixes, which must not
+          // start failing if the connection state moves under the draft
+          // (finalize re-checks at the money moment).
+          if (
+            data.purchaserHouseholdId &&
+            data.purchaserHouseholdId !== draft.purchaserHouseholdId &&
+            data.purchaserHouseholdId !== ctx.user.householdId &&
+            !(await getConnection(tx, data.purchaserHouseholdId, ctx.user.householdId).then(
+              (c) => c?.status === 'ACTIVE',
+            ))
+          ) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
+          }
           await tx.restock.update({ where: { id: restockId }, data });
           // A changed receipt date changes the day, so re-derive the label.
           if (data.purchasedAt) await assignRestockCode(tx, restockId, data.purchasedAt);
@@ -276,7 +349,7 @@ export const restockRouter = router({
    * Wizard data. Everyone sees everything (SPEC §2). Returns a plain-JSON
    * DTO — no transformer on the tRPC link, so Dates go over as ISO strings.
    */
-  get: protectedProcedure.input(z.object({ id: z.string().min(1) })).query(async ({ input }) => {
+  get: protectedProcedure.input(z.object({ id: z.string().min(1) })).query(async ({ ctx, input }) => {
     const restock = await db.restock.findUnique({
       where: { id: input.id },
       include: {
@@ -290,6 +363,14 @@ export const restockRouter = router({
       },
     });
     if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
+    // Owner-side flow plus the purchaser household (their credit's audit
+    // trail); anyone else reads not-found (B4 scoping).
+    if (
+      restock.pantry.householdId !== ctx.user.householdId &&
+      restock.purchaserHouseholdId !== ctx.user.householdId
+    ) {
+      throw new TRPCError({ code: 'NOT_FOUND' });
+    }
 
     const credit = await getActiveRestockCredit(restock.id);
     const extraction = parseStoredExtraction(restock.extractionJson);
@@ -364,11 +445,24 @@ export const restockRouter = router({
           .nullish(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const image = await dbTransaction(async (tx) => {
         await assertFreshUpload(tx, 'receipts', input.path);
-        const restock = await tx.restock.findUnique({ where: { id: input.restockId } });
+        const restock = await tx.restock.findUnique({
+          where: { id: input.restockId },
+          include: { pantry: { select: { householdId: true } } },
+        });
         if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
+        // Receipt pages are append-only even post-finalize (blueprint 01), so
+        // this is not draft-gated — but it IS an owner/purchaser receiving
+        // action (REWORK A3a).
+        if (
+          restock.pantry.householdId !== ctx.user.householdId &&
+          restock.purchaserHouseholdId !== ctx.user.householdId
+        ) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+        requireCapability(ctx.user, 'receiveStock');
         // Position is computed inside the locked transaction, so concurrent
         // adds can't both read the same max and trip @@unique([restockId, position]).
         const last = await tx.restockImage.findFirst({
@@ -401,12 +495,24 @@ export const restockRouter = router({
     .mutation(async ({ ctx, input }) => {
       const restock = await db.restock.findUnique({
         where: { id: input.restockId },
-        include: { images: { orderBy: { position: 'asc' } } },
+        include: {
+          images: { orderBy: { position: 'asc' } },
+          pantry: { select: { householdId: true } },
+        },
       });
       if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
       if (restock.status !== 'DRAFT') {
         throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restock is already finalized.' });
       }
+      // Gated like the other draft edits (owner-household receiving action),
+      // checked BEFORE consuming the extraction budget.
+      if (restock.pantry.householdId !== ctx.user.householdId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Receiving runs as the household that owns the pantry.',
+        });
+      }
+      requireCapability(ctx.user, 'receiveStock');
       if (!checkRateLimit(`extract:${ctx.user.id}`, extractsPerWindow())) {
         throw new TRPCError({
           code: 'TOO_MANY_REQUESTS',
@@ -469,9 +575,9 @@ export const restockRouter = router({
    */
   resolveProposal: protectedProcedure
     .input(z.object({ restockId: z.string().min(1), index: z.number().int().min(0) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       await dbTransaction(async (tx) => {
-        const restock = await getDraftOrThrow(tx, input.restockId);
+        const restock = await getDraftOrThrow(tx, ctx.user, input.restockId);
         const lines = parseStoredExtraction(restock.extractionJson)?.lines;
         if (!lines || input.index >= lines.length) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'No such proposed line.' });
@@ -500,10 +606,10 @@ export const restockRouter = router({
       const path = await dbTransaction(async (tx) => {
         const image = await tx.restockImage.findUnique({
           where: { id: input.imageId },
-          include: { restock: true },
+          include: { restock: { include: { pantry: { select: { householdId: true } } } } },
         });
         if (!image) throw new TRPCError({ code: 'NOT_FOUND' });
-        assertMayFinalize(image.restock, ctx.user);
+        assertOwnerReceiving(image.restock, ctx.user);
         if (image.restock.status !== 'DRAFT') {
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
@@ -518,7 +624,7 @@ export const restockRouter = router({
     }),
 
   /** Step 3: create or edit a receipt line (a draft Lot — blueprint 01 D4). */
-  saveLine: protectedProcedure.input(lineSchema).mutation(async ({ input }) => {
+  saveLine: protectedProcedure.input(lineSchema).mutation(async ({ ctx, input }) => {
     const excluded = input.excluded ?? false;
     if (!excluded) {
       if (input.purchasedCount < 1) {
@@ -542,7 +648,7 @@ export const restockRouter = router({
     // can't be orphaned by a failing lot write, and position assignment is
     // race-free.
     const lotId = await dbTransaction(async (tx) => {
-      const restock = await getDraftOrThrow(tx, input.restockId);
+      const restock = await getDraftOrThrow(tx, ctx.user, input.restockId);
 
       // Canonical stored form (zod guarantees 8–14 digits, so this never
       // nulls out a value the schema accepted).
@@ -613,16 +719,26 @@ export const restockRouter = router({
 
   deleteLine: protectedProcedure
     .input(z.object({ lotId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const photoPath = await dbTransaction(async (tx) => {
         const lot = await tx.lot.findUnique({
           where: { id: input.lotId },
-          include: { restock: { select: { status: true } } },
+          include: {
+            restock: { select: { status: true, pantry: { select: { householdId: true } } } },
+          },
         });
         if (!lot) throw new TRPCError({ code: 'NOT_FOUND' });
         if (lot.restock.status !== 'DRAFT') {
           throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restock is finalized.' });
         }
+        // Same owner-household gate as every other draft edit.
+        if (lot.restock.pantry.householdId !== ctx.user.householdId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Receiving runs as the household that owns the pantry.',
+          });
+        }
+        requireCapability(ctx.user, 'receiveStock');
         await tx.lot.delete({ where: { id: lot.id } });
         return lot.unitPhotoPath;
       });
@@ -634,10 +750,29 @@ export const restockRouter = router({
   /** Step 4 (and later re-snaps): unitPhotoPath stays editable after finalize. */
   setUnitPhoto: protectedProcedure
     .input(z.object({ lotId: z.string().min(1), path: z.string().min(1).max(300) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const previous = await dbTransaction(async (tx) => {
-        const lot = await tx.lot.findUnique({ where: { id: input.lotId } });
+        const lot = await tx.lot.findUnique({
+          where: { id: input.lotId },
+          include: {
+            restock: {
+              select: {
+                purchaserHouseholdId: true,
+                pantry: { select: { householdId: true } },
+              },
+            },
+          },
+        });
         if (!lot) throw new TRPCError({ code: 'NOT_FOUND' });
+        // Deliberately assigned (was "any member"): a receiving action of the
+        // owner or purchaser household, allowed post-finalize (re-snaps).
+        if (
+          lot.restock.pantry.householdId !== ctx.user.householdId &&
+          lot.restock.purchaserHouseholdId !== ctx.user.householdId
+        ) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+        requireCapability(ctx.user, 'receiveStock');
         await assertFreshUpload(tx, 'units', input.path);
         await tx.lot.update({ where: { id: input.lotId }, data: { unitPhotoPath: input.path } });
         return lot.unitPhotoPath;
@@ -680,7 +815,7 @@ export const restockRouter = router({
             if (restock.status !== 'DRAFT') {
               throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Already finalized.' });
             }
-            assertMayFinalize(restock, ctx.user);
+            assertOwnerReceiving(restock, ctx.user);
             if (restock.lots.length === 0) {
               throw new TRPCError({
                 code: 'PRECONDITION_FAILED',
@@ -743,8 +878,23 @@ export const restockRouter = router({
             }
 
             // Cross-household: credit the purchaser at cost (tax-inclusive),
-            // received units only.
+            // received units only. The connection is re-verified at the MONEY
+            // moment — a draft can sit for days, and B6 forbids new money
+            // across an edge severed mid-draft (validated at create/edit too,
+            // but the credit posts HERE).
             if (restock.purchaserHouseholdId !== restock.pantry.householdId && creditCents > 0) {
+              const edge = await getConnection(
+                tx,
+                restock.purchaserHouseholdId,
+                restock.pantry.householdId,
+              );
+              if (edge?.status !== 'ACTIVE') {
+                throw new TRPCError({
+                  code: 'PRECONDITION_FAILED',
+                  message:
+                    'The purchaser household is no longer connected — change the purchaser before finalizing.',
+                });
+              }
               await tx.ledgerEntry.create({
                 data: {
                   type: 'RESTOCK_CREDIT',
@@ -840,7 +990,8 @@ export const restockRouter = router({
             message: 'Only a finalized restock has a credit to correct.',
           });
         }
-        // Authz: purchaser or pantry-owning household (blueprint 01 matrix).
+        // Authz: purchaser or pantry-owning household (blueprint 01 matrix),
+        // with settleMoney — this rewrites posted money (REWORK A3a).
         if (
           restock.purchaserHouseholdId !== ctx.user.householdId &&
           restock.pantry.householdId !== ctx.user.householdId
@@ -850,6 +1001,7 @@ export const restockRouter = router({
             message: 'Only the purchaser or pantry-owning household can correct this credit.',
           });
         }
+        requireCapability(ctx.user, 'settleMoney');
         if (restock.purchaserHouseholdId === restock.pantry.householdId) {
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
@@ -962,6 +1114,8 @@ export const restockRouter = router({
             message: 'Only the purchaser or pantry-owning household can void this restock.',
           });
         }
+        // Voiding reverses posted money (REWORK A3a).
+        requireCapability(ctx.user, 'settleMoney');
         const takeCount = await tx.take.count({ where: { lot: { restockId: restock.id } } });
         if (takeCount > 0) {
           throw new TRPCError({
@@ -1017,8 +1171,8 @@ export const restockRouter = router({
     .input(z.object({ restockId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const paths = await dbTransaction(async (tx) => {
-        const restock = await getDraftOrThrow(tx, input.restockId);
-        assertMayFinalize(restock, ctx.user);
+        const restock = await getDraftOrThrow(tx, ctx.user, input.restockId);
+        assertOwnerReceiving(restock, ctx.user);
         const images = await tx.restockImage.findMany({ where: { restockId: restock.id } });
         const lots = await tx.lot.findMany({ where: { restockId: restock.id } });
         await tx.restock.delete({ where: { id: restock.id } }); // cascades lots/images

@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
+import { hasActiveGrant } from '@/server/authz';
 import { db } from '@/server/db';
 import { ItemDetailView, type ItemDetail } from './item-detail-view';
 
@@ -20,6 +21,13 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     },
   });
   if (!item) notFound();
+  // View gate (REWORK B2/B3): own item, or a SHARED item of a household
+  // extending us the lending grant over an ACTIVE connection.
+  if (item.householdId !== user.householdId) {
+    const visible =
+      item.shared && (await hasActiveGrant(db, item.householdId, user.householdId, 'lending'));
+    if (!visible) notFound();
+  }
 
   // Borrower household = the checkout-time snapshot on each loan (REWORK A3);
   // resolve names in one lookup.

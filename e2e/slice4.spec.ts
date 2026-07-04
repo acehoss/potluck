@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { login } from './helpers';
 
 /**
  * Slice 4 acceptance (blueprint 02 anchors): settle-to-zero with prefills,
@@ -11,7 +12,6 @@ import { expect, test, type Page } from '@playwright/test';
  * carry the project name and a per-run token.
  */
 
-const PASSWORD = 'demo-password';
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const RUN = Date.now().toString(36);
 
@@ -20,15 +20,6 @@ const fmt = (cents: number) =>
   `$${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, '0')}`;
 /** Matches the UI's signed rendering: "+$1.23" / "−$1.23" (U+2212 minus). */
 const fmtSigned = (cents: number) => `${cents > 0 ? '+' : '−'}${fmt(Math.abs(cents))}`;
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 /** Open the first pantry of the matching household section, via the tab bar. */
 async function openPantryOf(page: Page, household: string | 'own') {
@@ -150,12 +141,12 @@ test('settle up prefills toward zero, zeroes the pair, and renders from both sid
 
   // Aaron stocks 3 units at $10.00 → $3.33/u; Dana orders 2 and picks them up
   // → owes $6.66 (a pickup is the only way a take is created now).
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { lotId, pantryId } = await receiveLot(page, { product, units: 3, total: '10.00' });
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   await orderPickup(dana, page, pantryId, lotId, 2);
 
   let net = await netCents(page);
@@ -200,7 +191,7 @@ test('settle up prefills toward zero, zeroes the pair, and renders from both sid
   // highlight; only the recording user himself is excluded.
   const marieContext = await browser.newContext({ baseURL: BASE });
   const marie = await marieContext.newPage();
-  await login(marie, 'marie@demo.coop');
+  await login(marie, 'marie');
   await expect(marie.getByTestId('ledger-new-dot')).toBeVisible();
   await marie.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
   const marieRow = marie.getByTestId('ledger-row').filter({ hasText: rowText });
@@ -230,7 +221,7 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
   const P = testInfo.project.name;
   const product = uniq('Recount Peas', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { lotId, code } = await receiveLot(page, { product, units: 5, total: '5.00' });
   const before = await netCents(page);
   await openPantryOf(page, 'own');
@@ -272,7 +263,7 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
   // sees the ⋯ menu on a pantry that isn't her household's.
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const foreign = await dana.request.post('/api/trpc/adjustment.recount', {
     data: { lotId, countAfter: 0 },
   });
@@ -297,7 +288,7 @@ test('write-off requires a reason, decrements, and the owner eats the cost', asy
   const P = testInfo.project.name;
   const product = uniq('Writeoff Salsa', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { lotId, code } = await receiveLot(page, { product, units: 4, total: '8.00' });
   const before = await netCents(page);
   await openPantryOf(page, 'own');
@@ -356,7 +347,7 @@ test('manual adjustment requires a note and moves the net in the chosen directio
   const noteUp = `adj-up-${P}-${RUN}`;
   const noteDown = `adj-down-${P}-${RUN}`;
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const before = await netCents(page);
 
   // "In-Laws owes us" $1.23 → net moves up by 123.
@@ -399,13 +390,20 @@ test('manual adjustment requires a note and moves the net in the chosen directio
   await expect(downRow).toBeVisible();
   await page.getByRole('tab', { name: 'All' }).click();
 
-  // The note is REQUIRED server-side; household ids come from the net strips.
+  // The note is REQUIRED server-side; household ids come from the net strips
+  // (filtered by name — Aaron has a strip per connected counterparty now).
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  const inLawsId = (await page.getByTestId('net-strip').getAttribute('href'))!.split('with=')[1];
+  const inLawsId = (await page
+    .getByTestId('net-strip')
+    .filter({ hasText: 'In-Laws' })
+    .getAttribute('href'))!.split('with=')[1];
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
-  const heiseId = (await dana.getByTestId('net-strip').getAttribute('href'))!.split('with=')[1];
+  await login(dana, 'dana');
+  const heiseId = (await dana
+    .getByTestId('net-strip')
+    .filter({ hasText: 'Heise' })
+    .getAttribute('href'))!.split('with=')[1];
   await danaContext.close();
 
   const noNote = await page.request.post('/api/trpc/ledger.adjust', {
@@ -451,7 +449,7 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   // Dana baselines her per-pair seen watermark by viewing the ledger, then leaves.
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   await dana.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
   await expect(dana.getByTestId('net-hero')).toBeVisible();
   await expect(dana.getByTestId('ledger-new-dot')).toHaveCount(0); // markSeen landed
@@ -460,7 +458,7 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
 
   // Aaron posts a manual adjustment — the v1 counterparty notification is
   // the in-app "new" marker (push arrives in slice 7).
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
   await page.getByTestId('ledger-menu').click();
   await page.getByTestId('open-adjust').click();
@@ -476,7 +474,7 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   // pre-adjustment cache while the refetch is still in flight.
   const hasNewSettled = page.waitForResponse((r) => r.url().includes('ledger.hasNew'));
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(page.getByTestId('net-strip')).toBeVisible();
+  await expect(page.getByTestId('net-strip').filter({ hasText: 'In-Laws' })).toBeVisible();
   const hasNewBody = await (await hasNewSettled).json();
   const hasNewPayload = Array.isArray(hasNewBody) ? hasNewBody[0] : hasNewBody;
   expect(hasNewPayload.result.data.hasNew).toBe(false);
@@ -507,7 +505,7 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   // next visit.
   await expect(dana.getByTestId('ledger-new-dot')).toHaveCount(0);
   await dana.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(dana.getByTestId('net-strip')).toBeVisible();
+  await expect(dana.getByTestId('net-strip').filter({ hasText: 'Heise' })).toBeVisible();
   await expect(dana.getByTestId('ledger-new-dot')).toHaveCount(0);
   await dana.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
   await expect(dana.getByTestId('net-hero')).toBeVisible();
@@ -522,14 +520,17 @@ test('settle, adjust, and write-off replays with the same clientKey post once', 
   const P = testInfo.project.name;
   const product = uniq('Idem Yogurt', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { restockId, lotId } = await receiveLot(page, { product, units: 4, total: '4.00' });
   const got = await page.request.get(
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
   const heiseId = (await got.json()).result.data.pantry.householdId as string;
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  const inLawsId = (await page.getByTestId('net-strip').getAttribute('href'))!.split('with=')[1];
+  const inLawsId = (await page
+    .getByTestId('net-strip')
+    .filter({ hasText: 'In-Laws' })
+    .getAttribute('href'))!.split('with=')[1];
   const before = await netCents(page);
 
   // Settlement: a replay (double-tap / retry after a lost response) returns
@@ -609,7 +610,7 @@ test('recount and write-off are rejected while the restock is a draft', async ({
   // A draft restock with one line: its lot exists but is not adjustable —
   // finalize will overwrite remainingCount, so adjustments against it would
   // record counts that never described the shelf (invariant 9).
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openPantryOf(page, 'own');
   await page.getByTestId('receive-fab').click();
   await page.getByLabel('Retailer').fill(`S4-draft-${RUN}`);
@@ -650,7 +651,7 @@ test('a skipped unit photo can be added later from the lot ⋯ menu', async ({
 
   // receiveLot skips photos — exactly the wizard path whose copy promises
   // "You can add photos later" (blueprint 02 receiving step 4).
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await receiveLot(page, { product, units: 2, total: '3.00' });
   await openPantryOf(page, 'own');
   const row = page.getByTestId('product-row').filter({ hasText: product });
@@ -713,7 +714,7 @@ test('correct-credit reverses a wrong restock credit and reposts the right amoun
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
 
   const ov = (await (await page.request.get('/api/trpc/household.overview')).json()).result.data as {
     yourHouseholdId: string;

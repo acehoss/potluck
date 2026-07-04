@@ -12,6 +12,7 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
   const trpc = useTRPC();
   const router = useRouter();
   const [name, setName] = useState(defaultName);
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
@@ -29,7 +30,7 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
       className="flex w-full flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
-        accept.mutate({ token, name, email, password });
+        accept.mutate({ token, name, username, email, password });
       }}
     >
       <label className="flex flex-col gap-1 text-sm font-medium text-text">
@@ -43,6 +44,25 @@ export function AcceptInviteForm({ token, defaultName }: { token: string; defaul
           onChange={(e) => setName(e.target.value)}
           className={inputClass}
         />
+      </label>
+      <label className="flex flex-col gap-1 text-sm font-medium text-text">
+        Username
+        <input
+          type="text"
+          name="username"
+          required
+          minLength={3}
+          maxLength={30}
+          pattern="[a-z0-9_\-]+"
+          autoComplete="username"
+          autoCapitalize="none"
+          value={username}
+          onChange={(e) => setUsername(e.target.value.toLowerCase())}
+          className={inputClass}
+        />
+        <span className="text-xs font-normal text-text-muted">
+          How you sign in — lowercase letters, digits, - or _.
+        </span>
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium text-text">
         Email

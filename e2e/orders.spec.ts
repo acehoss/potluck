@@ -1,4 +1,5 @@
 import { expect, test, type APIResponse, type Page } from '@playwright/test';
+import { login } from './helpers';
 
 /**
  * Orders engine (PLAN "Orders & requests + receiving refinement", Slice B):
@@ -14,20 +15,10 @@ import { expect, test, type APIResponse, type Page } from '@playwright/test';
  * name carries the project + a per-run token.
  */
 
-const PASSWORD = 'demo-password';
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const RUN = Date.now().toString(36);
 
 const uniq = (name: string, project: string) => `${name} ${project}-${RUN}`;
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 async function openPantryOf(page: Page, household: string | 'own') {
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
@@ -135,13 +126,13 @@ test('order lifecycle: request reserves, picking locks, pickup posts the ledger'
   const product = uniq('OrderMaters', P);
 
   // Owner (In-Laws / Dana) stocks their pantry: 5 units @ $10.00 → $2.00/u.
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   const { pantryId, lotId } = await receiveLot(page, { product, units: 5, total: '10.00' });
 
   // Requester (Heise / Aaron) in a second context.
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
-  await login(aaron, 'aaron@demo.coop');
+  await login(aaron, 'aaron');
 
   try {
     // Baseline availability = 5 (nothing reserved yet).
@@ -191,12 +182,12 @@ test('canceling a requested order releases the reservation with no ledger moveme
   const P = testInfo.project.name;
   const product = uniq('CancelKale', P);
 
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   const { pantryId, lotId } = await receiveLot(page, { product, units: 4, total: '8.00' });
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
-  await login(aaron, 'aaron@demo.coop');
+  await login(aaron, 'aaron');
   try {
     const before = await netCents(aaron);
     const { orderId } = await orderOk(aaron, 'addToCart', { pantryId, lotId, quantity: 3 });
@@ -220,7 +211,7 @@ test('own-pantry order runs the full flow but posts no ledger entry', async ({ p
   const P = testInfo.project.name;
   const product = uniq('OwnBeans', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { pantryId, lotId } = await receiveLot(page, { product, units: 3, total: '6.00' });
 
   const before = await netCents(page);
@@ -242,12 +233,12 @@ test('server guards: zod, ownership, over-reserve, and wrong-state transitions',
   const P = testInfo.project.name;
   const product = uniq('GuardRice', P);
 
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   const { pantryId, lotId } = await receiveLot(page, { product, units: 2, total: '4.00' });
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
-  await login(aaron, 'aaron@demo.coop');
+  await login(aaron, 'aaron');
   try {
     // zod: quantity must be ≥ 1.
     expect((await orderPost(aaron, 'addToCart', { pantryId, lotId, quantity: 0 })).status()).toBe(400);
@@ -301,12 +292,12 @@ test('the order flow works end to end through the UI (both households)', async (
   const product = uniq('UIButternut', P);
 
   // Owner (In-Laws / Dana) stocks 4 units @ $8.00 → $2.00/u.
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   const { pantryId } = await receiveLot(page, { product, units: 4, total: '8.00' });
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
-  await login(aaron, 'aaron@demo.coop');
+  await login(aaron, 'aaron');
   try {
     // Requester adds 2 to an order via the sheet, then opens the cart.
     await openPantryOf(aaron, 'In-Laws');
@@ -360,12 +351,12 @@ test('a picked-up cross-household order posts a TAKE both sides, filed under Tak
   const P = testInfo.project.name;
   const product = uniq('LedgerLentils', P);
 
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   const { pantryId, lotId } = await receiveLot(page, { product, units: 3, total: '9.00' }); // $3.00/u
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
-  await login(aaron, 'aaron@demo.coop');
+  await login(aaron, 'aaron');
   try {
     const aaronBefore = await netCents(aaron);
     const danaBefore = await netCents(page);
@@ -406,7 +397,7 @@ test('own-pantry pickup logs a no-charge take in the restock detail, undoable th
   const P = testInfo.project.name;
   const product = uniq('RestockRice', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { restockId, pantryId, lotId } = await receiveLot(page, { product, units: 2, total: '4.00' });
   await orderThroughPickup(page, page, pantryId, lotId, 1); // own pantry: $0
 
@@ -424,7 +415,7 @@ test('the add-to-order sheet preselects the oldest lot (FIFO)', async ({ page },
   const P = testInfo.project.name;
   const product = uniq('FifoFarro', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   // Older restock (explicit past date), then a second dated today.
   await receiveLot(page, { product, units: 2, total: '4.00', date: '2026-06-01' });
   await receiveLot(page, { product, units: 2, total: '4.40', existingProduct: true });
@@ -448,12 +439,12 @@ test('open-order reservations block a below-reserved write-off/recount and a res
   const P = testInfo.project.name;
   const product = uniq('GuardGrain', P);
 
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   const { restockId, pantryId, lotId } = await receiveLot(page, { product, units: 5, total: '10.00' });
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
-  await login(aaron, 'aaron@demo.coop');
+  await login(aaron, 'aaron');
   try {
     // Aaron reserves 3 of 5.
     const { orderId } = await orderOk(aaron, 'addToCart', { pantryId, lotId, quantity: 3 });

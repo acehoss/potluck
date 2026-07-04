@@ -16,15 +16,21 @@ export const productRouter = router({
    */
   search: protectedProcedure
     .input(z.object({ query: z.string().trim().max(200) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const q = input.query;
       const upcQ = looksLikeUpcQuery(q) ? normalizeScannedCode(q) : null;
+      // Scoped to the ACTING household's catalog (REWORK D1): search feeds
+      // the receiving picker, and receiving runs as the pantry owner — other
+      // households' same-named products are separate rows by design.
       const products = await db.product.findMany({
-        where: q
-          ? upcQ
-            ? { OR: [{ upc: upcQ }, { name: { contains: q } }] }
-            : { name: { contains: q } }
-          : undefined,
+        where: {
+          householdId: ctx.user.householdId,
+          ...(q
+            ? upcQ
+              ? { OR: [{ upc: upcQ }, { name: { contains: q } }] }
+              : { name: { contains: q } }
+            : undefined),
+        },
         orderBy: { createdAt: 'desc' },
         take: 8,
         select: { id: true, name: true, upc: true },

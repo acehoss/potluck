@@ -291,12 +291,23 @@ function EditDetailsSheet({
               onChange={(e) => setPurchaserHouseholdId(e.target.value)}
               className={inputClass}
             >
-              {(households.data?.households ?? [restock.purchaserHousehold]).map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.name}
-                  {households.data && h.id === households.data.yourHouseholdId ? ' (yours)' : ''}
-                </option>
-              ))}
+              {(() => {
+                // Union in the draft's CURRENT purchaser: the overview lists
+                // only ACTIVE connections, and a purchaser whose connection
+                // moved under the draft must stay selectable (keeping it is
+                // always allowed server-side; finalize re-checks at money
+                // time).
+                const options = households.data?.households ?? [];
+                const list = options.some((h) => h.id === restock.purchaserHousehold.id)
+                  ? options
+                  : [...options, restock.purchaserHousehold];
+                return (list.length > 0 ? list : [restock.purchaserHousehold]).map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name}
+                    {households.data && h.id === households.data.yourHouseholdId ? ' (yours)' : ''}
+                  </option>
+                ));
+              })()}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm font-medium text-text">

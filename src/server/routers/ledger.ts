@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
+import { getConnection, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
 import { adjustmentPushBody, notifyLedgerEvent, settlementPushBody } from '../push';
 import { protectedProcedure, router } from '../trpc';
@@ -28,8 +29,15 @@ async function assertPairWithMe(
       message: 'Your household must be part of this entry.',
     });
   }
-  const found = await tx.household.count({ where: { id: { in: [a, b] } } });
-  if (found !== 2) throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
+  // A money pair must ride a connection edge in ANY status — B6 keeps a
+  // SEVERED pair settleable forever, but a never-connected household is out
+  // of reach (and 404 keeps household ids unprobeable; a bare existence
+  // check would be an oracle).
+  const other = me === a ? b : a;
+  const connection = await getConnection(tx, me, other);
+  if (!connection) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
+  }
 }
 
 /**
@@ -76,6 +84,7 @@ export const ledgerRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'settleMoney');
       const result = await dbTransaction(async (tx) => {
         const replayed = await findReplayedEntry(tx, input.clientKey, 'SETTLEMENT', ctx.user.id);
         if (replayed) return { id: replayed.id, created: false };
@@ -132,6 +141,7 @@ export const ledgerRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'settleMoney');
       const result = await dbTransaction(async (tx) => {
         const replayed = await findReplayedEntry(tx, input.clientKey, 'ADJUSTMENT', ctx.user.id);
         if (replayed) return { id: replayed.id, created: false };
@@ -182,18 +192,29 @@ export const ledgerRouter = router({
         counterpartyHouseholdId: z.string().min(1),
         // The page's render timestamp, epoch ms (server-generated, echoed back).
         renderedAt: z.number().int().positive(),
+        // The acting household the PAGE rendered under. The acting cookie is
+        // browser-global: a stale tab left open across a household switch
+        // would otherwise mark entries seen under the wrong membership. A
+        // mismatch no-ops (the stale view saw nothing that matters here).
+        ownHouseholdId: z.string().min(1).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.ownHouseholdId && input.ownHouseholdId !== ctx.user.householdId) {
+        return { ok: true };
+      }
       // Clamp to the server clock — a forged future stamp would blind the
       // user to entries that don't exist yet.
       const seenAt = new Date(Math.min(input.renderedAt, Date.now()));
       await dbTransaction(async (tx) => {
-        const counterparty = await tx.household.findUnique({
-          where: { id: input.counterpartyHouseholdId },
-          select: { id: true },
-        });
-        if (!counterparty) throw new TRPCError({ code: 'NOT_FOUND' });
+        // Same reach rule as settle/adjust: the pair must ride a connection
+        // edge (any status); unconnected ids read as not-found.
+        const connection = await getConnection(
+          tx,
+          ctx.user.householdId,
+          input.counterpartyHouseholdId,
+        );
+        if (!connection) throw new TRPCError({ code: 'NOT_FOUND' });
         // Keyed by the viewer's ACTING household too: watching the same
         // counterparty from two memberships keeps two watermarks (REWORK A3).
         const key = {

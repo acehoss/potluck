@@ -140,6 +140,106 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+### Round 1 slice 2 — authz/capability layer, acting household, username login
+
+**2026-07-03 — done.** The network core now BEHAVES like a network: every mutation and
+read is gated by membership capabilities (A3a) × connection grants (B2) × shared flags
+(B3), the sticky acting-household switcher works end-to-end, and login is
+username-or-email. Full gate: fresh `down -v && build && SEED_DEMO=1
+EXTRACTION_MODE=fixture up --wait && npx playwright test` — **157 passed + 4 intentional
+skips, both engines** (one known-pattern webkit browser-age flake, retry-passed), after
+a real-browser drive of the switcher (Marie: Heise ⇄ Neighbors, screenshots
+`s2-switcher-heise.png` / `s2-switched-neighbors.png`).
+
+- **Authz core (`src/server/authz.ts`).** `requireCapability(user, cap)` (typed test on
+  the ACTING membership → 403), `hasActiveGrant(granter, grantee, grant)` (directional,
+  ACTIVE connections only), `activeConnectionsOf` (page scoping), and
+  `loadAccessiblePantry`. Error convention: capability failures on visible things are
+  403; visibility failures (no grant / not shared / no connection) are 404 — existence
+  never leaks.
+- **Capability map shipped** (every procedure): invites → `manageHousehold` · receiving
+  (create/all draft edits/extract) → pantry-OWNER household + `receiveStock`, with the
+  PURCHASER constrained to the acting household or an ACTIVELY-connected one (was free
+  client input!); finalize keeps creator/purchaser standing, adds owner-household ·
+  orders → `placeOrders` drafts/edits/cancels, cross-household submit adds `spend`,
+  owner side (`startPicking`/`markReady`/decline) → `fulfill`, pickup needs
+  requester-`spend`(cross)/`placeOrders`(own) OR owner-`fulfill` · `take.undo` →
+  `placeOrders` in the take's snapshot household · lending → `lendBorrow`, cross
+  checkout adds `Item.shared` + lending grant + `spend` when fee > 0 ·
+  recount/write-off → `adjustInventory` · settle/adjust/correctCredit/voidInError →
+  `settleMoney` (settle deliberately needs NO active connection — B6 lets severed pairs
+  settle) · `product.search` → acting household's catalog only.
+- **Read scoping** (B4 replaces "everyone sees everything"): `/` shows own pantries +
+  pantry-granted connections' SHARED pantries, net strips for every connected
+  counterparty; `/pantries/[id]`, `/restocks/[id]`, `/items/[id]` gained view gates;
+  `/pantries/[id]/restocks` is owner-only (the books); `/ledger` counterparties come
+  from connection rows in ANY status (severed pairs keep their history); `/items`
+  scopes by lending grant + shared; `/more` and `household.overview` list acting +
+  ACTIVE-connected households (pantries filtered by grant+shared).
+- **Acting household (A3b).** `auth.setActingHousehold` validates the target against
+  live memberships and sets the year-long `coop_household` cookie; the /more "Acting
+  as" card renders only for multi-membership users and full-reloads on switch (the
+  module-singleton query cache must die). Single-membership users never see it.
+- **Username login (A2).** `auth.login` takes `identifier` (username or email — '@'
+  disambiguates; both unique; DUMMY_HASH timing mask now covers username enumeration);
+  rate-limit keys moved to `login:id:`; error copy "Invalid username or password.";
+  registration collects an explicit username (charset-validated, conflict → 409).
+- **Demo seed grew the network (D3):** third household Neighbors (Nia, Owner; pantry
+  "Garage Shelves"), Heise↔Neighbors ACTIVE **share-only** (no pantry/lending grants —
+  the visible-but-not-browsable edge), In-Laws↔Neighbors **unconnected**, Marie gains
+  an ADULT membership in Neighbors (the switcher fixture; created second so Heise stays
+  her default), and Theo (TEEN preset) joins Heise for capability-denial coverage.
+- **e2e.** New shared `e2e/helpers.ts` (login by 'Username or email', apiLogin posting
+  `{identifier}`) replacing 8 duplicated copies (subagent-built); new
+  `e2e/network.spec.ts` (5 tests × 2 engines): switcher re-scoping + stickiness +
+  absence for single-membership users, Nia's scoped world (no In-Laws anywhere, Heise
+  visible but pantry-less, 404 ordering probe vs Dana's 200), Teen draft-yes/submit-403
+  + settle/adjust/recount/invite 403s + hidden invite affordance, receiving-as-owner
+  403 for a fully-granted counterparty + purchaser-attribution 200(connected)/404(bogus).
+  slice1 asserts the scoped counts (2 pantry groups, 2 net strips, 3 /more cards) and
+  the new login tests; slice4's single-net-strip reads became name-filtered.
+- **Adversarial review (workflow, 3 lenses × high/xhigh) → fix round before commit.**
+  22 findings (0 critical, 8 major); every real hole closed and re-proven:
+  `ledger.settle/adjust/markSeen` now require a connection edge in ANY status (a
+  settleMoney holder could previously post money + push-spam against ANY household id
+  in the instance — unconnected pairs also wedged an uncleanable "new" dot; 404 keeps
+  ids unprobeable while B6's severed-pair settlement still works) · `order.setLine` on
+  a REQUESTED cross-household order now needs `spend` (a placeOrders-only teen could
+  inflate an approved order past what the spend-holder submitted) · `order.pickup`
+  re-verifies the pantry grant at the MONEY moment (grant revoked/severed while READY
+  → 409 "cancel instead"; cancel deliberately stays grant-free so reservations always
+  release) · `restock.finalize` re-verifies the purchaser connection is ACTIVE before
+  posting the credit, and the finalize/removeImage/deleteDraft gate became
+  acting-owner-household + receiveStock (`assertOwnerReceiving`) — the old
+  bare-creator standing let a user demoted in the owner household finalize on a
+  capability from an UNRELATED household's membership, and purchaser-side finalize
+  let a teen post a credit in their own household's favor; the purchaser now reads
+  its credit on the restock detail (the wizard shell redirects non-owners there,
+  fixing the stranded-purchaser-draft dead cockpit) · the restock detail no longer
+  leaks a household's books to pantry-granted third households (non-party viewers get
+  the inventory story only: no credit/receipt images/totals/purchaser/adjustments,
+  takes filtered to their own household's) · draft probes by outsiders read 404
+  before any status distinction · fee-bearing `item.create`/fee edits need
+  `settleMoney` on top of lendBorrow (teens could unilaterally price future
+  cross-household income) · login gained a per-ACCOUNT rate bucket (username+email
+  would otherwise double the guessing budget) · `markSeen` echoes the rendering
+  household so a stale tab surviving a household switch no-ops instead of marking
+  the wrong membership's entries seen · EditDetailsSheet unions the draft's current
+  purchaser into its picker and the server always allows KEEPING it (only CHANGES
+  need an active connection — finalize re-checks at money time). e2e grew the
+  unconnected-pair money probe (Marie acting as Neighbors vs In-Laws → 404) and the
+  submitted-order inflation probe (Theo setLine → 403); slice2's gate test now
+  asserts the 404 convention. Final gate re-run: **159 passed + 4 skips, both
+  engines.**
+- **Known S3 polish gaps (deliberate):** UI affordances are not yet capability-hidden
+  everywhere (a Child-preset member would see a Receive FAB that 403s; Teen sees
+  lot-menu recount / order-fulfillment buttons that 403); severed-pair net strips
+  lose their /ledger entry point once severing exists (render any-status strips with
+  nonzero net, or give /ledger a pair picker); acceptInvite still mints Owner-preset
+  memberships (invite-carried presets are R1S4); loan.checkout's replay lookup runs
+  before the cross-household spend check (harmless; convention documented in
+  authz.ts).
+
 ### Round 1 slice 1 — schema + data migration (network core)
 
 **2026-07-03 — done.** Migration `20260703100000_network_core` + the compatibility shim;

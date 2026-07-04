@@ -43,12 +43,20 @@ export default async function LedgerPage({
   if (!user) redirect('/login');
 
   const { with: withParam } = await searchParams;
-  const households = await db.household.findMany({
+  const me = user.householdId;
+  // Counterparties = households connected to the acting household in ANY
+  // state (B6: severing never erases a pair's history or net — settlement
+  // still works across a severed edge; third-party pairs stay invisible).
+  const edges = await db.connection.findMany({
+    where: { OR: [{ householdAId: me }, { householdBId: me }] },
+    select: { householdAId: true, householdBId: true },
+  });
+  const counterpartyIds = edges.map((e) => (e.householdAId === me ? e.householdBId : e.householdAId));
+  const others = await db.household.findMany({
+    where: { id: { in: counterpartyIds } },
     orderBy: { createdAt: 'asc' },
     select: { id: true, name: true },
   });
-  const me = user.householdId;
-  const others = households.filter((h) => h.id !== me);
   const other = others.find((h) => h.id === withParam) ?? others[0] ?? null;
 
   if (!other) {

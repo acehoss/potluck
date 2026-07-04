@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
+import { activeConnectionsOf, hasActiveGrant } from '@/server/authz';
 import { db } from '@/server/db';
 import { restockCode } from '@/lib/domain';
 import { InventoryView, type ProductGroup } from './inventory-view';
@@ -15,6 +16,14 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
     include: { household: { select: { id: true, name: true } } },
   });
   if (!pantry) notFound();
+  // View gate (REWORK B2/B3/B4): your own pantry, or a SHARED pantry of a
+  // household extending you the pantry grant over an ACTIVE connection.
+  // Anything else reads as not-found — scoping never leaks existence.
+  if (pantry.householdId !== user.householdId) {
+    const visible =
+      pantry.shared && (await hasActiveGrant(db, pantry.householdId, user.householdId, 'pantry'));
+    if (!visible) notFound();
+  }
 
   const rawLots = await db.lot.findMany({
     where: {
@@ -91,22 +100,23 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
   }
 
   const isOwn = pantry.householdId === user.householdId;
-  // Resume banner only for drafts this user can actually finalize/abandon
-  // (creator or purchaser household — the restock router's gate); otherwise
-  // it walks them into a wizard whose Finalize is FORBIDDEN.
-  const draft = isOwn
-    ? await db.restock.findFirst({
-        where: {
-          pantryId: pantry.id,
-          status: 'DRAFT',
-          OR: [{ createdById: user.id }, { purchaserHouseholdId: user.householdId }],
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true, retailer: true },
-      })
-    : null;
+  // Resume banner only for drafts this user can actually edit and finalize —
+  // owner-household receiving with the receiveStock capability (the restock
+  // router's gate); otherwise it walks them into a FORBIDDEN wizard.
+  const draft =
+    isOwn && user.activeMembership.receiveStock
+      ? await db.restock.findFirst({
+          where: { pantryId: pantry.id, status: 'DRAFT' },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, retailer: true },
+        })
+      : null;
 
+  // Purchaser picker options: the acting household plus its ACTIVE
+  // connections (the restock router enforces the same set).
+  const connections = await activeConnectionsOf(db, user.householdId);
   const households = await db.household.findMany({
+    where: { id: { in: [user.householdId, ...connections.map((c) => c.counterpartyId)] } },
     orderBy: { createdAt: 'asc' },
     select: { id: true, name: true },
   });

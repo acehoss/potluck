@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { login } from './helpers';
 
 /**
  * Polish-round acceptance: the receiving tweaks layered on slices 2/5 —
@@ -14,18 +15,8 @@ import { expect, test, type Page } from '@playwright/test';
  * Shares the DB with the other specs: names carry the project + a per-run token.
  */
 
-const PASSWORD = 'demo-password';
 const RUN = Date.now().toString(36);
 const uniq = (name: string, project: string) => `${name}-${project}-${RUN}`;
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 async function openOwnPantry(page: Page) {
   await page.goto('/');
@@ -90,7 +81,7 @@ test('lot code shows up front, and entered tax closes the reconcile and folds in
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   // Aaron (Heise) receives into his pantry, purchased by In-Laws → In-Laws
   // is credited (cross-household).
@@ -127,7 +118,7 @@ test('a non-coop (excluded) line reconciles the receipt without creating invento
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   await startRestock(page, { retailer: uniq('Excl', P), receiptTotal: '15.00', purchaser: 'In-Laws' });
   await page.getByRole('button', { name: 'Skip photos' }).click();
@@ -158,7 +149,7 @@ test('receipt photos auto-extract lines on the review screen, and the tax is a o
 }, testInfo) => {
   const P = testInfo.project.name;
   test.skip(P === 'webkit', 'one auto-extract proof on chromium is enough; fixture path is engine-agnostic');
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   await startRestock(page, { retailer: uniq('Auto', P) });
 
@@ -181,7 +172,7 @@ test('restock history lists runs; finalized corrections reverse+repost the credi
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const pantryId = await openOwnPantry(page);
 
   // A cross-household restock, 2 units received → In-Laws credited $10.00.

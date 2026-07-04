@@ -11,7 +11,7 @@ const inputClass =
 export function LoginForm() {
   const trpc = useTRPC();
   const router = useRouter();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
 
   const login = useMutation(
@@ -28,18 +28,19 @@ export function LoginForm() {
       className="flex w-full flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
-        login.mutate({ email, password });
+        login.mutate({ identifier, password });
       }}
     >
       <label className="flex flex-col gap-1 text-sm font-medium text-text">
-        Email
+        Username or email
         <input
-          type="email"
-          name="email"
+          type="text"
+          name="username"
           required
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          autoComplete="username"
+          autoCapitalize="none"
+          value={identifier}
+          onChange={(e) => setIdentifier(e.target.value)}
           className={inputClass}
         />
       </label>

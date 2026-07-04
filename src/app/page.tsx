@@ -2,22 +2,38 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
+import { activeConnectionsOf } from '@/server/authz';
 import { db } from '@/server/db';
 import { netByCounterparty } from '@/server/ledger';
 import { BrandMark } from './brand-mark';
 
 /**
- * Pantries tab (blueprint 02): every pantry across all households —
- * transparency principle — with live unit counts. Yours first.
+ * Pantries tab: the acting household's pantries plus — for ACTIVE
+ * connections that grant us pantry access (REWORK B2/B4, replacing the
+ * everyone-sees-everything premise) — their SHARED pantries. Yours first.
  */
 export default async function PantriesPage() {
   const user = await getSessionUser();
   if (!user) redirect('/login');
 
-  const households = await db.household.findMany({
-    orderBy: { createdAt: 'asc' },
-    include: { pantries: { orderBy: { createdAt: 'asc' } } },
-  });
+  const connections = await activeConnectionsOf(db, user.householdId);
+  const pantryGranters = new Set(
+    connections.filter((c) => c.theyGrant.pantry).map((c) => c.counterpartyId),
+  );
+  // All connected counterparties are fetched (a net strip shows regardless of
+  // grants — a balance is pair data); pantry GROUPS render only where the
+  // pantry grant reaches us.
+  const households = (
+    await db.household.findMany({
+      where: { id: { in: [user.householdId, ...connections.map((c) => c.counterpartyId)] } },
+      orderBy: { createdAt: 'asc' },
+      include: { pantries: { orderBy: { createdAt: 'asc' } } },
+    })
+  ).map((h) => ({
+    ...h,
+    // Others' private pantries are invisible (B3); your own are always shown.
+    pantries: h.id === user.householdId ? h.pantries : h.pantries.filter((p) => p.shared),
+  }));
   households.sort((a, b) => (a.id === user.householdId ? -1 : b.id === user.householdId ? 1 : 0));
 
   // Live counts: sum of lot remainders over finalized restocks, per pantry.
@@ -37,9 +53,13 @@ export default async function PantriesPage() {
     unitsByPantry.set(pantryId, (unitsByPantry.get(pantryId) ?? 0) + (r._sum.remainingCount ?? 0));
   }
 
-  // The net number is the product (SPEC §2): one strip per counterparty.
+  // The net number is the product (SPEC §2): one strip per connected
+  // counterparty.
   const net = await netByCounterparty(user.householdId);
   const others = households.filter((h) => h.id !== user.householdId);
+  const pantryGroups = households.filter(
+    (h) => h.id === user.householdId || pantryGranters.has(h.id),
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24 lg:max-w-4xl">
@@ -85,7 +105,7 @@ export default async function PantriesPage() {
         {/* Desktop: the centered mobile column is fine (blueprint 02), but the
             two household groups sit side-by-side where that's free. */}
         <div className="flex flex-col gap-6 lg:grid lg:grid-cols-2 lg:items-start">
-        {households.map((household) => {
+        {pantryGroups.map((household) => {
           const isYours = household.id === user.householdId;
           return (
             <section key={household.id} data-testid="pantry-group" className="flex flex-col gap-2">

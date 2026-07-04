@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
+import { activeConnectionsOf } from '@/server/authz';
 import { db } from '@/server/db';
 import { InviteMember } from '../invite-member';
 import { LogoutButton } from '../logout-button';
+import { HouseholdSwitcher } from './household-switcher';
 import { InstallCard, NotificationsCard } from './pwa-cards';
 
 /** More tab (blueprint 02): household members, invite link, sign out. */
@@ -10,8 +12,11 @@ export default async function MorePage() {
   const user = await getSessionUser();
   if (!user) redirect('/login');
 
+  // The acting household + its ACTIVE connections (REWORK B4 scoping).
+  const connections = await activeConnectionsOf(db, user.householdId);
   const households = (
     await db.household.findMany({
+      where: { id: { in: [user.householdId, ...connections.map((c) => c.counterpartyId)] } },
       orderBy: { createdAt: 'asc' },
       include: {
         memberships: {
@@ -36,6 +41,15 @@ export default async function MorePage() {
       </header>
 
       <main className="flex flex-col gap-4">
+        {user.memberships.length > 1 && (
+          <HouseholdSwitcher
+            memberships={user.memberships.map((m) => ({
+              householdId: m.householdId,
+              householdName: m.household.name,
+            }))}
+            activeHouseholdId={user.householdId}
+          />
+        )}
         {households.map((household) => {
           const isYours = household.id === user.householdId;
           return (
@@ -57,7 +71,7 @@ export default async function MorePage() {
                   <li key={member.id}>{member.name}</li>
                 ))}
               </ul>
-              {isYours && <InviteMember />}
+              {isYours && user.activeMembership.manageHousehold && <InviteMember />}
             </section>
           );
         })}

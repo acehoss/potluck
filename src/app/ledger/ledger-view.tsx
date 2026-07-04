@@ -104,8 +104,11 @@ export function LedgerView({
     }),
   );
   useEffect(() => {
-    markSeen({ counterpartyHouseholdId: other.id, renderedAt });
-  }, [markSeen, other.id, renderedAt]);
+    // ownHouseholdId pins the watermark to the household this page RENDERED
+    // under — a stale tab surviving an acting-household switch no-ops instead
+    // of marking the wrong membership's entries seen.
+    markSeen({ counterpartyHouseholdId: other.id, renderedAt, ownHouseholdId: yourHouseholdId });
+  }, [markSeen, other.id, renderedAt, yourHouseholdId]);
 
   const undo = useMutation(
     trpc.take.undo.mutationOptions({

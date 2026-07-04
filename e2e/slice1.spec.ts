@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { login } from './helpers';
 
 /**
  * Slice 1 acceptance: auth, invite-only registration, and the household
@@ -7,21 +8,9 @@ import { expect, test } from '@playwright/test';
  * the dashboard became the Pantries tab; members/invites live on /more.
  */
 
-const PASSWORD = 'demo-password';
 // Per-run token: registration emails must be fresh when the suite re-runs
 // against a still-running stack.
 const RUN = Date.now().toString(36);
-
-async function login(page: import('@playwright/test').Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  // Wait for the actual navigation — 'your household' alone would match the
-  // login footer ("…a member of your household…") before the session lands.
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 test('anonymous visitors are redirected to login', async ({ page }) => {
   await page.goto('/');
@@ -29,36 +18,55 @@ test('anonymous visitors are redirected to login', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Private Coop' })).toBeVisible();
 });
 
-test('a member signs in and sees every household and pantry', async ({ page }) => {
-  await login(page, 'aaron@demo.coop');
+test('a member signs in and sees the households their connections grant', async ({ page }) => {
+  await login(page, 'aaron');
 
-  // Pantries tab: both households' pantries, yours first (transparency).
+  // Pantries tab: pantry GROUPS render only where the pantry grant reaches
+  // us — Heise (own) and In-Laws (full-grant connection); Neighbors is
+  // connected share-only, so its pantries stay invisible (REWORK B2/B4).
   const groups = page.getByTestId('pantry-group');
   await expect(groups).toHaveCount(2);
   await expect(groups.first()).toContainText('Heise');
   await expect(groups.last()).toContainText('In-Laws');
   await expect(page.getByTestId('pantry-row')).toHaveCount(2);
+  // Net strips cover every connected counterparty, grants or not.
+  await expect(page.getByTestId('net-strip')).toHaveCount(2);
 
-  // Members moved to the More tab.
+  // Members moved to the More tab; every ACTIVE-connected household shows.
   await page.goto('/more');
-  await expect(page.getByTestId('household-card')).toHaveCount(2);
+  await expect(page.getByTestId('household-card')).toHaveCount(3);
   await expect(page.getByText('Aaron', { exact: true })).toBeVisible();
   await expect(page.getByText('Dana', { exact: true })).toBeVisible();
 });
 
 test('login rejects a wrong password', async ({ page }) => {
   await page.goto('/login');
-  await page.getByLabel('Email').fill('aaron@demo.coop');
+  await page.getByLabel('Username or email').fill('aaron@demo.coop');
   await page.getByLabel('Password').fill('not-the-password');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByText('Invalid email or password.')).toBeVisible();
+  await expect(page.getByText('Invalid username or password.')).toBeVisible();
   await expect(page).toHaveURL(/\/login$/);
+});
+
+test('login works by username and by email', async ({ page }) => {
+  // The username is the identity now, but the email still resolves the same
+  // account — the server disambiguates on '@' (REWORK A2).
+  await login(page, 'dana');
+  // tRPC mutations want a JSON body even when the input is void — a bodyless
+  // POST 400s and would leave the session alive (the next login() would then
+  // bounce straight off /login's already-signed-in redirect).
+  const out = await page.request.post('/api/trpc/auth.logout', { data: {} });
+  expect(out.ok()).toBe(true);
+  await login(page, 'dana@demo.coop');
 });
 
 test('a member invites someone, who registers and appears in the household', async ({ page }, testInfo) => {
   // Both browser projects share one database — keep invitees distinct.
   const invitee = `Terry-${testInfo.project.name}-${RUN}`;
-  await login(page, 'aaron@demo.coop');
+  // Username identity (REWORK A2): lowercase ^[a-z0-9_-]{3,30}$ — truncate the
+  // project name to 4 chars so 'terry-<project>-<run>' always fits the cap.
+  const username = `terry-${testInfo.project.name.slice(0, 4)}-${RUN}`;
+  await login(page, 'aaron');
   await page.goto('/more');
 
   await page.getByPlaceholder('Name (optional)').fill(invitee);
@@ -72,6 +80,7 @@ test('a member invites someone, who registers and appears in the household', asy
   await expect(page.getByText('invited to join the Heise household')).toBeVisible();
   await expect(page.getByLabel('Your name')).toHaveValue(invitee);
 
+  await page.getByLabel('Username').fill(username);
   await page.getByLabel('Email').fill(`terry-${testInfo.project.name}-${RUN}@demo.coop`);
   await page.getByLabel('Password').fill('terry-password-123');
   await page.getByRole('button', { name: 'Join household' }).click();
@@ -83,7 +92,7 @@ test('a member invites someone, who registers and appears in the household', asy
 });
 
 test('an invite link cannot be used twice', async ({ page }, testInfo) => {
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   await page.goto('/more');
 
   await page.getByRole('button', { name: 'Invite a member' }).click();
@@ -94,6 +103,15 @@ test('an invite link cannot be used twice', async ({ page }, testInfo) => {
   await page.getByLabel('Your name').fill(`Robin-${testInfo.project.name}-${RUN}`);
   await page.getByLabel('Email').fill(`robin-${testInfo.project.name}-${RUN}@demo.coop`);
   await page.getByLabel('Password').fill('robin-password-123');
+
+  // A taken username is rejected (server CONFLICT) before the invite is spent —
+  // 'aaron' is always seeded, so this is stable across re-runs.
+  await page.getByLabel('Username').fill('aaron');
+  await page.getByRole('button', { name: 'Join household' }).click();
+  await expect(page.getByText('That username is taken.')).toBeVisible();
+
+  // Correct the username and finish; the invite is only claimed on success.
+  await page.getByLabel('Username').fill(`robin-${testInfo.project.name.slice(0, 4)}-${RUN}`);
   await page.getByRole('button', { name: 'Join household' }).click();
   await expect(page.getByText('your household')).toBeVisible();
 
@@ -103,7 +121,7 @@ test('an invite link cannot be used twice', async ({ page }, testInfo) => {
 });
 
 test('signing out ends the session', async ({ page }) => {
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await page.goto('/more');
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login$/);

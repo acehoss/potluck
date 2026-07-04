@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { login } from './helpers';
 
 /**
  * Slice 5 acceptance (blueprint 02/04 §3): VLM extraction prefilling the
@@ -25,7 +26,6 @@ import { expect, test, type Page } from '@playwright/test';
  * aaron, failure/edge paths as dana, and the exhaustion test as marie.
  */
 
-const PASSWORD = 'demo-password';
 const RUN = Date.now().toString(36);
 
 const uniq = (name: string, project: string) => `${name} ${project}-${RUN}`;
@@ -39,15 +39,6 @@ const CHIPS = 'TORTILLA CHIPS 2LB';
 // chars; the client must slice it to saveLine's 200-char product-name cap).
 const EDGE_LONG_DESCRIPTION =
   'ORGANIC FAIR TRADE SHADE GROWN WHOLE BEAN ESPRESSO ROAST COFFEE '.repeat(4).slice(0, 240);
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 /**
  * Requests from a service-worker-controlled page bypass page.route() in
@@ -167,7 +158,7 @@ async function landProposal(page: Page, name: string) {
 
 test('extract → land/process/ignore proposals → lines land in the draft → finalize', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   // No receipt total: the reconcile step auto-passes, single-tap finalize.
   await startRestock(page, { retailer: `Extract-${P}-${RUN}` });
@@ -249,7 +240,7 @@ test('extract → land/process/ignore proposals → lines land in the draft → 
 
 test('an unmatched proposal has no one-tap Confirm — Process forces a real product name', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `Unmatched-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
@@ -292,7 +283,7 @@ test('an unmatched proposal has no one-tap Confirm — Process forces a real pro
 
 test('proposals match existing products; re-extract never re-proposes confirmed lines', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `Match-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
@@ -332,7 +323,7 @@ test('proposals match existing products; re-extract never re-proposes confirmed 
 
 test('hostile model output is sanitized: clamps, 200-char cap, discounts dropped', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `Edge-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-edge.jpg');
@@ -373,7 +364,7 @@ test('hostile model output is sanitized: clamps, 200-char cap, discounts dropped
 
 test('zero-line extraction shows a dismissible notice', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `Empty-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-empty.jpg');
@@ -395,7 +386,7 @@ test('zero-line extraction shows a dismissible notice', async ({ page }, testInf
 
 test('unknown receipt fails extraction with a retriable notice; manual entry is untouched', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'dana@demo.coop');
+  await login(page, 'dana');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `Fail-${P}-${RUN}` });
   // unit-tomatoes.jpg has no committed extraction fixture: its sha256 is
@@ -458,7 +449,7 @@ test('extract affordance hides when the server reports extraction disabled', asy
   );
 
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `OffClient-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
@@ -479,7 +470,7 @@ test('off mode hides the extraction affordance', async ({ page }, testInfo) => {
   // server-derived flag is what's under test here; the client affordance is
   // covered on every standard run by the interception test above.
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   const restockId = await startRestock(page, { retailer: `Off-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
@@ -512,7 +503,7 @@ test('extract is rejected for unauthenticated callers and finalized restocks', a
 
   // FINALIZED restocks refuse extraction (412) — and do so before consuming
   // any of the caller's extraction budget.
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   const restockId = await startRestock(page, { retailer: `Sealed-${P}-${RUN}` });
   await page.getByRole('button', { name: 'Skip photos' }).click();
@@ -541,7 +532,7 @@ test('extraction is rate-limited per user', async ({ page }, testInfo) => {
   // Marie is the dedicated rate-limit user: exhausting her budget must not
   // starve the happy-path users, across engines or immediate re-runs. The
   // fixture-mode budget is 200/15 min (20 in live mode — see restock.ts).
-  await login(page, 'marie@demo.coop');
+  await login(page, 'marie');
   await openOwnPantry(page);
   const restockId = await startRestock(page, { retailer: `Limit-${P}-${RUN}` });
 
@@ -564,7 +555,7 @@ test('extraction is rate-limited per user', async ({ page }, testInfo) => {
 
 test('a matched proposal offers one-tap Confirm; the saved flash shows the line already below', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openOwnPantry(page);
   await startRestock(page, { retailer: `MatchFlash-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');

@@ -92,6 +92,21 @@ export async function clearSessionCookie() {
 }
 
 /**
+ * Persist the sticky acting-household choice (REWORK A3b). Long-lived — it
+ * outlives sessions deliberately (the preference is per-browser, and
+ * getSessionUser validates it against live memberships on every request).
+ */
+export async function setActingHouseholdCookie(householdId: string, secure: boolean) {
+  (await cookies()).set(ACTING_HOUSEHOLD_COOKIE, householdId, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure,
+    path: '/',
+    maxAge: 365 * 24 * 60 * 60,
+  });
+}
+
+/**
  * Validates the session cookie. Returns the user with their memberships and
  * the resolved ACTING household (REWORK A3), or null. `householdId` /
  * `household` are the acting household — the sticky-switcher cookie when it

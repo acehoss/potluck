@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { formatCents } from '@/lib/money';
+import { hasActiveGrant, requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { deleteImageFile, imageFileExists, isStoredImagePath } from '../images';
 import { protectedProcedure, router } from '../trpc';
@@ -76,6 +77,11 @@ export const itemRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      // A per-loan fee prices future cross-household income for this
+      // household — money administration, not day-to-day lending. Zero-fee
+      // items stay open to any lendBorrow holder.
+      if (input.feeCents > 0) requireCapability(ctx.user, 'settleMoney');
       if (input.householdId !== ctx.user.householdId) {
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -126,6 +132,7 @@ export const itemRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
       const oldPhoto = await dbTransaction(async (tx) => {
         const item = await tx.item.findUnique({ where: { id: input.itemId } });
         if (!item) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
@@ -134,6 +141,10 @@ export const itemRouter = router({
             code: 'FORBIDDEN',
             message: 'Only the owning household can edit an item.',
           });
+        }
+        // Fee changes are money administration (see item.create).
+        if (input.feeCents !== undefined && input.feeCents !== item.feeCents) {
+          requireCapability(ctx.user, 'settleMoney');
         }
         if (typeof input.photoPath === 'string') {
           await assertFreshItemPhoto(tx, input.photoPath);
@@ -187,6 +198,7 @@ export const loanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
       try {
         return await dbTransaction(async (tx) => {
           // Replay of a committed checkout (same key): return the original.
@@ -207,6 +219,20 @@ export const loanRouter = router({
 
           const item = await tx.item.findUnique({ where: { id: input.itemId } });
           if (!item) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+
+          // Cross-household borrowing rides the LENDING grant over an ACTIVE
+          // connection, against a SHARED item (REWORK B2/B3) — invisible
+          // items read as not-found. A fee-bearing cross-household checkout
+          // posts money, so it additionally needs spend (A3a).
+          if (item.householdId !== ctx.user.householdId) {
+            const visible =
+              item.shared &&
+              (await hasActiveGrant(tx, item.householdId, ctx.user.householdId, 'lending'));
+            if (!visible) {
+              throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+            }
+            if (item.feeCents > 0) requireCapability(ctx.user, 'spend');
+          }
 
           // TOCTOU guard on posted money: the fee charged must be the fee the
           // borrower saw. Checked whenever the client says what it displayed.
@@ -278,6 +304,7 @@ export const loanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
       return dbTransaction(async (tx) => {
         const loan = await tx.loan.findUnique({
           where: { id: input.loanId },
@@ -318,6 +345,7 @@ export const loanRouter = router({
   undoCheckout: protectedProcedure
     .input(z.object({ loanId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
       return dbTransaction(async (tx) => {
         const loan = await tx.loan.findUnique({
           where: { id: input.loanId },

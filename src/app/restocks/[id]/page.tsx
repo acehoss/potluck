@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { restockCode, unitCostCents } from '@/lib/domain';
 import { formatCents } from '@/lib/money';
 import { getSessionUser } from '@/server/auth';
+import { hasActiveGrant } from '@/server/authz';
 import { db } from '@/server/db';
 import { getActiveRestockCredit } from '@/server/ledger';
 import { AdjustmentsList, type AdjustmentRow } from './adjustments-list';
@@ -33,6 +34,22 @@ export default async function RestockDetailPage({
     },
   });
   if (!restock) notFound();
+  // View gate (REWORK B4): the owner household, the purchaser household (the
+  // credit's audit trail is theirs), or anyone the pantry itself is visible
+  // to (shared + pantry grant — takers reach lot codes through inventory).
+  // Non-party viewers get the INVENTORY story only: the household's books
+  // (credit, receipt images/totals, other households' takes, adjustments)
+  // are pair data and never render for a third household.
+  const viewerIsParty =
+    restock.pantry.householdId === user.householdId ||
+    restock.purchaserHouseholdId === user.householdId;
+  if (!viewerIsParty) {
+    const pantryRow = await db.pantry.findUnique({ where: { id: restock.pantryId } });
+    const visible =
+      pantryRow?.shared &&
+      (await hasActiveGrant(db, restock.pantry.householdId, user.householdId, 'pantry'));
+    if (!visible) notFound();
+  }
 
   const credit = await getActiveRestockCredit(restock.id);
   // Takes against this restock's lots — the persistent undo path for
@@ -45,17 +62,22 @@ export default async function RestockDetailPage({
       lot: { select: { product: { select: { name: true } } } },
     },
   });
-  const takeRows: TakeRow[] = takes.map((t) => ({
-    id: t.id,
-    quantity: t.quantity,
-    productName: t.lot.product?.name ?? 'item',
-    takerName: t.taker.name,
-    takenAt: t.takenAt.toISOString(),
-    costCents: t.costCents,
-    reversed: t.reversedAt !== null,
-    // Taking household = the pickup-time snapshot on the take (REWORK A3).
-    canUndo: t.reversedAt === null && t.householdId === user.householdId,
-  }));
+  const takeRows: TakeRow[] = takes
+    // Non-party viewers see only their OWN household's takes — their side of
+    // the (owner, taker) pair, which keeps the undo path; everyone else's
+    // takes are other pairs' data (B4).
+    .filter((t) => viewerIsParty || t.householdId === user.householdId)
+    .map((t) => ({
+      id: t.id,
+      quantity: t.quantity,
+      productName: t.lot.product?.name ?? 'item',
+      takerName: t.taker.name,
+      takenAt: t.takenAt.toISOString(),
+      costCents: t.costCents,
+      reversed: t.reversedAt !== null,
+      // Taking household = the pickup-time snapshot on the take (REWORK A3).
+      canUndo: t.reversedAt === null && t.householdId === user.householdId,
+    }));
   // Adjustment history (slice 4): recounts and write-offs against this
   // restock's lots, newest first. Relation-free createdById → names by hand.
   const adjustments = await db.adjustment.findMany({
@@ -93,8 +115,11 @@ export default async function RestockDetailPage({
   // void is offered either way (it reverses any credit and clears inventory).
   const crossHousehold = restock.purchaserHouseholdId !== restock.pantry.householdId;
   const canCorrect =
-    user.householdId === restock.purchaserHouseholdId ||
-    user.householdId === restock.pantry.householdId;
+    (user.householdId === restock.purchaserHouseholdId ||
+      user.householdId === restock.pantry.householdId) &&
+    // Corrections rewrite posted money — settleMoney (REWORK A3a), matching
+    // the restock router's gate.
+    user.activeMembership.settleMoney;
   const showCorrections =
     restock.status === 'FINALIZED' && restock.voidedAt === null && canCorrect;
   const correctionLots: CorrectionLot[] = restock.lots
@@ -155,25 +180,27 @@ export default async function RestockDetailPage({
             {restock.lots.reduce((s, l) => s + l.receivedCount, 0)} received units ·{' '}
             {formatCents(lineSum)}
           </p>
-          <p className="mt-1 text-sm text-text-muted">
-            Purchased by {restock.purchaserHousehold.name} · received by {restock.createdBy.name}
-            {restock.taxCents !== null && <> · tax {formatCents(restock.taxCents)}</>}
-            {restock.feesCents !== null && <> · fees {formatCents(restock.feesCents)}</>}
-            {restock.receiptTotalCents !== null && (
-              <> · receipt {formatCents(restock.receiptTotalCents)}</>
-            )}
-            {restock.varianceCents !== null && restock.varianceCents !== 0 && (
-              <> · variance {formatCents(restock.varianceCents)}</>
-            )}
-          </p>
-          {credit && (
+          {viewerIsParty && (
+            <p className="mt-1 text-sm text-text-muted">
+              Purchased by {restock.purchaserHousehold.name} · received by {restock.createdBy.name}
+              {restock.taxCents !== null && <> · tax {formatCents(restock.taxCents)}</>}
+              {restock.feesCents !== null && <> · fees {formatCents(restock.feesCents)}</>}
+              {restock.receiptTotalCents !== null && (
+                <> · receipt {formatCents(restock.receiptTotalCents)}</>
+              )}
+              {restock.varianceCents !== null && restock.varianceCents !== 0 && (
+                <> · variance {formatCents(restock.varianceCents)}</>
+              )}
+            </p>
+          )}
+          {viewerIsParty && credit && (
             <p data-testid="restock-credit" className="mt-2 text-sm font-medium text-success">
               {restock.purchaserHousehold.name} credited {formatCents(credit.amountCents)} at cost
             </p>
           )}
         </section>
 
-        {restock.images.length > 0 && (
+        {viewerIsParty && restock.images.length > 0 && (
           <section className="rounded-xl border border-border bg-surface-raised p-4 shadow-sm">
             <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
               Receipt
@@ -271,7 +298,7 @@ export default async function RestockDetailPage({
         )}
 
         <TakesList takes={takeRows} />
-        <AdjustmentsList adjustments={adjustmentRows} />
+        {viewerIsParty && <AdjustmentsList adjustments={adjustmentRows} />}
       </main>
     </div>
   );

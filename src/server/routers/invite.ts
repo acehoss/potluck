@@ -1,15 +1,20 @@
 import { z } from 'zod';
 import { generateToken, hashToken } from '../auth';
+import { requireCapability } from '../authz';
 import { db } from '../db';
 import { protectedProcedure, publicProcedure, router } from '../trpc';
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export const inviteRouter = router({
-  /** Members can invite people into their own household only. */
+  /**
+   * Invite someone into the ACTING household. Gated by manageHousehold
+   * (REWORK A3a): membership management belongs to household managers.
+   */
   create: protectedProcedure
     .input(z.object({ invitedName: z.string().trim().max(100).optional() }))
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'manageHousehold');
       const token = generateToken();
       const invite = await db.invite.create({
         data: {

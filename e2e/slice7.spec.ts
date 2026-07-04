@@ -6,6 +6,7 @@ import {
   type APIRequestContext,
   type Page,
 } from '@playwright/test';
+import { apiLogin, login } from './helpers';
 
 /**
  * Slice 7 acceptance: PWA installability (manifest, icons, iOS meta,
@@ -24,34 +25,8 @@ import {
  * are unique per project + run.
  */
 
-const PASSWORD = 'demo-password';
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const RUN = Date.now().toString(36);
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
-
-/**
- * A signed-in raw-API session with NO browser page. The push tests drive
- * their second/third users purely through the API, and WebKit intermittently
- * hangs the first navigation of second-and-later browser contexts on long
- * runs (traced: dana's goto('/login') never even issued a request while the
- * server sat idle) — so those users skip the browser entirely.
- */
-async function apiLogin(email: string): Promise<APIRequestContext> {
-  const ctx = await playwrightRequest.newContext({ baseURL: BASE });
-  const res = await ctx.post('/api/trpc/auth.login', {
-    data: { email, password: PASSWORD },
-  });
-  expect(res.ok()).toBe(true);
-  return ctx;
-}
 
 /** The raw-API side of either a live page or a pure API session. */
 const api = (s: Page | APIRequestContext): APIRequestContext =>
@@ -189,7 +164,7 @@ test('layout carries PWA meta: per-scheme theme-color, viewport-fit, apple tags'
 });
 
 test('install card renders on /more, dismisses, and stays dismissed', async ({ page }) => {
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await page.goto('/more');
   const card = page.getByTestId('install-card');
   await expect(card).toBeVisible();
@@ -211,7 +186,7 @@ test('iOS user agents get the Share → Add to Home Screen steps', async ({ brow
       'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
   });
   const page = await context.newPage();
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await page.goto('/more');
   await expect(page.getByTestId('install-card')).toBeVisible();
   const steps = page.getByTestId('install-ios-steps');
@@ -235,7 +210,7 @@ test('iPadOS 13+ (desktop Macintosh UA + touch) is treated as iOS by both cards'
     Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5, configurable: true });
   });
   const page = await context.newPage();
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await page.goto('/more');
   // Install card: the Share → Add to Home Screen steps, not the Chrome-menu
   // hint an iPad Safari user can't follow.
@@ -253,7 +228,7 @@ test('iPadOS 13+ (desktop Macintosh UA + touch) is treated as iOS by both cards'
 test('safe-area CSS is present: tab bar inset padding, body top inset, cover viewport', async ({
   page,
 }) => {
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const tabBarClass = await page.getByTestId('tab-bar').getAttribute('class');
   expect(tabBarClass).toContain('pb-[env(safe-area-inset-bottom)]');
   // The compiled stylesheet actually ships the body's safe-area padding.
@@ -275,7 +250,7 @@ test('safe-area CSS is present: tab bar inset padding, body top inset, cover vie
 test('notifications card offers the toggle (or explains itself) — never auto-prompts', async ({
   page,
 }) => {
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await page.goto('/more');
   const card = page.getByTestId('notifications-card');
   await expect(card).toBeVisible();
@@ -313,7 +288,7 @@ test('push subscribe rejects SSRF-shaped endpoints (only public https push hosts
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   // z.url() accepts all of these — the endpoint guard must not. The server
   // POSTs notifications to stored endpoints, so an internal address here is
   // a blind SSRF primitive for any authenticated member.
@@ -342,7 +317,7 @@ test('push subscribe/unsubscribe CRUD, and endpoints belong to their last subscr
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
 
   // publicKey is served at runtime (the dev pair on e2e stacks).
   const keyRes = await page.request.get('/api/trpc/push.publicKey');
@@ -387,7 +362,7 @@ test('settlement pushes to both households except the creator; adjustment pushes
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop'); // creator (Heise)
+  await login(page, 'aaron'); // creator (Heise)
 
   const marie = await apiLogin('marie@demo.coop'); // creator's housemate (Heise)
   const dana = await apiLogin('dana@demo.coop'); // counterparty (In-Laws)
@@ -464,7 +439,7 @@ test('settlement pushes to both households except the creator; adjustment pushes
 
 test('a 410 from the push service prunes the subscription', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const dana = await apiLogin('dana@demo.coop');
 
   const goneSink = `gone-${P}-${RUN}`;
@@ -516,7 +491,7 @@ test('scan sheet on a real camera API: webkit holds steady on a fake feed, chrom
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const restockId = await startDraft(page, `S7scan-${P}-${RUN}`);
 
   await page.getByTestId('add-line').click();
@@ -577,7 +552,7 @@ test('scan buttons are hidden when no camera API exists (plain-http LAN degradat
     });
   });
   const page = await context.newPage();
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const restockId = await startDraft(page, `S7nocam-${P}-${RUN}`);
 
   // Line sheet: manual search stays, the Scan button does not render.
@@ -623,7 +598,7 @@ test('denied camera permission explains itself and points at the manual path', a
     });
   });
   const page = await context.newPage();
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const restockId = await startDraft(page, `S7denied-${P}-${RUN}`);
   await page.getByTestId('add-line').click();
   await page.getByTestId('scan-upc').click();
@@ -686,7 +661,7 @@ test('order flow: scanning at the pantry opens the add-to-order sheet for the ma
   test.slow(); // API seeding + two scan-sheet opens; give webkit headroom under load
   const P = testInfo.project.name;
   await stubCameraUnavailable(page);
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { mine } = await householdIds(page);
 
   // Land on the own pantry and grab its id from the URL.
@@ -755,7 +730,7 @@ test('manual UPC path: a typed UPC finds the product; a new product keeps its UP
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const restockId = await startDraft(page, `S7upc-${P}-${RUN}`);
 
   // A UPC unique to this project+run (12 digits, numeric only).
@@ -825,7 +800,7 @@ test('scan detection end to end: UPC sticks to an existing product, then matches
   test.slow(); // five sheet-open/scan/save cycles; webkit runs this near 20s under full-suite load
   const P = testInfo.project.name;
   await stubCameraUnavailable(page);
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const restockId = await startDraft(page, `S7detect-${P}-${RUN}`);
 
   // Per-run 12-digit codes; the seam always emits the 13-digit EAN form (a

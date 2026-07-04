@@ -26,6 +26,11 @@ export default async function RestockHistoryPage({
     include: { household: { select: { name: true } } },
   });
   if (!pantry) notFound();
+  // Receiving history is owner-side data (costs, drafts, receipts): the
+  // acting household must own the pantry (REWORK B4 — connected households
+  // see inventory, not the books; a purchaser reads its credit's audit trail
+  // on the restock detail instead).
+  if (pantry.householdId !== user.householdId) notFound();
 
   const restocks = await db.restock.findMany({
     where: { pantryId: id },
@@ -68,11 +73,10 @@ export default async function RestockHistoryPage({
               r.dateCode && r.seq !== null ? restockCode(r.dateCode, r.seq) : 'DRAFT';
             const isDraft = r.status === 'DRAFT';
             const voided = r.voidedAt !== null;
-            // Resume only for a draft the viewer can finalize (creator or
-            // purchaser household) — matches the pantry resume banner's gate.
-            const canResume =
-              isDraft &&
-              (r.createdById === user.id || r.purchaserHouseholdId === user.householdId);
+            // Resume only for a draft the viewer can edit/finalize — the page
+            // is already owner-household-gated, so that's the receiveStock
+            // capability (matches the restock router's gate).
+            const canResume = isDraft && user.activeMembership.receiveStock;
             const href = isDraft
               ? `/pantries/${id}/receive/${r.id}?step=2`
               : `/restocks/${r.id}`;

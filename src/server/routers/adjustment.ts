@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
+import { requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
@@ -120,6 +121,7 @@ export const adjustmentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'adjustInventory');
       return dbTransaction(async (tx) => {
         const replayed = await findReplayedAdjustment(
           tx,
@@ -172,6 +174,7 @@ export const adjustmentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'adjustInventory');
       return dbTransaction(async (tx) => {
         const replayed = await findReplayedAdjustment(
           tx,

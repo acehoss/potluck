@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { login, PASSWORD } from './helpers';
 
 /**
  * Slice 6 acceptance (blueprint 02 anchors): items visible across households,
@@ -19,21 +20,11 @@ import { expect, test, type Page } from '@playwright/test';
  * (invites only join existing households).
  */
 
-const PASSWORD = 'demo-password';
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const RUN = Date.now().toString(36);
 
 const uniq = (name: string, project: string) => `${name} ${project}-${RUN}`;
 const pad2 = (n: number) => String(n).padStart(2, '0');
-
-async function login(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('tab-bar')).toBeVisible();
-}
 
 /** Navigate to the Items tab via the tab bar (client-side, like slice 3+). */
 async function openItems(page: Page) {
@@ -101,7 +92,7 @@ test('add item with fee; cross-household checkout posts the fee; return with con
   const item = uniq('Pressure Canner', P);
 
   // Aaron adds the item via the UI, $5/loan.
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   await openItems(page);
   await page.getByTestId('add-item').click();
   await page.getByTestId('item-name').fill(item);
@@ -118,7 +109,7 @@ test('add item with fee; cross-household checkout posts the fee; return with con
   // Dana sees it under the Heise group, with the fee badge.
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const danaBefore = await netCents(dana);
   await openItems(dana);
   const heiseGroup = dana.getByTestId('item-group').filter({ hasText: 'Heise' });
@@ -184,7 +175,7 @@ test('zero-fee and own-household checkouts post no ledger entry', async ({
 }, testInfo) => {
   const P = testInfo.project.name;
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const freeItem = uniq('Ladder', P);
   const ownFeeItem = uniq('Chainsaw', P);
   const freeItemId = await createItem(page, freeItem, 0);
@@ -194,7 +185,7 @@ test('zero-fee and own-household checkouts post no ledger entry', async ({
   // Cross-household but $0 fee: inventory-style tracking only, no money.
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const danaBefore = await netCents(dana);
   const out = await dana.request.post('/api/trpc/loan.checkout', {
     data: { itemId: freeItemId, clientKey: `free-${P}-${RUN}` },
@@ -231,12 +222,12 @@ test('checkout guards: clientKey replay charges once, second active loan rejecte
   const P = testInfo.project.name;
   const item = uniq('Tile Saw', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const itemId = await createItem(page, item, 300);
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const before = await netCents(dana);
 
   // Replay with the same clientKey (double-tap racing the disabled
@@ -312,7 +303,7 @@ test('item create/update are owner-household-only', async ({ page, browser }, te
   const P = testInfo.project.name;
   const item = uniq('Genny', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { other } = await householdIds(page);
 
   // Creating an item FOR the other household is forbidden.
@@ -337,7 +328,7 @@ test('item create/update are owner-household-only', async ({ page, browser }, te
   // A non-owner cannot edit the item (name or feeCents).
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const foreignEdit = await dana.request.post('/api/trpc/item.update', {
     data: { itemId, feeCents: 99_999 },
   });
@@ -364,7 +355,7 @@ test('item photo pipeline: fresh-upload contract, attach uniqueness, unlink on r
   page,
 }, testInfo) => {
   const P = testInfo.project.name;
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const { mine } = await householdIds(page);
   const jpeg = fs.readFileSync('e2e/fixtures/receipt-costco.jpg');
 
@@ -432,12 +423,12 @@ test('fee edits touch future loans only: posted fee immutable, stale checkout sh
 }, testInfo) => {
   const P = testInfo.project.name;
   const item = uniq('Wood Chipper', P);
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const itemId = await createItem(page, item, 400);
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const before = await netCents(dana);
 
   // Dana checks out at the $4.00 she was shown (expectedFeeCents matches).
@@ -492,12 +483,12 @@ test('undoCheckout outside the grace window fails 412 and the fee stands', async
 }, testInfo) => {
   const P = testInfo.project.name;
   const item = uniq('Log Splitter', P);
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const itemId = await createItem(page, item, 200);
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const before = await netCents(dana);
   const out = await dana.request.post('/api/trpc/loan.checkout', {
     data: { itemId, clientKey: `grace-${P}-${RUN}` },
@@ -541,12 +532,12 @@ test("a third household cannot return or undo other households' loans", async ({
 }, testInfo) => {
   const P = testInfo.project.name;
   const item = uniq('Cider Press', P);
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const itemId = await createItem(page, item, 100);
 
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const out = await dana.request.post('/api/trpc/loan.checkout', {
     data: { itemId, clientKey: `third-${P}-${RUN}` },
   });
@@ -583,7 +574,7 @@ test("a third household cannot return or undo other households' loans", async ({
     `);
     const nia = niaContext.request;
     const loginRes = await nia.post('/api/trpc/auth.login', {
-      data: { email: EMAIL, password: PASSWORD },
+      data: { identifier: EMAIL, password: PASSWORD },
     });
     expect(loginRes.ok()).toBe(true);
 
@@ -611,7 +602,7 @@ test('a loan past its due date shows the overdue badge (render-time only)', asyn
   const P = testInfo.project.name;
   const item = uniq('Post Digger', P);
 
-  await login(page, 'aaron@demo.coop');
+  await login(page, 'aaron');
   const itemId = await createItem(page, item, 0);
 
   // Dana borrows it, due three days ago (created via the real API — the UI
@@ -620,7 +611,7 @@ test('a loan past its due date shows the overdue badge (render-time only)', asyn
   const pastDue = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
-  await login(dana, 'dana@demo.coop');
+  await login(dana, 'dana');
   const out = await dana.request.post('/api/trpc/loan.checkout', {
     data: { itemId, dueAt: pastDue, clientKey: `overdue-${P}-${RUN}` },
   });

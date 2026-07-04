@@ -1,6 +1,8 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
+import type { SessionUser } from '../auth';
+import { hasActiveGrant, requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
@@ -20,21 +22,42 @@ import { protectedProcedure, router } from '../trpc';
 const EDITABLE = new Set(['DRAFT', 'REQUESTED']);
 
 /**
- * Load a lot and assert it is orderable from this pantry: finalized, a real
- * inventory line (not excluded), and with its unit cost frozen. Returns the lot
- * plus the pantry-owning ("store") household.
+ * Load a lot and assert it is orderable from this pantry BY this user's
+ * acting household: finalized, a real inventory line (not excluded), unit
+ * cost frozen — and the pantry reachable (own, or shared + ACTIVE pantry
+ * grant from its owner, REWORK B2/B3; unreachable reads as not-found).
+ * Returns the lot plus the pantry-owning ("store") household.
  */
-async function loadOrderableLot(tx: Prisma.TransactionClient, lotId: string, pantryId: string) {
+async function loadOrderableLot(
+  tx: Prisma.TransactionClient,
+  user: SessionUser,
+  lotId: string,
+  pantryId: string,
+) {
   const lot = await tx.lot.findUnique({
     where: { id: lotId },
     include: {
       restock: {
-        select: { pantryId: true, status: true, voidedAt: true, pantry: { select: { householdId: true } } },
+        select: {
+          pantryId: true,
+          status: true,
+          voidedAt: true,
+          pantry: { select: { householdId: true, shared: true } },
+        },
       },
     },
   });
   if (!lot || lot.restock.pantryId !== pantryId) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found in this pantry.' });
+  }
+  const ownerHouseholdId = lot.restock.pantry.householdId;
+  if (ownerHouseholdId !== user.householdId) {
+    const visible =
+      lot.restock.pantry.shared &&
+      (await hasActiveGrant(tx, ownerHouseholdId, user.householdId, 'pantry'));
+    if (!visible) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found in this pantry.' });
+    }
   }
   if (
     lot.restock.status !== 'FINALIZED' ||
@@ -44,7 +67,7 @@ async function loadOrderableLot(tx: Prisma.TransactionClient, lotId: string, pan
   ) {
     throw new TRPCError({ code: 'CONFLICT', message: 'That item is not available to order.' });
   }
-  return { lot, ownerHouseholdId: lot.restock.pantry.householdId };
+  return { lot, ownerHouseholdId };
 }
 
 /**
@@ -96,8 +119,9 @@ export const orderRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'placeOrders');
       return dbTransaction(async (tx) => {
-        const { lot } = await loadOrderableLot(tx, input.lotId, input.pantryId);
+        const { lot } = await loadOrderableLot(tx, ctx.user, input.lotId, input.pantryId);
         let order = await tx.order.findFirst({
           where: { pantryId: input.pantryId, householdId: ctx.user.householdId, status: 'DRAFT' },
         });
@@ -137,6 +161,7 @@ export const orderRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'placeOrders');
       return dbTransaction(async (tx) => {
         const order = await tx.order.findUnique({ where: { id: input.orderId } });
         if (!order) throw new TRPCError({ code: 'NOT_FOUND' });
@@ -146,7 +171,19 @@ export const orderRouter = router({
         if (!EDITABLE.has(order.status)) {
           throw new TRPCError({ code: 'CONFLICT', message: 'This order can no longer be changed.' });
         }
-        const { lot } = await loadOrderableLot(tx, input.lotId, order.pantryId);
+        const { lot, ownerHouseholdId } = await loadOrderableLot(
+          tx,
+          ctx.user,
+          input.lotId,
+          order.pantryId,
+        );
+        // Editing an already-SUBMITTED cross-household order changes what
+        // money will post at pickup — that consent belongs to a spend-holder,
+        // exactly like submit itself (a placeOrders-only member could
+        // otherwise inflate a submitted order past what was approved).
+        if (order.status === 'REQUESTED' && ownerHouseholdId !== ctx.user.householdId) {
+          requireCapability(ctx.user, 'spend');
+        }
         const existing = await tx.orderLine.findFirst({ where: { orderId: order.id, lotId: lot.id } });
         const oldQty = existing?.quantity ?? 0;
         const delta = input.quantity - oldQty;
@@ -175,11 +212,21 @@ export const orderRouter = router({
   submit: protectedProcedure
     .input(z.object({ orderId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'placeOrders');
       return dbTransaction(async (tx) => {
-        const order = await tx.order.findUnique({ where: { id: input.orderId }, include: { lines: true } });
+        const order = await tx.order.findUnique({
+          where: { id: input.orderId },
+          include: { lines: true, pantry: { select: { householdId: true } } },
+        });
         if (!order) throw new TRPCError({ code: 'NOT_FOUND' });
         if (order.householdId !== ctx.user.householdId) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the requesting household can submit this order.' });
+        }
+        // A cross-household submission commits the acting household to money
+        // at pickup — that's the spend line (A3a: order-holders draft,
+        // spend-holders submit).
+        if (order.pantry.householdId !== ctx.user.householdId) {
+          requireCapability(ctx.user, 'spend');
         }
         if (order.lines.length === 0) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Add something to the order first.' });
@@ -193,7 +240,7 @@ export const orderRouter = router({
           return { orderId: order.id, status: 'REQUESTED' as const };
         }
         for (const line of order.lines) {
-          await loadOrderableLot(tx, line.lotId, order.pantryId);
+          await loadOrderableLot(tx, ctx.user, line.lotId, order.pantryId);
           await reserve(tx, line.lotId, line.quantity);
         }
         return { orderId: order.id, status: 'REQUESTED' as const };
@@ -213,6 +260,7 @@ export const orderRouter = router({
         if (order.pantry.householdId !== ctx.user.householdId) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the pantry household can pick this order.' });
         }
+        requireCapability(ctx.user, 'fulfill');
         const moved = await tx.order.updateMany({
           where: { id: order.id, status: 'REQUESTED' },
           data: { status: 'PICKING', pickingAt: new Date() },
@@ -235,6 +283,7 @@ export const orderRouter = router({
         if (order.pantry.householdId !== ctx.user.householdId) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the pantry household can ready this order.' });
         }
+        requireCapability(ctx.user, 'fulfill');
         const moved = await tx.order.updateMany({
           where: { id: order.id, status: 'PICKING' },
           data: { status: 'READY', readyAt: new Date() },
@@ -268,6 +317,21 @@ export const orderRouter = router({
         if (!isRequester && !isOwner) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the two households can complete this order.' });
         }
+        // Capability per side (A3a): the requester side posts money on a
+        // cross-household order (spend; own-pantry moves none — placeOrders);
+        // the owner side hands goods over (fulfill). A user in both
+        // households qualifies through either.
+        const crossOrder = debtorHouseholdId !== ownerHouseholdId;
+        const capable =
+          (isRequester &&
+            (crossOrder ? ctx.user.activeMembership.spend : ctx.user.activeMembership.placeOrders)) ||
+          (isOwner && ctx.user.activeMembership.fulfill);
+        if (!capable) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: "Your role in this household doesn't allow that.",
+          });
+        }
 
         // clientKey replay: return the original result instead of re-posting.
         if (input.clientKey) {
@@ -278,6 +342,22 @@ export const orderRouter = router({
             }
             if (prior.status === 'PICKED_UP') return { orderId: order.id, status: 'PICKED_UP' as const };
           }
+        }
+
+        // Reach is re-verified at the MONEY moment, not just at submit: a
+        // pantry grant revoked (or a connection severed) while the order sat
+        // READY must block the post — B6's sever-auto-cancel arrives with the
+        // S3 sever flow; this is the belt under it. Cancel still works (it
+        // deliberately checks no grant, so the reservation can always be
+        // released across a dead edge).
+        if (
+          crossOrder &&
+          !(await hasActiveGrant(tx, ownerHouseholdId, debtorHouseholdId, 'pantry'))
+        ) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'The connection no longer allows this order — cancel it instead.',
+          });
         }
 
         const moved = await tx.order.updateMany({
@@ -360,6 +440,17 @@ export const orderRouter = router({
         // A DRAFT is the requester's private cart — the owner can't touch it.
         if (order.status === 'DRAFT' && !isRequester) {
           throw new TRPCError({ code: 'FORBIDDEN' });
+        }
+        // Requester cancels with placeOrders; the owner's decline is a
+        // fulfillment action (A3a).
+        const capable =
+          (isRequester && ctx.user.activeMembership.placeOrders) ||
+          (isOwner && ctx.user.activeMembership.fulfill);
+        if (!capable) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: "Your role in this household doesn't allow that.",
+          });
         }
         const wasReserved = order.status === 'REQUESTED';
         const moved = await tx.order.updateMany({
