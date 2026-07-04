@@ -247,7 +247,12 @@ test('instance admin: usage view, growth toggle, and non-admin gates', async ({
     expect(allowed.status).toBe(200);
 
     // Non-admins never see the surface: no card, and /admin bounces home.
+    // Anchor on the URL before asserting absence — toHaveCount(0) is satisfied
+    // by ANY page without the testid, including one still mid-navigation, and
+    // the follow-up goto would then race the in-flight nav (webkit loses).
     await dana.getByTestId('tab-bar').getByRole('link', { name: 'More' }).click();
+    await expect(dana).toHaveURL(/\/more$/);
+    await expect(dana.getByRole('heading', { name: 'More' })).toBeVisible();
     await expect(dana.getByTestId('admin-link')).toHaveCount(0);
     await dana.goto('/admin');
     await expect(dana).toHaveURL(/\/$/);

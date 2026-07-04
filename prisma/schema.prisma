@@ -25,6 +25,7 @@ model Household {
   products    Product[]
   connectionsA Connection[] @relation("connectionA")
   connectionsB Connection[] @relation("connectionB")
+  sharePosts   SharePost[]
 }
 
 model User {
@@ -331,7 +332,13 @@ model Take {
   // like LedgerEntry's household columns.
   householdId  String
   quantity     Int // > 0
-  costCents    Int // quantity × lot.unitCostCents; 0 when own-household
+  costCents    Int // quantity × lot.unitCostCents; 0 when own-household OR a share gift
+  // Round 2 (REWORK C1/F5): set when this take is a GIFT drawn from a confirmed
+  // share claim. A share-claim take is $0 and cross-household is allowed with
+  // NO LedgerEntry — shares never touch the ledger, unlike an order pickup take
+  // (this amends blueprint-01 invariant 4). NOT unique: one confirm can gift
+  // from several linked lots → several takes, all carrying the same claim id.
+  shareClaimId String?
   takenAt      DateTime  @default(now())
   reversedAt   DateTime?
   reversedById String?
@@ -340,6 +347,7 @@ model Take {
   taker User @relation(fields: [takerId], references: [id])
 
   @@index([lotId])
+  @@index([shareClaimId])
 }
 
 // Pulled forward from the slice-3 plan: finalize must post the purchaser
@@ -401,11 +409,12 @@ model Lot {
   bestBy         DateTime?
   unitPhotoPath  String?
 
-  restock     Restock      @relation(fields: [restockId], references: [id], onDelete: Cascade)
-  product     Product?     @relation(fields: [productId], references: [id])
-  takes       Take[]
-  adjustments Adjustment[]
-  orderLines  OrderLine[]
+  restock      Restock        @relation(fields: [restockId], references: [id], onDelete: Cascade)
+  product      Product?       @relation(fields: [productId], references: [id])
+  takes        Take[]
+  adjustments  Adjustment[]
+  orderLines   OrderLine[]
+  sharePostLots SharePostLot[]
 
   @@unique([restockId, position])
   @@index([productId])
@@ -545,4 +554,74 @@ model OrderLine {
 
   @@index([orderId])
   @@index([lotId])
+}
+
+// ---- Round 2: needs & surpluses (REWORK F) ----------------------------------
+
+// A post is a NEED or a SURPLUS. Shares are GIFTS (C1): they never touch the
+// ledger — a tracked SURPLUS handoff records $0 Takes for the audit trail only.
+// ValueFlows correspondence (E3, names only): a post ≈ Intent/Proposal, a claim
+// ≈ Commitment, the gift take ≈ EconomicEvent.
+model SharePost {
+  id            String    @id @default(cuid())
+  clientKey     String?   @unique
+  type          String    // "NEED" | "SURPLUS"
+  householdId   String    // the POSTING household (acting) — for a reshare copy, the RESHARER
+  createdById   String
+  title         String
+  description   String?
+  photoPath     String?   // IMAGES_DIR kind "shares"
+  // Optional quantity (F1): null = whole-thing/unspecified. unit is free text.
+  quantity      Int?
+  unit          String?
+  // Remaining tracks down as claims CONFIRM. Stored ONLY on origin posts;
+  // reshare copies resolve it from the origin at read time (single source of
+  // truth — "origin's remaining mirrors down", F4).
+  remaining     Int?
+  expiresAt     DateTime  // required (F1); defaults: SURPLUS +3d, NEED +14d
+  status        String    @default("OPEN") // OPEN | CLAIMED | FULFILLED | WITHDRAWN (expiry is derived, never stored)
+  // Reshare chain (E3/F4): origin + hops from day one.
+  originPostId  String?   // root post id; null = this IS the origin
+  parentPostId  String?   // the post this copy reshared; null = origin
+  hopsRemaining Int       @default(1) // poster-set allowance 0..3; copies get parent-1
+  createdAt     DateTime  @default(now())
+
+  household Household      @relation(fields: [householdId], references: [id])
+  lots      SharePostLot[]
+  claims    ShareClaim[]
+
+  @@index([householdId])
+  @@index([originPostId])
+  @@index([parentPostId])
+}
+
+// Provenance link: which tracked lots a SURPLUS origin offers (own-household,
+// FINALIZED, non-excluded lots). The $0 transfer draws from these on confirm.
+model SharePostLot {
+  id     String @id @default(cuid())
+  postId String
+  lotId  String
+
+  post SharePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  lot  Lot       @relation(fields: [lotId], references: [id])
+
+  @@unique([postId, lotId])
+}
+
+model ShareClaim {
+  id          String    @id @default(cuid())
+  clientKey   String?   @unique
+  postId      String
+  householdId String    // the CLAIMING household (acting) — snapshot, never re-derived
+  createdById String
+  quantity    Int?      // required iff the post carries a quantity
+  note        String?
+  status      String    @default("PENDING") // PENDING | CONFIRMED | RELEASED | CANCELED
+  createdAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  post SharePost @relation(fields: [postId], references: [id])
+
+  @@index([postId])
+  @@index([householdId])
 }

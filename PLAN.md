@@ -140,6 +140,60 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round 2 — needs & surpluses (2026-07-04)
+
+**Done.** Shares (REWORK §F) shipped as a coordinated three-teammate round (server → UI ∥
+e2e, coordinator-integrated) — the first round built under the new team workflow. Gate:
+fresh `down -v` stack, **192 passed + 4 intentional skips, playwright exit 0, both
+engines** (two known-pattern webkit flakies, retry-passed). Migration
+`20260704090000_shares` (additive: SharePost/SharePostLot/ShareClaim +
+`Take.shareClaimId`).
+
+- **Model (F1/F3/F4).** `SharePost` (NEED/SURPLUS, optional quantity+unit, required
+  expiry — defaults SURPLUS +3d / NEED +14d, ≤60d; optional photo via a new `shares`
+  image kind; optional linked own lots for surpluses; `hopsRemaining` 0–3 default 1;
+  `origin/parentPostId` chain). `ShareClaim` PENDING→CONFIRMED/RELEASED/CANCELED with
+  claimant-household snapshot. `remaining` lives ONLY on origin rows — reshare copies
+  resolve it at read time (single source of truth). Expiry is derived at read time — no
+  cron, rows kept, feeds pruned (F6).
+- **Visibility & capabilities.** A post reaches a household iff BOTH directions hold
+  over an ACTIVE edge: poster grants `shareTo` AND viewer grants `shareFrom`.
+  `postShares` gates create/claim/cancel/reshare/withdraw; **`fulfill` confirms
+  handoffs** (A3a). Uncounted posts lock to one PENDING claimant (OPEN→CLAIMED,
+  guarded); counted posts take concurrent claims, no hard reservations (F3), remaining
+  draws down on confirm and 0 ⇒ the whole tree FULFILLED.
+- **Gifts, never money (C1).** Confirming a lot-backed origin SURPLUS transfers stock
+  FIFO across the linked lots via guarded decrements that HONOR `reservedCount`
+  (shortfall 409 rolls the confirm back) and records **$0 Takes with `shareClaimId`**
+  — zero LedgerEntry rows anywhere in the round (blueprint-01 invariant 4 amended
+  accordingly). e2e proves the pair's net is bit-identical across a gift and that a
+  gift cannot cannibalize an open order's reservation.
+- **Reshares (F4).** Anonymized copy under the RESHARER's name (DTOs carry no origin/
+  parent identity — even facing the origin household); requires the source poster's
+  `reshare` grant; hops decrement to a hard stop; a broker's confirm moves NOTHING —
+  goods flow only when the broker claims upstream themselves; withdrawing an origin
+  withdraws its subtree; chain-liveness re-checks every hop's share-visibility at read
+  time, so a severed upstream edge kills downstream copies (B6).
+- **UI.** `/shares` (feed with yours/connections sections, composer sheet with type
+  toggle + expiry prefills + lot picker + photo, claim sheet, confirm/release rows,
+  "Pass it on" with broker-role explanation, withdraw) + a home-tab entry strip. Tab
+  bar untouched (5 slots — deliberate; shares ride the home strip). Browser-verified
+  by the UI teammate (screenshots `.playwright-mcp/shares/`) plus a both-engine UI
+  smoke e2e.
+- **e2e (`shares.spec.ts`,** 8 tests × 2 engines): grant-scoped visibility (the
+  share-only Heise↔Neighbors edge's first positive exercise; the unconnected pair
+  blind both ways; household-level `mine`), uncounted lifecycle (lock/release/
+  fulfilled-prunes), counted multi-claim drawdown, the $0 gift + reservation
+  interplay, the reshare chain, postShares-vs-fulfill capability split, expiry
+  defaults + ceiling, and broker-confirm-moves-nothing semantics. Every created post
+  is driven WITHDRAWN in a `finally` (feeds must not accumulate across runs).
+- **Integration fixes** (coordinator): three unguarded-optional tsc errors in the
+  delivered spec; a webkit navigation race in onboarding's admin test (URL-anchor
+  before absence assertions — `toHaveCount(0)` is satisfied mid-navigation).
+- **Deferred, unchanged:** notifications (share/claim events join the queued list);
+  per-post audience narrowing (F2 door); Child-preset seeding for a can't-post
+  negative; capability-hiding polish for non-Owner affordances.
+
 ### Round 1 slice 5 — rebrand → Potluck + SPEC/blueprint rewrite
 
 **2026-07-04 — done. Round 1 (network core) is COMPLETE.** Gate: rebuilt image, fresh

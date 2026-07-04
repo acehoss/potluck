@@ -13,15 +13,17 @@ const MIN_AGE_MS = 24 * 60 * 60 * 1000;
  * sit on the volume forever. Runs at server boot (src/instrumentation.ts).
  */
 export async function sweepOrphanImages(now = Date.now()) {
-  const [images, lots, items] = await Promise.all([
+  const [images, lots, items, sharePosts] = await Promise.all([
     db.restockImage.findMany({ select: { path: true } }),
     db.lot.findMany({ where: { unitPhotoPath: { not: null } }, select: { unitPhotoPath: true } }),
     db.item.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
+    db.sharePost.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
   ]);
   const referenced = new Set<string>([
     ...images.map((i) => i.path),
     ...lots.map((l) => l.unitPhotoPath!),
     ...items.map((i) => i.photoPath!),
+    ...sharePosts.map((p) => p.photoPath!),
   ]);
 
   let removed = 0;

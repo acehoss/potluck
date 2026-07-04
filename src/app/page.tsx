@@ -87,6 +87,18 @@ export default async function PantriesPage() {
       </header>
 
       <main className="flex flex-col gap-6">
+        {/* Needs & surpluses entry (REWORK F). No count: the visibility rule
+            lives server-side in the share router, and duplicating it here to
+            tally would be its own source of truth — deliberately a plain
+            label. Shown to everyone; browsing needs no capability. */}
+        <Link
+          data-testid="shares-strip"
+          href="/shares"
+          className="rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-medium shadow-sm"
+        >
+          <span className="text-text">🫙 Needs &amp; surpluses</span>
+          <span className="float-right text-text-muted">→</span>
+        </Link>
         {others.length > 0 && (
           <div className="flex flex-col gap-2">
             {others.map((h) => {

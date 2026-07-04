@@ -12,6 +12,7 @@ import { pantryRouter } from './pantry';
 import { productRouter } from './product';
 import { pushRouter } from './push';
 import { restockRouter } from './restock';
+import { shareRouter } from './share';
 import { takeRouter } from './take';
 
 export const appRouter = router({
@@ -29,6 +30,7 @@ export const appRouter = router({
   product: productRouter,
   push: pushRouter,
   restock: restockRouter,
+  share: shareRouter,
   take: takeRouter,
 });
 
