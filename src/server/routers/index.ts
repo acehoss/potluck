@@ -11,6 +11,7 @@ import { orderRouter } from './order';
 import { pantryRouter } from './pantry';
 import { productRouter } from './product';
 import { pushRouter } from './push';
+import { recipeRouter } from './recipe';
 import { restockRouter } from './restock';
 import { shareRouter } from './share';
 import { takeRouter } from './take';
@@ -29,6 +30,7 @@ export const appRouter = router({
   pantry: pantryRouter,
   product: productRouter,
   push: pushRouter,
+  recipe: recipeRouter,
   restock: restockRouter,
   share: shareRouter,
   take: takeRouter,

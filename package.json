@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "seed": "tsx prisma/seed.ts",
-    "test:unit": "tsx --test src/server/extraction.unit.test.ts src/server/push-endpoint.unit.test.ts src/server/identity.unit.test.ts src/server/shares.unit.test.ts src/lib/barcode.unit.test.ts src/lib/money.unit.test.ts",
+    "test:unit": "tsx --test src/server/extraction.unit.test.ts src/server/push-endpoint.unit.test.ts src/server/identity.unit.test.ts src/server/shares.unit.test.ts src/server/recipe-parse.unit.test.ts src/lib/barcode.unit.test.ts src/lib/money.unit.test.ts",
     "e2e": "playwright test",
     "e2e:off": "docker compose down && SEED_DEMO=1 EXTRACTION_MODE=off docker compose up -d --wait && playwright test slice5 -g 'off mode'; s=$?; docker compose down; exit $s",
     "lint:tokens": "! grep -rnE '\\b(bg|text|border|ring|divide|fill|stroke)-(stone|zinc|gray|slate|neutral|red|amber|emerald|green|blue|white|black)\\b|-(stone|zinc|gray|slate|neutral)-[0-9]' src --include='*.tsx' --include='*.ts' --exclude-dir=generated"

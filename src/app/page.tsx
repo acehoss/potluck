@@ -99,6 +99,17 @@ export default async function PantriesPage() {
           <span className="text-text">🫙 Needs &amp; surpluses</span>
           <span className="float-right text-text-muted">→</span>
         </Link>
+        {/* Recipe book (REWORK G). Like the shares strip: a plain label, no
+            count — visibility lives server-side and browsing needs no
+            capability. */}
+        <Link
+          data-testid="recipes-strip"
+          href="/recipes"
+          className="rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-medium shadow-sm"
+        >
+          <span className="text-text">📖 Recipes</span>
+          <span className="float-right text-text-muted">→</span>
+        </Link>
         {others.length > 0 && (
           <div className="flex flex-col gap-2">
             {others.map((h) => {

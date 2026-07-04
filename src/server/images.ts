@@ -4,7 +4,7 @@ import path from 'node:path';
 /** Root of the image volume; blueprint 04 §1. */
 export const IMAGES_DIR = process.env.IMAGES_DIR ?? './data/images';
 
-export const IMAGE_KINDS = ['receipts', 'units', 'items', 'shares'] as const;
+export const IMAGE_KINDS = ['receipts', 'units', 'items', 'shares', 'recipes'] as const;
 export type ImageKind = (typeof IMAGE_KINDS)[number];
 
 /** Resolve a DB-stored relative path ("receipts/abc.jpg") safely, or null. */

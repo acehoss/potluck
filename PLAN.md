@@ -140,6 +140,58 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round 3 — recipes (2026-07-04)
+
+**Done.** The PTE-shaped recipe book (REWORK §G), second round under the team workflow
+(recipe-server → recipe-ui ∥ recipe-e2e, coordinator-integrated). Gate: fresh `down -v`
+stack, **207 passed + 4 intentional skips, playwright exit 0, both engines** (one known
+webkit first-goto flake, retry-passed; one chromium Playwright trace-artifact corruption
+on the previous run did not recur — infra noise, logged here so it's recognizable).
+Migration `20260704110000_recipes` (additive: Recipe/RecipeIngredient/IngredientLink).
+
+- **Model (G1).** `Recipe` — only `title` required; description/directions/prep/cook/
+  servings + separate `yieldText`/course/cuisine/tags/photo (new `recipes` image kind)/
+  `private` flag/`sourceUrl` + fork-attribution SNAPSHOTS (`forkedFromTitle`/
+  `forkedFromHouseholdName` — strings, deliberately not FKs; the source may vanish).
+  `RecipeIngredient` — ordered lines, kind `item`|`heading`, amounts stored as RAW TEXT
+  ("1 1/2", "2–3") and never parsed server-side; proportional scaling is display-time
+  only (client parses leading numerals/fractions, unparseable amounts marked, stored
+  text never mutated).
+- **Sharing (G3).** Reads any-member; `editRecipes` gates every write. Cross-household:
+  non-private recipes are **browse-live** to connections granting `recipes` (dana sees
+  edits live; flipping private hides instantly; the share-only Heise↔Neighbors edge
+  proves the negative), and saving forks — a frozen private-by-default copy with
+  attribution, so no transitive resharing and author edits never propagate.
+- **Ingredient links (G2).** `IngredientLink` (household, normalizedName → product),
+  written ONLY on explicit confirmation from a suggestions picker, resolved per
+  VIEWER household on every visible recipe, applies across recipes by learned name;
+  quantities never convert — the UI shows the linked product name, nothing arithmetic.
+- **Import assists (G4).** `parseText` — pure heuristic (unit-tested ×15: unicode
+  fractions, mixed numbers, ranges, colon/ALL-CAPS headings, trailing-prose→directions,
+  garbage-in-no-throw); headings need ':' or ALL-CAPS by design. `importUrl` —
+  schema.org/Recipe JSON-LD → microdata-lite → text heuristic, ADVISORY like
+  extraction (`{status:'unavailable'}`, never a 500), behind an SSRF guard in the
+  push-endpoint mold (https/443 only, no credentials/IP literals/localhost/.local/
+  .internal/dotless, redirect-hop re-validation, 5s/2MB/3-redirect caps, 10/user/15min;
+  DNS-rebinding is the same accepted residual as push). Remote photos are never
+  downloaded — photoUrl returns for display only.
+- **UI.** `/recipes` book (Your book / From your connections) + full-page editor
+  (ordered ingredient grid with headings + reorder, paste-to-parse, URL import,
+  private toggle, photo), shared read-only view with the display-time servings scaler
+  + "Save to my book" fork, the G2 link picker on both views, and a home-tab
+  `recipes-strip`. Tab bar still untouched at 5 — home now stacks shares + recipes
+  strips; a "Kitchen" tab consolidation is a Round-4 conversation.
+- **e2e (`recipes.spec.ts`,** 7 tests × 2 engines): CRUD+ordering, parseText, the
+  browse-live matrix, fork-on-save semantics, ingredient links (incl. per-viewer
+  isolation), importUrl SSRF rejections (no network), UI smoke (compose → share →
+  fork). Run twice back-to-back for rerun-safety.
+- **Integration notes:** repo tsc is now gated AFTER all teammates land (Round-2
+  lesson — a late spec extension had left 2 type errors on main; fixed here by adding
+  `expiresAt` to shares.spec's FeedPost type). recipe-ui deviations accepted:
+  recipe-new is a route Link (not a sheet), scaler on the shared view only. Deferred:
+  per-field testids inside ingredient rows (e2e addresses textboxes positionally),
+  paste-photo/VLM recipe import (explicit REWORK door), recipe photos from URL import.
+
 ## Round 2 — needs & surpluses (2026-07-04)
 
 **Done.** Shares (REWORK §F) shipped as a coordinated three-teammate round (server → UI ∥
@@ -180,7 +232,7 @@ engines** (two known-pattern webkit flakies, retry-passed). Migration
   bar untouched (5 slots — deliberate; shares ride the home strip). Browser-verified
   by the UI teammate (screenshots `.playwright-mcp/shares/`) plus a both-engine UI
   smoke e2e.
-- **e2e (`shares.spec.ts`,** 8 tests × 2 engines): grant-scoped visibility (the
+- **e2e (`shares.spec.ts`,** 9 tests × 2 engines): grant-scoped visibility (the
   share-only Heise↔Neighbors edge's first positive exercise; the unconnected pair
   blind both ways; household-level `mine`), uncounted lifecycle (lock/release/
   fulfilled-prunes), counted multi-claim drawdown, the $0 gift + reservation

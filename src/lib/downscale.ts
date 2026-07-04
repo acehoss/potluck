@@ -37,7 +37,7 @@ export async function sha256HexOfFile(file: File): Promise<string | null> {
  * the upload; persisted onto RestockImage at attach time).
  */
 export async function uploadImage(
-  kind: 'receipts' | 'units' | 'items' | 'shares',
+  kind: 'receipts' | 'units' | 'items' | 'shares' | 'recipes',
   blob: Blob,
   originalSha256?: string | null,
 ) {

@@ -38,6 +38,7 @@ type FeedPost = {
   quantity: number | null;
   unit: string | null;
   remaining: number | null;
+  expiresAt: string; // ISO, origin-resolved
   status: 'OPEN' | 'CLAIMED' | 'FULFILLED' | 'EXPIRED';
   mine: boolean;
   isReshare: boolean;

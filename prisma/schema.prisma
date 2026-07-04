@@ -26,6 +26,8 @@ model Household {
   connectionsA Connection[] @relation("connectionA")
   connectionsB Connection[] @relation("connectionB")
   sharePosts   SharePost[]
+  recipes      Recipe[]
+  ingredientLinks IngredientLink[]
 }
 
 model User {
@@ -246,6 +248,7 @@ model Product {
 
   household Household @relation(fields: [householdId], references: [id])
   lots      Lot[]
+  ingredientLinks IngredientLink[]
 
   @@index([householdId, upc])
   @@index([householdId])
@@ -624,4 +627,73 @@ model ShareClaim {
 
   @@index([postId])
   @@index([householdId])
+}
+
+// ---- Round 3: recipes (REWORK G) --------------------------------------------
+
+// PTE-shaped: structured ingredient lines + section headings; only title is
+// required (G1). Recipes belong to a household; cross-household browsing rides
+// the `recipes` grant over an ACTIVE edge plus the per-recipe private flag
+// (G3). Saving a foreign recipe FORKS it — browse-live, fork-on-save; author
+// edits never propagate to copies. NO money, NO ledger anywhere in this model.
+model Recipe {
+  id          String   @id @default(cuid())
+  clientKey   String?  @unique
+  householdId String
+  createdById String
+  title       String   // the ONLY required field (G1)
+  description String?
+  directions  String?  // free text, newline-separated steps
+  prepMinutes Int?
+  cookMinutes Int?
+  servings    Int?     // proportional-scaling basis (scaling is display-time)
+  yieldText   String?  // separate from servings ("2 loaves"), PTE-shaped
+  course      String?  // free-vocabulary strings (user-editable lists are UI)
+  cuisine     String?
+  tags        String?  // comma-separated, trimmed; UI splits/joins
+  photoPath   String?  // IMAGES_DIR kind "recipes"
+  private     Boolean  @default(false) // G3: default = visible to recipe-granted connections
+  sourceUrl   String?  // URL-import provenance
+  // Fork attribution (G3): SNAPSHOTS, deliberately not FKs — the source may be
+  // deleted/unshared/severed later and the copy stands alone.
+  forkedFromTitle         String?
+  forkedFromHouseholdName String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  household   Household          @relation(fields: [householdId], references: [id])
+  ingredients RecipeIngredient[]
+
+  @@index([householdId])
+}
+
+model RecipeIngredient {
+  id       String  @id @default(cuid())
+  recipeId String
+  position Int
+  kind     String  @default("item") // "item" | "heading" (section headings, G1)
+  amount   String? // RAW TEXT ("1 1/2", "2-3") — never parsed server-side; scaling is a display concern
+  unit     String?
+  text     String  // ingredient name for kind=item; the heading text for kind=heading
+  note     String?
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId, position])
+}
+
+// G2: the LEARNED per-household ingredient-name → product mapping. Written only
+// on explicit user confirmation (never silently), resolved at read time for
+// EVERY recipe (own/forked/browsed). Quantities NEVER convert across the link —
+// the UI shows recipe amounts and pantry counts side by side.
+model IngredientLink {
+  id             String @id @default(cuid())
+  householdId    String
+  normalizedName String // lower-cased, whitespace-collapsed ingredient text
+  productId      String
+
+  household Household @relation(fields: [householdId], references: [id])
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@unique([householdId, normalizedName])
 }
