@@ -22,12 +22,12 @@ export const takeRouter = router({
     .input(z.object({ takeId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       return dbTransaction(async (tx) => {
-        const take = await tx.take.findUnique({
-          where: { id: input.takeId },
-          include: { taker: { select: { householdId: true } } },
-        });
+        const take = await tx.take.findUnique({ where: { id: input.takeId } });
         if (!take) throw new TRPCError({ code: 'NOT_FOUND' });
-        if (take.taker.householdId !== ctx.user.householdId) {
+        // The taking household is the snapshot on the take itself (stamped at
+        // pickup from Order.householdId) — never re-derived from the taker
+        // user, whose memberships can change (REWORK A3).
+        if (take.householdId !== ctx.user.householdId) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Only the taking household can undo a take.',

@@ -137,7 +137,89 @@ per-household ingredient→product mapping · shopping list never silently remov
 (PTE's pantry lesson) · rename to **Potluck** · evolve in place, four rounds:
 **network core → needs/surpluses → recipes → planner/shopping**.
 
-Implementation has not started; Round 1 slice 1 (schema + data migration) is next.
+Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
+progress below, newest first.
+
+### Round 1 slice 1 — schema + data migration (network core)
+
+**2026-07-03 — done.** Migration `20260703100000_network_core` + the compatibility shim;
+the app behaves identically to pre-rework for the existing two-household world. Proven
+twice: (a) **data-preserving path (J2)** — the dev volume's real accumulated DB (7 users,
+89 products, 26 takes, 18 loans, 76 ledger entries) migrated in place and the full
+Playwright suite ran green against it (146 passed + 4 intentional skips, both engines);
+(b) **fresh path** — `down -v && build && SEED_DEMO=1 EXTRACTION_MODE=fixture up --wait
+&& npx playwright test`, same result. Schema↔migration parity held by
+`prisma migrate diff --from-migrations --to-schema` (clean).
+
+What changed:
+
+- **Schema.** `Membership` (user↔household + 11 capability booleans; REWORK's `order`
+  flag shipped as `placeOrders` — SQL-keyword/Order-model collision) replaces
+  `User.householdId`; `Connection` (canonical ordered pair `householdAId <
+  householdBId`, status PENDING/ACTIVE/SEVERED, 12 directional grant booleans
+  `aGrants*`/`bGrants*`); `User.username` + `Household.slug` (unique, `[a-z0-9_-]`);
+  `User.isInstanceAdmin`; `InstanceSettings` singleton (`id='instance'`,
+  `allowMemberHouseholdInvites`); `Product.householdId` (owner = the household whose
+  PANTRY holds its lots — never the purchaser); `Pantry.shared`/`Item.shared` (default
+  true); **attribution snapshots** `Take.householdId` (stamped at pickup from
+  `Order.householdId`) and `Loan.borrowerHouseholdId` (stamped at checkout) — relation-
+  free like LedgerEntry, so money/undo authz never re-derives a household from a user's
+  (now-mutable) memberships; `LedgerSeen` re-keyed `(userId, ownHouseholdId,
+  counterpartyHouseholdId)`.
+- **Data migration.** Owner-preset memberships for every user; ACTIVE full-grant
+  connection per existing household pair; usernames from email local-parts and slugs
+  from names (charset-guarded via GLOB fallback to id-based handles; duplicates
+  suffixed with the row's own id — an earlier rank-suffix design was killed by
+  adversarial review: correlated ROW_NUMBER re-evaluates mid-UPDATE and 3-way
+  collisions abort the migration half-applied, plus rank suffixes collide with
+  pre-existing `-2` names); first user = instance admin; products duplicated per
+  additional household using them (`p-<hh>-<id>`), each lot re-pointed to its own
+  pantry-household's copy; orphan (lot-less) products deliberately DELETED rather than
+  misassigned — the one lossy step, documented in the migration header. Table rebuilds
+  (User, Household, Product, Take, Loan, LedgerSeen) follow the proven
+  `tax_fees_receipt_text` pragma dance; `Loan_one_active_per_item` partial index
+  recreated by hand (Prisma can't express it).
+- **Compatibility shim.** `getSessionUser()` now loads memberships and resolves the
+  ACTING household: `coop_household` cookie validated against memberships, else first
+  membership (`createdAt, id` tiebreak — backfilled rows share one timestamp second).
+  It returns `{...user, memberships, householdId, household, activeMembership}` so all
+  ~56 pre-rework `user.householdId`/`user.household` consumers (tRPC ctx AND the
+  direct-Prisma server pages) keep working against the acting context. Nothing writes
+  the cookie yet — that's the S2 switcher.
+- **Code deltas.** `take.undo`/ledger/restock-detail `canUndo` read `take.householdId`;
+  loan return/undo gates read `loan.borrowerHouseholdId` (checkout replay also
+  validates it); `order.pickup` stamps `Take.householdId`; `restock.saveLine` creates
+  products under the pantry-owner household AND rejects picking another household's
+  product (the UPC write-through could stamp a foreign catalog — closed per review);
+  push fan-out is Membership-based with per-user dedupe; `household.overview` and
+  `/more` map memberships to the identical members shape; seed gains
+  usernames/slugs/memberships/connection/settings/admin (idempotent against both fresh
+  and migrated DBs — verified byte-equivalent); bootstrap creates
+  settings + slug + username + Owner membership + first-user-admin in one transaction;
+  new `src/server/capabilities.ts` (typed capability vocabulary + Owner/Adult/Teen/
+  Child presets) and `src/server/identity.ts` (handle derivation, 14 unit tests).
+  e2e: only slice6's raw-SQL seam changed (Membership insert, slug/username columns,
+  Connection cleanup).
+- **Adversarial review (workflow, 3 lenses × xhigh)** found the dedupe-abort family
+  (fixed above), the saveLine cross-household product hazard (fixed), the slice6
+  Connection-cleanup FK trap (fixed), bootstrap's non-transactional user+membership
+  (fixed), and the ordering nondeterminism (fixed). Migration equivalence re-proven
+  after fixes: real-data output byte-identical minus CURRENT_TIMESTAMP columns;
+  pathological worlds (3× same name, adjacent `-2`, punctuation-only, 2-char locals)
+  all migrate to unique charset-clean handles. `prisma migrate deploy` verified to NOT
+  re-validate checksums of applied migrations (edited-file safety).
+
+**S2 checklist recorded by review (money gates that silently re-key to the acting
+household the moment multi-membership lands — each needs its capability pairing):**
+`ledger.settle/adjust` `assertPairWithMe` → `settleMoney`; `restock.finalize`
+`assertMayFinalize` → `receiveStock`(+`spend`?); `restock.correctCredit`/`voidInError`
+gates → `settleMoney`; `take.undo` → `placeOrders`/`spend`; `order.pickup` standing →
+`spend`/`fulfill`; `loan.checkout` → `lendBorrow`+`spend` (checkout sheet must SHOW the
+acting household that will owe the fee); `restock.create` purchaser attribution must be
+constrained to households the actor holds a membership in (today it's free client
+input); `product.search` must scope to the pantry-owner household; carts are
+per-(pantry, acting-household). Also deferred: `/api/images` serving is session-only
+(any member fetches any image) — decide connection-scoping deliberately.
 
 ## Progress notes
 

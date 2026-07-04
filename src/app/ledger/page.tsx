@@ -11,10 +11,20 @@ import { LedgerView, type LedgerRow } from './ledger-view';
  * (react-hooks/purity); callers must invoke it BEFORE snapshotting the entry
  * list so markSeen can never cover an entry the page didn't show.
  */
-async function loadSeenWatermark(userId: string, counterpartyHouseholdId: string) {
+async function loadSeenWatermark(
+  userId: string,
+  ownHouseholdId: string,
+  counterpartyHouseholdId: string,
+) {
   const renderedAt = Date.now();
   const seen = await db.ledgerSeen.findUnique({
-    where: { userId_counterpartyHouseholdId: { userId, counterpartyHouseholdId } },
+    where: {
+      userId_ownHouseholdId_counterpartyHouseholdId: {
+        userId,
+        ownHouseholdId,
+        counterpartyHouseholdId,
+      },
+    },
   });
   return { renderedAt, seenAt: seen?.seenAt ?? null };
 }
@@ -56,7 +66,7 @@ export default async function LedgerPage({
   // client echoes to markSeen, so an entry created after this moment (and
   // therefore possibly absent from the rendered rows) can never be marked
   // seen by this visit.
-  const { renderedAt, seenAt } = await loadSeenWatermark(user.id, other.id);
+  const { renderedAt, seenAt } = await loadSeenWatermark(user.id, me, other.id);
 
   const entries = await db.ledgerEntry.findMany({
     where: {
@@ -81,7 +91,7 @@ export default async function LedgerPage({
           restock: { select: { dateCode: true, seq: true } },
         },
       },
-      taker: { select: { name: true, householdId: true } },
+      taker: { select: { name: true } },
     },
   });
   const takeById = new Map(takes.map((t) => [t.id, t]));
@@ -106,7 +116,7 @@ export default async function LedgerPage({
 
   const creators = await db.user.findMany({
     where: { id: { in: [...new Set(entries.map((e) => e.createdById))] } },
-    select: { id: true, name: true, householdId: true },
+    select: { id: true, name: true },
   });
   const creatorById = new Map(creators.map((u) => [u.id, u]));
   const entryById = new Map(entries.map((e) => [e.id, e]));
@@ -142,7 +152,9 @@ export default async function LedgerPage({
           take = {
             id: t.id,
             reversed: t.reversedAt !== null,
-            canUndo: t.reversedAt === null && t.taker.householdId === me,
+            // Taking household = the pickup-time snapshot on the take, not
+            // the taker user's current memberships (REWORK A3).
+            canUndo: t.reversedAt === null && t.householdId === me,
           };
         }
         break;

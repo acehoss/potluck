@@ -10,25 +10,40 @@ datasource db {
 model Household {
   id        String   @id @default(cuid())
   name      String
+  // URL-safe handle, unique per instance — the future `household@instance`
+  // address (REWORK E2). Assigned at creation; raw cuids never leave the
+  // instance unqualified.
+  slug      String   @unique
   createdAt DateTime @default(now())
 
-  members   User[]
-  pantries  Pantry[]
-  invites   Invite[]
-  purchases Restock[] @relation("purchases")
-  items     Item[]
-  orders    Order[]
+  memberships Membership[]
+  pantries    Pantry[]
+  invites     Invite[]
+  purchases   Restock[]    @relation("purchases")
+  items       Item[]
+  orders      Order[]
+  products    Product[]
+  connectionsA Connection[] @relation("connectionA")
+  connectionsB Connection[] @relation("connectionB")
 }
 
 model User {
   id           String   @id @default(cuid())
-  householdId  String
+  // Login identity (REWORK A2): unique per instance, charset [a-z0-9_-]{3,30}
+  // so `user@instance` addressing works at federation time. Email stays
+  // required + unique below — recovery, notifications, admin contact — but is
+  // no longer the identity.
+  username     String   @unique
   name         String
   email        String   @unique
   passwordHash String
+  // Instance-admin (REWORK A4): first user of a fresh instance. Controls the
+  // new-household-invite toggle and the admin usage view. Instance-scoped, so
+  // it lives on User, not Membership.
+  isInstanceAdmin Boolean @default(false)
   createdAt    DateTime @default(now())
 
-  household         Household          @relation(fields: [householdId], references: [id])
+  memberships       Membership[]
   sessions          Session[]
   invitesCreated    Invite[]
   restocksCreated   Restock[]
@@ -37,6 +52,89 @@ model User {
   loans             Loan[]
   pushSubscriptions PushSubscription[]
   ordersCreated     Order[]
+}
+
+// ---- Potluck Round 1: network core (REWORK.md) -------------------------------
+
+// User ↔ household with per-membership capability flags (REWORK A3/A3a).
+// A user may belong to N households; every authz check in code is a typed
+// capability test against the ACTING membership (the sticky acting-household
+// context). Named roles (Owner/Adult/Teen/Child) are UI presets over these
+// flags, not schema. `placeOrders` is REWORK's `order` flag, renamed: `order`
+// is a SQL keyword and collides with the Order model.
+model Membership {
+  id          String @id @default(cuid())
+  userId      String
+  householdId String
+
+  manageHousehold   Boolean @default(false) // rename, pantries, memberships/roles, shared flags
+  manageConnections Boolean @default(false) // initiate/accept/sever, edit grants
+  receiveStock      Boolean @default(false) // run receiving (restocks)
+  placeOrders       Boolean @default(false) // build/submit orders, browse/draft cross-household
+  spend             Boolean @default(false) // money-moving submissions (cross-household order, fee-bearing checkout)
+  fulfill           Boolean @default(false) // pick/ready/hand off incoming orders; confirm share handoffs
+  adjustInventory   Boolean @default(false) // recount, write-off
+  lendBorrow        Boolean @default(false) // check out/return loans
+  postShares        Boolean @default(false) // needs/surpluses posts (Round 2)
+  editRecipes       Boolean @default(false) // recipe book, planner, shopping list writes (Rounds 3–4)
+  settleMoney       Boolean @default(false) // settlements, manual adjustments, correct-credit, void-in-error
+
+  createdAt DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  household Household @relation(fields: [householdId], references: [id])
+
+  @@unique([userId, householdId])
+  @@index([householdId])
+}
+
+// Pairwise household↔household edge (REWORK B1/B2). Canonically ordered
+// (householdAId < householdBId) so the pair is unique. Two DIRECTIONAL grant
+// sets: aGrants* is what A permits B to do with A's resources, bGrants* the
+// reverse — each side edits only its own set and may tighten/revoke at any
+// time without the other's consent ("resource owner is authoritative").
+// Lifecycle: PENDING (requested) → ACTIVE (accepted) → SEVERED (unilateral;
+// terminal — a new edge is a fresh request).
+model Connection {
+  id                     String  @id @default(cuid())
+  householdAId           String
+  householdBId           String
+  status                 String  @default("PENDING") // "PENDING" | "ACTIVE" | "SEVERED"
+  // Which household initiated (accept authz + display). Null for edges the
+  // system created (data migration, new-household invites).
+  requestedByHouseholdId String?
+
+  aGrantsPantry    Boolean @default(false) // B may browse A's shared pantries + order against them
+  aGrantsLending   Boolean @default(false) // B may browse A's shared items + borrow them
+  aGrantsRecipes   Boolean @default(false) // B may browse A's non-private recipes (Round 3)
+  aGrantsShareTo   Boolean @default(false) // A's posts reach B (Round 2)
+  aGrantsShareFrom Boolean @default(false) // B's posts are shown to A (Round 2)
+  aGrantsReshare   Boolean @default(false) // B may reshare A's posts onward (Round 2)
+  bGrantsPantry    Boolean @default(false)
+  bGrantsLending   Boolean @default(false)
+  bGrantsRecipes   Boolean @default(false)
+  bGrantsShareTo   Boolean @default(false)
+  bGrantsShareFrom Boolean @default(false)
+  bGrantsReshare   Boolean @default(false)
+
+  createdAt   DateTime  @default(now())
+  activatedAt DateTime?
+  severedAt   DateTime?
+
+  householdA Household @relation("connectionA", fields: [householdAId], references: [id])
+  householdB Household @relation("connectionB", fields: [householdBId], references: [id])
+
+  @@unique([householdAId, householdBId])
+  @@index([householdBId])
+}
+
+// Singleton (id = "instance"): operator-level settings (REWORK A1/A4/D2).
+model InstanceSettings {
+  id        String   @id
+  // A1: any member may invite a NEW household (the invite is the first
+  // connection edge) unless the instance admin restricts it to admin-only.
+  allowMemberHouseholdInvites Boolean @default(true)
+  createdAt DateTime @default(now())
 }
 
 // ---- slice 7: web push (blueprint 04 §4) ------------------------------------
@@ -68,12 +166,16 @@ model PushSubscription {
 // render and the markSeen write stay unseen.
 model LedgerSeen {
   userId                  String
+  // The viewer's OWN side of the pair — under multi-membership a user can
+  // watch the same counterparty from two acting households, and viewing the
+  // A–C pair must never swallow B–C's unseen entries. Relation-free.
+  ownHouseholdId          String
   counterpartyHouseholdId String
   seenAt                  DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@id([userId, counterpartyHouseholdId])
+  @@id([userId, ownHouseholdId, counterpartyHouseholdId])
 }
 
 model Session {
@@ -108,6 +210,10 @@ model Pantry {
   id          String   @id @default(cuid())
   householdId String
   name        String
+  // Household-wide shared/private flag (REWORK B3): a connection holding the
+  // pantry grant sees exactly the shared set, identically for every
+  // connection. Private pantries are visible to the owning household only.
+  shared      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
   household Household @relation(fields: [householdId], references: [id])
@@ -119,14 +225,22 @@ model Pantry {
 
 model Product {
   id        String   @id @default(cuid())
-  name      String
+  // Per-household product namespace (REWORK D1): each household curates its
+  // own catalog; cross-household duplicates are by design. A product belongs
+  // to the household that OWNS the pantry its lots live in (the purchaser may
+  // differ — the pantry owner is the catalog owner). Browsing a connected
+  // pantry shows the owner's product names.
+  householdId String
+  name        String
   // No unique: SKU merging is out of scope; the UI warns on dupes.
-  upc       String?
-  createdAt DateTime @default(now())
+  upc         String?
+  createdAt   DateTime @default(now())
 
-  lots Lot[]
+  household Household @relation(fields: [householdId], references: [id])
+  lots      Lot[]
 
-  @@index([upc])
+  @@index([householdId, upc])
+  @@index([householdId])
 }
 
 model Restock {
@@ -203,7 +317,12 @@ model Take {
   id           String    @id @default(cuid())
   clientKey    String?   @unique // idempotency key: a replayed create returns this take instead of double-taking
   lotId        String
-  takerId      String // user; household derived via taker
+  takerId      String // user who acted (audit); the money-bearing household is householdId
+  // The household the units transferred TO — snapshotted at pickup from
+  // Order.householdId, never re-derived from the taker user (a user may hold
+  // N memberships; live derivation would mis-attribute money). Relation-free
+  // like LedgerEntry's household columns.
+  householdId  String
   quantity     Int // > 0
   costCents    Int // quantity × lot.unitCostCents; 0 when own-household
   takenAt      DateTime  @default(now())
@@ -323,6 +442,9 @@ model Item {
   photoPath   String? // under IMAGES_DIR volume, kind "items"
   notes       String?
   feeCents    Int      @default(0)
+  // Shared/private flag (REWORK B3), mirroring Pantry.shared: connections with
+  // the lending grant see exactly the shared items.
+  shared      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
   household Household @relation(fields: [householdId], references: [id])
@@ -343,7 +465,11 @@ model Loan {
   // replay must return the original loan instead of double-charging.
   clientKey         String?   @unique
   itemId            String
-  borrowerId        String // user; household derived via borrower
+  borrowerId        String // user who acted (audit); the borrowing household is borrowerHouseholdId
+  // The household that borrowed (and owes any fee) — snapshotted at checkout
+  // from the acting household, never re-derived from the borrower user
+  // (multi-membership would mis-attribute). Relation-free like LedgerEntry.
+  borrowerHouseholdId String
   feeCents          Int // snapshot of item.feeCents at checkout; immutable
   outAt             DateTime  @default(now())
   dueAt             DateTime?

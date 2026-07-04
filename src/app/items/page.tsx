@@ -24,14 +24,14 @@ export default async function ItemsPage() {
     include: {
       loans: {
         where: { returnedAt: null },
-        include: {
-          borrower: {
-            select: { name: true, householdId: true, household: { select: { name: true } } },
-          },
-        },
+        include: { borrower: { select: { name: true } } },
       },
     },
   });
+
+  // Borrower household = the checkout-time snapshot on the loan (REWORK A3),
+  // resolved to a name via the household list already in hand.
+  const householdNames = new Map(households.map((h) => [h.id, h.name]));
 
   const groups: ItemGroup[] = households.map((h) => ({
     householdId: h.id,
@@ -49,8 +49,8 @@ export default async function ItemsPage() {
           activeLoan: loan
             ? {
                 borrowerName: loan.borrower.name,
-                borrowerHouseholdName: loan.borrower.household.name,
-                borrowerIsYourHousehold: loan.borrower.householdId === user.householdId,
+                borrowerHouseholdName: householdNames.get(loan.borrowerHouseholdId) ?? 'Unknown',
+                borrowerIsYourHousehold: loan.borrowerHouseholdId === user.householdId,
                 outAt: loan.outAt.toISOString(),
                 dueAt: loan.dueAt?.toISOString() ?? null,
               }

@@ -112,12 +112,14 @@ export async function notifyLedgerEvent(opts: {
 }): Promise<void> {
   try {
     if (!vapidConfig()) return;
-    const users = await db.user.findMany({
-      where: { householdId: { in: opts.householdIds }, id: { not: opts.creatorId } },
-      select: { id: true },
+    // Membership fan-out: one push per USER (a member of both households of
+    // the pair still gets exactly one), creator excluded per-user.
+    const memberships = await db.membership.findMany({
+      where: { householdId: { in: opts.householdIds }, userId: { not: opts.creatorId } },
+      select: { userId: true },
     });
     await sendPushToUsers(
-      users.map((u) => u.id),
+      [...new Set(memberships.map((m) => m.userId))],
       { title: opts.title, body: opts.body, url: '/ledger' },
     );
   } catch (e) {

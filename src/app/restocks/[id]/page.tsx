@@ -41,7 +41,7 @@ export default async function RestockDetailPage({
     where: { lot: { restockId: restock.id } },
     orderBy: { takenAt: 'desc' },
     include: {
-      taker: { select: { name: true, householdId: true } },
+      taker: { select: { name: true } },
       lot: { select: { product: { select: { name: true } } } },
     },
   });
@@ -53,7 +53,8 @@ export default async function RestockDetailPage({
     takenAt: t.takenAt.toISOString(),
     costCents: t.costCents,
     reversed: t.reversedAt !== null,
-    canUndo: t.reversedAt === null && t.taker.householdId === user.householdId,
+    // Taking household = the pickup-time snapshot on the take (REWORK A3).
+    canUndo: t.reversedAt === null && t.householdId === user.householdId,
   }));
   // Adjustment history (slice 4): recounts and write-offs against this
   // restock's lots, newest first. Relation-free createdById → names by hand.

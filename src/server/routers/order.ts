@@ -313,6 +313,10 @@ export const orderRouter = router({
             data: {
               lotId: line.lotId,
               takerId: order.createdById, // requester's user who built the order
+              // The household the goods transferred to — the order's
+              // requester household, snapshotted so undo authz and history
+              // never re-derive it from a user's (mutable) memberships.
+              householdId: order.householdId,
               quantity: line.quantity,
               costCents,
               clientKey: input.clientKey ? `${input.clientKey}:${line.id}` : null,

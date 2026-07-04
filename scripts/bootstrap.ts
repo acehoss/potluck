@@ -19,6 +19,12 @@
 import 'dotenv/config';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { hashSync } from '@node-rs/argon2';
+import { OWNER_PRESET } from '../src/server/capabilities';
+import {
+  firstAvailableHandle,
+  slugBaseFromName,
+  usernameBaseFromEmail,
+} from '../src/server/identity';
 import { PrismaClient } from '../src/generated/prisma/client';
 
 const [householdName, userName, email, password, pantryName = 'Pantry'] = process.argv.slice(2);
@@ -49,16 +55,47 @@ async function main() {
   // Same argon2id parameters as src/server/auth.ts (OWASP).
   const passwordHash = hashSync(password, { memoryCost: 19_456, timeCost: 2, parallelism: 1 });
 
-  let household = await db.household.findFirst({ where: { name: householdName.trim() } });
-  household ??= await db.household.create({ data: { name: householdName.trim() } });
+  // Instance settings exist from the first boot (REWORK D3).
+  await db.instanceSettings.upsert({
+    where: { id: 'instance' },
+    update: {},
+    create: { id: 'instance' },
+  });
 
-  const user = await db.user.create({
+  let household = await db.household.findFirst({ where: { name: householdName.trim() } });
+  household ??= await db.household.create({
     data: {
-      name: userName.trim(),
-      email: normalizedEmail,
-      passwordHash,
-      householdId: household.id,
+      name: householdName.trim(),
+      slug: await firstAvailableHandle(
+        slugBaseFromName(householdName),
+        async (c) => (await db.household.findUnique({ where: { slug: c } })) !== null,
+      ),
     },
+  });
+
+  // The very first user of the instance is the instance admin (REWORK A1/A4).
+  const isFirstUser = (await db.user.count()) === 0;
+
+  // User + membership in ONE transaction — a half-created (membership-less)
+  // user can log in but reads as signed out on every page, and the unique
+  // email then blocks the re-run that would repair it.
+  const user = await db.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: {
+        name: userName.trim(),
+        username: await firstAvailableHandle(
+          usernameBaseFromEmail(normalizedEmail),
+          async (c) => (await tx.user.findUnique({ where: { username: c } })) !== null,
+        ),
+        email: normalizedEmail,
+        passwordHash,
+        isInstanceAdmin: isFirstUser,
+      },
+    });
+    await tx.membership.create({
+      data: { userId: created.id, householdId: household.id, ...OWNER_PRESET },
+    });
+    return created;
   });
 
   const pantry = await db.pantry.findFirst({
@@ -68,8 +105,8 @@ async function main() {
     pantry ?? (await db.pantry.create({ data: { name: pantryName.trim(), householdId: household.id } }));
 
   console.log('Bootstrapped:');
-  console.log(`  household  ${household.name} (${household.id})`);
-  console.log(`  user       ${user.name} <${user.email}> (${user.id})`);
+  console.log(`  household  ${household.name} (${household.id}, @${household.slug})`);
+  console.log(`  user       ${user.name} <${user.email}> (@${user.username}${user.isInstanceAdmin ? ', instance admin' : ''})`);
   console.log(`  pantry     ${pantryRow.name} (${pantryRow.id})`);
   console.log('Log in and invite the rest of the household from the app.');
 }

@@ -542,7 +542,7 @@ export const restockRouter = router({
     // can't be orphaned by a failing lot write, and position assignment is
     // race-free.
     const lotId = await dbTransaction(async (tx) => {
-      await getDraftOrThrow(tx, input.restockId);
+      const restock = await getDraftOrThrow(tx, input.restockId);
 
       // Canonical stored form (zod guarantees 8–14 digits, so this never
       // nulls out a value the schema accepted).
@@ -551,13 +551,26 @@ export const restockRouter = router({
       if (!excluded) {
         productId = input.productId ?? null;
         if (input.newProductName) {
+          // Products belong to the household whose pantry the lot lands in
+          // (REWORK D1: the pantry owner is the catalog owner — the purchaser
+          // may be another household entirely).
           const product = await tx.product.create({
-            data: { name: input.newProductName, upc },
+            data: {
+              name: input.newProductName,
+              upc,
+              householdId: restock.pantry.householdId,
+            },
           });
           productId = product.id;
         } else {
           const exists = await tx.product.findUnique({ where: { id: productId! } });
-          if (!exists) throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
+          // The picked product must belong to the pantry-owner household
+          // (REWORK D1): a lot may never reference another household's
+          // catalog row — and the UPC write-through below must never stamp a
+          // foreign catalog. Foreign products read as not-found.
+          if (!exists || exists.householdId !== restock.pantry.householdId) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
+          }
           // A scanned code picked onto an existing product fills in a missing
           // UPC (never overwrites one that's already set).
           if (upc && exists.upc === null) {

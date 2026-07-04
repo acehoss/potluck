@@ -564,7 +564,9 @@ test("a third household cannot return or undo other households' loans", async ({
     const Database = require('better-sqlite3');
     const db = new Database(process.env.DATABASE_URL.replace(/^file:/, ''));
     db.prepare("DELETE FROM Session WHERE userId = '${UID}'").run();
+    db.prepare("DELETE FROM Membership WHERE userId = '${UID}'").run();
     db.prepare("DELETE FROM User WHERE id = '${UID}'").run();
+    db.prepare("DELETE FROM Connection WHERE householdAId = '${HH}' OR householdBId = '${HH}'").run();
     db.prepare("DELETE FROM Household WHERE id = '${HH}'").run();
   `;
   execInApp(cleanup); // clear any leak from a previously interrupted run
@@ -574,9 +576,10 @@ test("a third household cannot return or undo other households' loans", async ({
       const { hashSync } = require('@node-rs/argon2');
       const Database = require('better-sqlite3');
       const db = new Database(process.env.DATABASE_URL.replace(/^file:/, ''));
-      db.prepare("INSERT OR IGNORE INTO Household (id, name) VALUES ('${HH}', 'Neighbors (e2e)')").run();
+      db.prepare("INSERT OR IGNORE INTO Household (id, name, slug) VALUES ('${HH}', 'Neighbors (e2e)', '${HH}')").run();
       const hash = hashSync('${PASSWORD}', { memoryCost: 19456, timeCost: 2, parallelism: 1 });
-      db.prepare("INSERT OR IGNORE INTO User (id, householdId, name, email, passwordHash) VALUES ('${UID}', '${HH}', 'Nia', '${EMAIL}', ?)").run(hash);
+      db.prepare("INSERT OR IGNORE INTO User (id, username, name, email, passwordHash) VALUES ('${UID}', '${UID}', 'Nia', '${EMAIL}', ?)").run(hash);
+      db.prepare("INSERT OR IGNORE INTO Membership (id, userId, householdId, manageHousehold, manageConnections, receiveStock, placeOrders, spend, fulfill, adjustInventory, lendBorrow, postShares, editRecipes, settleMoney) VALUES ('m-${UID}', '${UID}', '${HH}', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)").run();
     `);
     const nia = niaContext.request;
     const loginRes = await nia.post('/api/trpc/auth.login', {

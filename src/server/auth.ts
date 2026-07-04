@@ -4,6 +4,13 @@ import { cookies } from 'next/headers';
 import { db } from './db';
 
 export const SESSION_COOKIE = 'coop_session';
+/**
+ * Sticky acting-household cookie (REWORK A3b): which of the user's
+ * memberships they are currently acting as. Read and VALIDATED against the
+ * membership rows on every request; an absent/stale value falls back to the
+ * first membership, so single-membership users never notice it.
+ */
+export const ACTING_HOUSEHOLD_COOKIE = 'coop_household';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const SESSION_RENEW_BELOW_MS = 15 * 24 * 60 * 60 * 1000; // renew when < 15 days left
 
@@ -85,16 +92,35 @@ export async function clearSessionCookie() {
 }
 
 /**
- * Validates the session cookie. Returns the user (with household) or null.
+ * Validates the session cookie. Returns the user with their memberships and
+ * the resolved ACTING household (REWORK A3), or null. `householdId` /
+ * `household` are the acting household — the sticky-switcher cookie when it
+ * names a real membership, else the user's first membership — so every
+ * consumer that used to read the (removed) User.householdId column keeps
+ * working, now against the acting context. A user with zero memberships
+ * cannot act anywhere and reads as signed out (A3c keeps this unreachable).
  * Renews the session expiry when it is past the halfway point.
  */
 export async function getSessionUser() {
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
   const session = await db.session.findUnique({
     where: { id: hashToken(token) },
-    include: { user: { include: { household: true } } },
+    include: {
+      user: {
+        include: {
+          memberships: {
+            include: { household: true },
+            // id tiebreak: migration-backfilled memberships share one
+            // CURRENT_TIMESTAMP second, and the fallback acting household
+            // must be deterministic.
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          },
+        },
+      },
+    },
   });
   if (!session) return null;
 
@@ -110,8 +136,20 @@ export async function getSessionUser() {
     });
   }
 
-  return session.user;
+  const { memberships } = session.user;
+  if (memberships.length === 0) return null;
+  const preferred = store.get(ACTING_HOUSEHOLD_COOKIE)?.value;
+  const acting = memberships.find((m) => m.householdId === preferred) ?? memberships[0];
+
+  return {
+    ...session.user,
+    householdId: acting.householdId,
+    household: acting.household,
+    activeMembership: acting,
+  };
 }
+
+export type SessionUser = NonNullable<Awaited<ReturnType<typeof getSessionUser>>>;
 
 export async function destroySession() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;

@@ -9,7 +9,9 @@ import {
   setSessionCookie,
   verifyPasswordLimited,
 } from '../auth';
+import { OWNER_PRESET } from '../capabilities';
 import { db, dbTransaction } from '../db';
+import { firstAvailableHandle, usernameBaseFromEmail } from '../identity';
 import { checkRateLimit, resetRateLimit } from '../rate-limit';
 import { publicProcedure, router } from '../trpc';
 
@@ -82,12 +84,28 @@ export const authRouter = router({
 
       const passwordHash = await hashPassword(input.password);
       const user = await dbTransaction(async (tx) => {
+        // Username derived from the email local-part until signup collects it
+        // directly (R1S2); race-free under the app-wide DB lock.
+        const username = await firstAvailableHandle(
+          usernameBaseFromEmail(input.email),
+          async (candidate) =>
+            (await tx.user.findUnique({ where: { username: candidate } })) !== null,
+        );
         const created = await tx.user.create({
           data: {
+            username,
             name: input.name,
             email: input.email,
             passwordHash,
+          },
+        });
+        // A joining member gets the full-capability (Owner) preset — the
+        // pre-rework trust model. Invite-carried capability presets are R1S4.
+        await tx.membership.create({
+          data: {
+            userId: created.id,
             householdId: invite.householdId,
+            ...OWNER_PRESET,
           },
         });
         const claimed = await tx.invite.updateMany({

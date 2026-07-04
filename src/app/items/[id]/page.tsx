@@ -15,15 +15,19 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       household: { select: { id: true, name: true } },
       loans: {
         orderBy: { outAt: 'desc' },
-        include: {
-          borrower: {
-            select: { name: true, householdId: true, household: { select: { name: true } } },
-          },
-        },
+        include: { borrower: { select: { name: true } } },
       },
     },
   });
   if (!item) notFound();
+
+  // Borrower household = the checkout-time snapshot on each loan (REWORK A3);
+  // resolve names in one lookup.
+  const borrowerHouseholds = await db.household.findMany({
+    where: { id: { in: [...new Set(item.loans.map((l) => l.borrowerHouseholdId))] } },
+    select: { id: true, name: true },
+  });
+  const householdNames = new Map(borrowerHouseholds.map((h) => [h.id, h.name]));
 
   // A LOAN_FEE that undoCheckout reversed nets $0 (invariant 10 / append-only
   // ledger): history must say so instead of permanently claiming the charge.
@@ -57,12 +61,12 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     loans: item.loans.map((loan) => ({
       id: loan.id,
       borrowerName: loan.borrower.name,
-      borrowerHouseholdId: loan.borrower.householdId,
-      borrowerHouseholdName: loan.borrower.household.name,
+      borrowerHouseholdId: loan.borrowerHouseholdId,
+      borrowerHouseholdName: householdNames.get(loan.borrowerHouseholdId) ?? 'Unknown',
       // The fee that actually posted (invariant 10): own-household loans and
       // $0-fee items charge nothing regardless of the snapshot.
       chargedFeeCents:
-        loan.borrower.householdId === item.household.id ? 0 : loan.feeCents,
+        loan.borrowerHouseholdId === item.household.id ? 0 : loan.feeCents,
       // …and a fee whose LOAN_FEE entry was reversed by undoCheckout netted
       // $0 — the row is annotated so history never claims money moved.
       feeReversed: reversedLoanIds.has(loan.id),

@@ -194,7 +194,11 @@ export const loanRouter = router({
           if (input.clientKey) {
             const existing = await tx.loan.findUnique({ where: { clientKey: input.clientKey } });
             if (existing) {
-              if (existing.borrowerId !== ctx.user.id || existing.itemId !== input.itemId) {
+              if (
+                existing.borrowerId !== ctx.user.id ||
+                existing.itemId !== input.itemId ||
+                existing.borrowerHouseholdId !== ctx.user.householdId
+              ) {
                 throw new TRPCError({ code: 'CONFLICT', message: 'Duplicate request key.' });
               }
               return { loanId: existing.id, feeCents: existing.feeCents };
@@ -224,6 +228,9 @@ export const loanRouter = router({
             data: {
               itemId: item.id,
               borrowerId: ctx.user.id,
+              // Snapshot of the ACTING household (REWORK A3): the household
+              // that borrowed and owes any fee, never re-derived later.
+              borrowerHouseholdId: ctx.user.householdId,
               feeCents: item.feeCents, // snapshot; item fee edits never touch it
               dueAt: input.dueAt ?? null,
               clientKey: input.clientKey ?? null,
@@ -274,14 +281,13 @@ export const loanRouter = router({
       return dbTransaction(async (tx) => {
         const loan = await tx.loan.findUnique({
           where: { id: input.loanId },
-          include: {
-            borrower: { select: { householdId: true } },
-            item: { select: { householdId: true } },
-          },
+          include: { item: { select: { householdId: true } } },
         });
         if (!loan) throw new TRPCError({ code: 'NOT_FOUND', message: 'Loan not found.' });
+        // Borrower side = the household snapshotted at checkout, never the
+        // borrower user's current memberships (REWORK A3).
         const mine = ctx.user.householdId;
-        if (loan.borrower.householdId !== mine && loan.item.householdId !== mine) {
+        if (loan.borrowerHouseholdId !== mine && loan.item.householdId !== mine) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: "Only the borrower's or the owner's household can record a return.",
@@ -315,14 +321,12 @@ export const loanRouter = router({
       return dbTransaction(async (tx) => {
         const loan = await tx.loan.findUnique({
           where: { id: input.loanId },
-          include: {
-            borrower: { select: { householdId: true } },
-            item: { select: { householdId: true } },
-          },
+          include: { item: { select: { householdId: true } } },
         });
         if (!loan) throw new TRPCError({ code: 'NOT_FOUND', message: 'Loan not found.' });
+        // Borrower side = the checkout-time household snapshot (REWORK A3).
         const mine = ctx.user.householdId;
-        if (loan.borrower.householdId !== mine && loan.item.householdId !== mine) {
+        if (loan.borrowerHouseholdId !== mine && loan.item.householdId !== mine) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: "Only the borrower's or the owner's household can undo a checkout.",

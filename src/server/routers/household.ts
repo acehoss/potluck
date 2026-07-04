@@ -10,7 +10,10 @@ export const householdRouter = router({
     const households = await db.household.findMany({
       orderBy: { createdAt: 'asc' },
       include: {
-        members: { select: { id: true, name: true }, orderBy: { createdAt: 'asc' } },
+        memberships: {
+          select: { user: { select: { id: true, name: true } } },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        },
         pantries: { select: { id: true, name: true }, orderBy: { createdAt: 'asc' } },
       },
     });
@@ -19,7 +22,7 @@ export const householdRouter = router({
       households: households.map((h) => ({
         id: h.id,
         name: h.name,
-        members: h.members,
+        members: h.memberships.map((m) => m.user),
         pantries: h.pantries,
       })),
     };

@@ -194,18 +194,21 @@ export const ledgerRouter = router({
           select: { id: true },
         });
         if (!counterparty) throw new TRPCError({ code: 'NOT_FOUND' });
+        // Keyed by the viewer's ACTING household too: watching the same
+        // counterparty from two memberships keeps two watermarks (REWORK A3).
         const key = {
           userId: ctx.user.id,
+          ownHouseholdId: ctx.user.householdId,
           counterpartyHouseholdId: input.counterpartyHouseholdId,
         };
         const existing = await tx.ledgerSeen.findUnique({
-          where: { userId_counterpartyHouseholdId: key },
+          where: { userId_ownHouseholdId_counterpartyHouseholdId: key },
         });
         if (!existing) {
           await tx.ledgerSeen.create({ data: { ...key, seenAt } });
         } else if (seenAt > existing.seenAt) {
           await tx.ledgerSeen.update({
-            where: { userId_counterpartyHouseholdId: key },
+            where: { userId_ownHouseholdId_counterpartyHouseholdId: key },
             data: { seenAt },
           });
         }
@@ -224,7 +227,7 @@ export const ledgerRouter = router({
   hasNew: protectedProcedure.query(async ({ ctx }) => {
     const me = ctx.user.householdId;
     const seen = await db.ledgerSeen.findMany({
-      where: { userId: ctx.user.id },
+      where: { userId: ctx.user.id, ownHouseholdId: me },
       select: { counterpartyHouseholdId: true, seenAt: true },
     });
     const seenByPair = new Map(seen.map((s) => [s.counterpartyHouseholdId, s.seenAt]));

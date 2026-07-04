@@ -10,10 +10,17 @@ export default async function MorePage() {
   const user = await getSessionUser();
   if (!user) redirect('/login');
 
-  const households = await db.household.findMany({
-    orderBy: { createdAt: 'asc' },
-    include: { members: { select: { id: true, name: true }, orderBy: { createdAt: 'asc' } } },
-  });
+  const households = (
+    await db.household.findMany({
+      orderBy: { createdAt: 'asc' },
+      include: {
+        memberships: {
+          select: { user: { select: { id: true, name: true } } },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        },
+      },
+    })
+  ).map((h) => ({ id: h.id, name: h.name, members: h.memberships.map((m) => m.user) }));
   households.sort((a, b) => (a.id === user.householdId ? -1 : b.id === user.householdId ? 1 : 0));
 
   return (
