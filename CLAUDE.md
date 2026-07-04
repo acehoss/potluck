@@ -13,6 +13,13 @@ Private Coop: a self-hosted web app (PWA) for a small circle of trusted househol
 
 Do not start large autonomous workflows without an explicit ask.
 
+**Next up (design locked 2026-07-03): the "Potluck" mutual-aid rework** — households as
+nodes in a connection network (multi-household instances, directional per-connection
+grants, multi-membership RBAC-lite), needs/surpluses gifting, recipes, PTE-style meal
+planning/shopping, rename to Potluck. **Read [docs/REWORK.md](./docs/REWORK.md) first** —
+it is the implementation seed (decisions, vocabularies, round plan: network core →
+shares → recipes → planner). SPEC.md is partially superseded until its Round-1 rewrite.
+
 ## Read first
 
 - **[SPEC.md](./SPEC.md)** — the scope contract: domain model, flows, money invariants, out-of-scope guardrails. Deliberately small; keep it that way.

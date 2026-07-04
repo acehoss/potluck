@@ -110,6 +110,35 @@ Post-pickup returns reuse the existing `take.undo` (swapped-party REVERSAL + inv
 
 Aaron: notifications are a **separate feature set** to work through later, because there's real depth — **push infra, email infra, an in-app notification panel, event generation, and per-user notification prefs**. This round ships in-app order status only (the requester sees status on their orders; the owner sees incoming requests). The natural order events (request placed → owner; ready → requester; picked up) become notification triggers when that round happens. The existing slice-7 push (settlement + adjustment only) stays as-is until then.
 
+## Mutual-aid rework — "Potluck" (design locked 2026-07-03)
+
+Aaron initiated a rebrand/reorg toward mutual aid: households become nodes in an emergent
+network of pairwise connections (multi-household instances; future federation between
+instances), plus needs/surpluses sharing, a recipe book, and Plan-to-Eat-style meal
+planning + shopping lists integrated with cross-network pantry orders.
+
+**The full design interview record and implementation seed is
+[docs/REWORK.md](./docs/REWORK.md)** — every decision (DECIDED by Aaron or ASSUMED
+veto-able), the drafted capability/grant vocabularies, and the round plan. Supporting
+research: [docs/research/plan-to-eat.md](./docs/research/plan-to-eat.md) and
+[docs/research/federation.md](./docs/research/federation.md).
+
+Headline decisions: full multi-membership with per-household capability flags (RBAC-lite,
+roles as presets) · connections carry **directional** grants each side controls
+unilaterally · per-pantry/item shared flags · **orders = at-cost, shares = gifts** (posts
+never touch the ledger; tracked handoffs record $0 transfers) · claims are
+signal+confirm with optional quantities; reshares chain hop-by-hop with the resharer
+brokering (people only interact with direct connections) · per-household products ·
+username identity (`user@instance`-ready) + required email · edge-growth onboarding
+(new-household invite = first connection) with instance-admin toggle · federation
+deferred with a declared custom Coop↔Coop protocol target (only the cheap groundwork
+ships now) · recipes browse-live/fork-on-save over a recipe grant with a learned
+per-household ingredient→product mapping · shopping list never silently removes items
+(PTE's pantry lesson) · rename to **Potluck** · evolve in place, four rounds:
+**network core → needs/surpluses → recipes → planner/shopping**.
+
+Implementation has not started; Round 1 slice 1 (schema + data migration) is next.
+
 ## Progress notes
 
 Append dated notes per slice as work happens: decisions made, deviations from spec (with why), what was demonstrated and how. Newest at the top of each slice's section.

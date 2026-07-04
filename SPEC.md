@@ -1,6 +1,12 @@
 # Private Coop v2 — Specification
 
-**Status:** Living spec. v1 scope agreed 2026-07-02.
+**Status:** Living spec. v1 scope agreed 2026-07-02. **⚠ A major rework ("Potluck" —
+mutual-aid network: multi-household instances, connections with directional grants,
+needs/surpluses, recipes, meal planning) was designed 2026-07-03 and supersedes parts of
+this document — see [docs/REWORK.md](./docs/REWORK.md). This SPEC gets rewritten during
+rework Round 1; until then it accurately describes the running pre-rework app, except
+that "fully transparent" (§2.2) and the closed two-household instance model are slated
+for replacement.**
 **History:** The 2025 attempts live in branches `archive/2025-main` and `archive/2025-take2` — reference only. Their `local_only/design_discussions/RAW_REQUIREMENTS.md` is the ancestral spec; this document is its deliberate reduction. Do not import design docs or code patterns from the archive branches without scrutiny; most of that material is known-overengineered and the implementation was never verified working.
 
 ## 1. What this is
