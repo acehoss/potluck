@@ -113,7 +113,9 @@ model LedgerEntry {
   @@index([restockId])
 }
 // ---- slice 4: adjustments (settlement is a LedgerEntry, D5) -----------
-// slice 4 also adds `User.ledgerSeenAt DateTime?` — powers the ledger "new since viewed" flag
+// slice 4 also adds the `LedgerSeen` table — the per-user, per-pair "new since
+// viewed" watermark (shipped as a table, not the once-planned User.ledgerSeenAt
+// column; Round 1 re-keyed it (userId, ownHouseholdId, counterpartyHouseholdId))
 model Adjustment {
   id          String   @id @default(cuid())
   lotId       String
@@ -153,7 +155,7 @@ model Loan {
 }
 ```
 
-Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_ledger` (Take, LedgerEntry) · `slice4_adjustments` (Adjustment, `User.ledgerSeenAt DateTime?`) · `slice5_extraction` (3 nullable columns on Restock + `RestockImage.originalSha256 String?` for fixture-mode extraction, 04 §3) · `slice6_lending` (Item, Loan) · `slice7_push` (PushSubscription) · `tax_fees_receipt_text` (2026-07-03 polish: tax/fee/excluded columns) · `orders_reserved` (2026-07-03: `Lot.reservedCount`, `Order`, `OrderLine`; D9) · `20260703100000_network_core` (Round 1: Membership/Connection/InstanceSettings, username/slug, per-household Product with duplication backfill, shared flags, attribution snapshots, LedgerSeen re-key — data-preserving, proven against a live volume) · `20260703120000_household_invites` (`Invite.kind` + `grantsJson`). Back-relations on Household/User/Pantry added in the same migration that needs them.
+Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_ledger` (Take, LedgerEntry) · `slice4_adjustments` (Adjustment, `LedgerSeen`) · `slice5_extraction` (3 nullable columns on Restock + `RestockImage.originalSha256 String?` for fixture-mode extraction, 04 §3) · `slice6_lending` (Item, Loan) · `slice7_push` (PushSubscription) · `tax_fees_receipt_text` (2026-07-03 polish: tax/fee/excluded columns) · `orders_reserved` (2026-07-03: `Lot.reservedCount`, `Order`, `OrderLine`; D9) · `20260703100000_network_core` (Round 1: Membership/Connection/InstanceSettings, username/slug, per-household Product with duplication backfill, shared flags, attribution snapshots, LedgerSeen re-key — data-preserving, proven against a live volume) · `20260703120000_household_invites` (`Invite.kind` + `grantsJson`). Back-relations on Household/User/Pantry added in the same migration that needs them.
 
 ## Round 1 deltas (network core, 2026-07-04)
 

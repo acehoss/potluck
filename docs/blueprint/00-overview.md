@@ -54,7 +54,7 @@ direction stated below.
 | --- | --- | --- |
 | 2 | Receiving wizard, pantry inventory, tab shell, token migration | 01 (models, D1/D4/D6/D7), 02 (wizard, nav), 03 (all), 04 §1 |
 | 3 | Takes, ledger, net position | 01 (Take/LedgerEntry, invariants 1–4), 02 (take flow, ledger) |
-| 4 | Settle, recount/write-off, manual adjustment, `ledgerSeenAt`, backups | 01 (Adjustment, D5, authz), 02 (settle/adjust sheets), 04 §5 |
+| 4 | Settle, recount/write-off, manual adjustment, `LedgerSeen`, backups | 01 (Adjustment, D5, authz), 02 (settle/adjust sheets), 04 §5 |
 | 5 | VLM receipt extraction | 04 §3, 01 (extraction columns), 02 (step-3 prefill) |
 | 6 | Lending (items, loans, fees) | 01 (Item/Loan, invariant 10), 02 (lending) |
 | 7 | PWA, push, barcode scan | 04 §2/§4, 02 (PWA section) |

@@ -258,7 +258,7 @@ release). Own-pantry orders run the whole flow at $0.
 Entries append-only, newest first, each row → detail (who/what/lot/restock link; takes get
 Edit/Undo here). **Settle sheet:** amount (prefilled to zero the pair), direction (prefilled
 toward zero, swappable), method chips `Cash / Venmo / Other`, note. Posts a Settlement entry;
-both households see it flagged "new" until viewed (`User.ledgerSeenAt`, 01 slice 4; push is
+both households see it flagged "new" until viewed (`LedgerSeen`, 01 slice 4; push is
 slice 7). **Manual adjustment sheet** (slice 4): `⋯` in the ledger header → "Manual
 adjustment" — amount (cents keypad), direction (`they owe us` / `we owe them`), required
 note. Posts an ADJUSTMENT entry; the counterparty household is notified per 01's authz
