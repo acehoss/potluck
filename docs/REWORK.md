@@ -418,3 +418,76 @@ Friend (+pantry, lending, recipes), Family (everything + reshare).
   URI rule for cuids, first-class `Connection` table, keep ledger relation-free/append-only,
   keep "resource owner is authoritative" asymmetry, `origin`+`hopsRemaining` on shares
   from day one, and do NOT build keys/JSON-LD/outboxes yet.
+
+## Phase 2 — workflow IA, circles, contact layer (decided 2026-07-04)
+
+Post-rework UX phase, seeded by Aaron's tweak list and a five-agent focus group
+(personas: pantry operator, meal planner, casual share-only neighbor, Teen-preset
+member, adversarial IA critic — full reports in the 2026-07-04 session; synthesis
+recorded here). All five voted adopt-with-changes on the workflow-tab sketch.
+
+### Focus-group consensus (drove the decisions below)
+
+- Incoming work (orders to fulfill, drafts, claims, requests) needs ONE actionable
+  home — an **Activity** surface behind a toolbar bell, not "Plan." Bell badge =
+  actionable count; popover previews; actions available inline.
+- Network-as-home works only if the dashboard LEADS with attention items; per-household
+  ledger/lending/contact sections were unanimously endorsed as a tab.
+- The acting-household switcher is load-bearing (defines "Home" under multi-membership)
+  → persistent toolbar chip, not buried in More.
+- Receive must stay ≤2 taps (toolbar shortcut / Home FAB).
+- Contact cards: right feature; address + "usual pickup notes" outrank tel:/sms:;
+  card must show on connection REQUESTS; pickup address belongs on ready-order cards;
+  vCard download is the contact-import mechanism (web can't write the OS contacts).
+- Affordance rule: **can / hide** — never render a button that 403s. (The third
+  bucket, "handoff/waiting-on-an-adult," is deferred with minors, below.)
+- Duplicated surfaces may differ in density, never in available actions.
+
+### Decisions
+
+- **P1. Tabs — DECIDED.** **Neighbors** (home) · **Plan** · **Home** · **More**.
+  "Neighbors" over "Network" (warmer; no graph promised). "Plan" kept. Home =
+  acting household. More = curated menu (connections, admin, profile, install),
+  not a sitemap.
+- **P2. Landing — DECIDED.** Neighbors, with the attention strip (same source as
+  Activity) ABOVE the household sections, so work/shares surface first-scroll.
+- **P3. Ledger tab retires — DECIDED.** Pair ledger detail + Settle live under the
+  Neighbors household section ("helps make the app less about money"). Orders tab
+  retires too: outgoing orders → Plan; incoming → Activity.
+- **P4. Circles — DECIDED (the big one).** Named per-household visibility/grant
+  groups REPLACE per-connection grant editing entirely (no per-connection override;
+  a bespoke connection gets a circle of one). A circle IS a grant bundle (the six
+  directional grants). Seeded per household: Neighbors (shares only), Friends
+  (pantry+lending+shares), Family (everything). Accepting/requesting a connection
+  assigns it to one of YOUR circles; each side assigns independently (directionality
+  preserved); moveable anytime. Resource scoping rides circles: pantry visible-to
+  ALL/SELECT(circles)/PRIVATE replaces `Pantry.shared`; per-item override
+  INHERIT/ALL/SELECT/PRIVATE; per-member visibility for the contact layer.
+  Migration groups each household's existing connections by identical outgoing
+  grant tuples → one circle per distinct tuple (preset names when they match),
+  data-preserving.
+- **P5. Contact layer — DECIDED.** User.photoPath/phone/bio + "usual pickup notes";
+  Household.address. Cards (photo+name) on Neighbors sections and connection
+  requests; detail = pickup logistics first, then tel:/sms:/email, vCard download.
+  Visibility governed by circles from day one.
+- **P6. Minors & handoff-state — DEFERRED.** No minor distinction, no
+  waiting-on-an-adult handoff mechanics until post-MVP ("families probably don't
+  add kids until they can drive"). Member-hiding via circles covers the privacy need.
+- **P7. Receiving tweaks — DECIDED (pre-phase, Aaron's list).** Wizard ✕ closes and
+  keeps the draft (explicit Abandon elsewhere); every line dispositioned via the
+  Process sheet (gains unit-photo capture + shows the lot code) or Ignore — the
+  one-tap Confirm is removed.
+
+### Round plan (team pattern: server → UI ∥ e2e per round, both-engine gate each)
+
+- **Round A — receiving tweaks** (P7; small, ships first).
+- **Round B — circles** (P4): schema + data-preserving migration + authz swap
+  (grantsFrom resolves the granter's circle; choke-point API unchanged) +
+  circle management UI + pantry/item scoping controls.
+- **Round C — contact layer** (P5): profile/address schema + member cards/detail +
+  request-card + ready-order pickup address; member visibility via circles.
+- **Round D — toolbar + Activity**: global top bar (switcher chip · Receive
+  shortcut · bell), Activity screen with inline actions, bell popover preview.
+- **Round E — the IA flip** (P1/P2/P3, last, one commit): Neighbors/Plan/Home/More,
+  ledger fold-in, Plan additions (outgoing orders, my posts, in-calendar recipe
+  picker), can/hide affordance pass, specs/blueprints/e2e updated together.
