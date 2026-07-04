@@ -140,6 +140,61 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round 4 — meal planner + shopping (2026-07-04) — THE REWORK IS COMPLETE
+
+**Done, and with it all four Potluck rework rounds.** Planner + shopping (REWORK §H),
+third round under the team workflow (planner-server → planner-ui ∥ planner-e2e). Gate:
+fresh `down -v` stack, **217 passed + 4 intentional skips, playwright exit 0, both
+engines** (one known webkit first-goto flake, retry-passed). Migration
+`20260704130000_planner` (additive: PlanEntry/ShoppingItem/CategoryAssignment).
+
+- **Planner (H1).** `PlanEntry` — household-owned, local-date string + meal section
+  (breakfast/lunch/dinner/snack), ordered within (date, meal); kinds recipe / item /
+  note; per-instance `servingsOverride`. Recipe entries reference the household's OWN
+  book (foreign recipes fork first — fork-on-save composes). `onDelete: SetNull` +
+  a "(deleted recipe)" tombstone: a planned slot degrades, never vanishes. `/plan` is
+  a mobile-first vertical week (Mon start, prev/next, per-day add sheet with a
+  filterable recipe picker + servings stepper); no drag, by design.
+- **Shopping (H2).** ONE persistent list per household; `generate({from,to})` UPSERTS
+  into the (household, normalizedName, unit) natural key and **never deletes** — checks
+  and manual rows survive regeneration, de-planned rows persist, a second identical
+  generate is `{added: 0}` (idempotency via the natural key; generate's clientKey is
+  accepted for symmetry but unneeded — documented inline). Merging is PTE-conservative:
+  same name+unit sums numerically (scaled by servingsOverride/servings through the
+  ported pure scaler, unit-tested), cross-unit NEVER combines, unparseable amounts
+  join as text. Provenance in `sourceNote` ("Lasagna ×2 · Tacos"). Deletions are two
+  explicit confirm-gated actions (removeItem, clearChecked).
+- **Categories (H4).** `CategoryAssignment` — learned per-household on the explicit
+  setCategory action only (the IngredientLink pattern), applied at generation; the
+  store list groups by category. Scope cuts per H3/H4's escape hatch: staples list,
+  multiple named stores, menus/queue/leftovers/freezer — follow-ups, not shipped.
+- **Availability + add-to-order (H3, no new money paths).** Linked items resolve
+  availability (remaining − reserved, FIFO suggested lot) across own pantries by
+  productId and — the load-bearing interpretation — granted counterparties' SHARED
+  pantries by normalized product NAME (products are per-household; the name is the
+  only bridge; false positives are benign since ordering re-runs full authz).
+  Ungranted/unconnected pantries are never counted (the share-only edge proves it).
+  "Order from X" calls the EXISTING `order.addToCart` with the suggested lot —
+  planner/shopping post zero ledger entries and reuse every order-flow guard.
+  (`order.addToCart` takes no clientKey — absolute-quantity set, inherently
+  idempotent; noted when the UI brief wrongly asked for one.)
+- **Capabilities.** `editRecipes` gates all plan/shopping writes (A3a); reads
+  any-member. All four presets carry it, so no seeded capability negative exists —
+  recorded in the spec.
+- **e2e (`planner.spec.ts`,** 5 tests × 2 engines, run twice): week CRUD, generation
+  (scaling + conservative merge + category learning + never-silently-removed +
+  idempotent regenerate + clearChecked-only-checked), the availability matrix
+  (own/name-bridge/excluded + reservation drop + add-to-order landing a DRAFT line,
+  verified via addToCart's return — there is no order read query; /orders reads the
+  DB in server components), tombstone, UI smoke. UI browser-verified separately
+  (screenshots `.playwright-mcp/planner/`); a one-off unreproducible row-vanish
+  during the UI teammate's exploration was traced to a stray dialog auto-accept —
+  both client delete paths are confirm-gated and the server has no other delete
+  route, and the never-silently-removed e2e pins the invariant.
+- Home tab now carries three strips (shares/recipes/plan). **Open conversation for
+  Aaron: a "Kitchen" tab consolidation** vs. the strip stack — the 5-slot tab bar was
+  deliberately left untouched all rework.
+
 ## Round 3 — recipes (2026-07-04)
 
 **Done.** The PTE-shaped recipe book (REWORK §G), second round under the team workflow

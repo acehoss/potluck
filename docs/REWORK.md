@@ -300,10 +300,13 @@ Aaron answers so the reasoning trail survives.
 
 ## Round plan (J3, decided 2026-07-03)
 
-**Progress (2026-07-04): Round 1 slices 1–4 are BUILT, committed, and green on both
-engines** (overnight autonomous session). Slice 5 is the only Round-1 remainder. Full
-per-slice record — decisions, deviations, review findings, e2e — is in PLAN.md's Round-1
-section (newest first). Rounds 2–4 are unstarted.
+**Progress (2026-07-04): ALL FOUR ROUNDS ARE BUILT, committed, and green on both
+engines.** Round 1 (five slices) shipped in the overnight autonomous session; Rounds 2–4
+shipped the following day as coordinated teammate rounds (server → UI ∥ e2e per round).
+Full per-round records — decisions, deviations, gates — are in PLAN.md (newest first).
+Scope cuts taken in Round 4 per H3/H4's "if scope allows": menus/queue/leftovers/freezer,
+staples list, and multiple named stores are follow-ups, not shipped; categories with
+learned assignment shipped.
 
 **Round 1 — Network core** (the big migration; internally sliced, app works identically
 for the existing two households at every step):
@@ -326,20 +329,21 @@ for the existing two households at every step):
    `AddPantry` for founded households. Migration `20260703120000_household_invites`.
    **Bootstrap rework (D3) already landed in slice 1** (`scripts/bootstrap.ts` creates
    instance-settings + slug + username + Owner membership + first-user admin).
-5. ⬜ **Rebrand → Potluck** — manifest, brand mark, copy sweep (I1/I3), SPEC §2 principles
-   rewrite (I2), SPEC/blueprint updates for everything this doc changed. **NOT DONE — the
-   next task.** SPEC.md + docs/blueprint/ still describe the pre-rework model.
+5. ✅ **Rebrand → Potluck** — manifest, cookies, seams, copy sweep (I1/I3), SPEC rewrite
+   with the I2 principles, blueprint amendments. Deliberate non-renames (data safety):
+   /data/coop.db, the coop-data volume, the repo dir, @demo.coop seed emails; the jar
+   mark stayed.
 
-**Round 2 — Needs & surpluses** (F): posts (need/surplus, optional quantity, expiry,
+**Round 2 — Needs & surpluses ✅ (shipped 2026-07-04)** (F): posts (need/surplus, optional quantity, expiry,
 linked lots), claim flow (signal + confirm, quantity claims), reshare chain (anonymized,
 hop-limited, broker claims upstream), $0 transfers for tracked lots, feeds scoped by
 grants. Exercises the network end-to-end.
 
-**Round 3 — Recipes** (G): PTE-shaped book + editor, paste-to-parse, URL import,
+**Round 3 — Recipes ✅ (shipped 2026-07-04)** (G): PTE-shaped book + editor, paste-to-parse, URL import,
 per-household ingredient→product mapping, browse-live/fork-on-save sharing over the
 recipe grant.
 
-**Round 4 — Planner + shopping** (H): week/month planner (recipe/ingredient/note),
+**Round 4 — Planner + shopping ✅ (shipped 2026-07-04)** (H): week/month planner (recipe/ingredient/note),
 per-instance scaling, date-range list generation with PTE-conservative merging, learned
 categories, availability badges from own + connected pantries, add-to-order integration,
 store list. Menus/queue/staples/stores land here if scope allows, else immediately after.

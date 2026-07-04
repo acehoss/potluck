@@ -28,6 +28,9 @@ model Household {
   sharePosts   SharePost[]
   recipes      Recipe[]
   ingredientLinks IngredientLink[]
+  planEntries         PlanEntry[]
+  shoppingItems       ShoppingItem[]
+  categoryAssignments CategoryAssignment[]
 }
 
 model User {
@@ -663,6 +666,7 @@ model Recipe {
 
   household   Household          @relation(fields: [householdId], references: [id])
   ingredients RecipeIngredient[]
+  planEntries PlanEntry[]
 
   @@index([householdId])
 }
@@ -694,6 +698,77 @@ model IngredientLink {
 
   household Household @relation(fields: [householdId], references: [id])
   product   Product   @relation(fields: [productId], references: [id])
+
+  @@unique([householdId, normalizedName])
+}
+
+// ---- Round 4: meal planner + shopping (REWORK H) ----------------------------
+
+// The planner belongs to a household; editRecipes gates writes (A3a: "recipe
+// book, planner, shopping list writes"); reads are any-member. No money here —
+// the shopping list's add-to-order hands a suggested lot to the EXISTING order
+// flow (order.addToCart), never posting money itself. Scope cuts (J3):
+// menus / queue / leftovers / freezer are OUT; a plannable is a recipe, a bare
+// ingredient/product line, or a note.
+model PlanEntry {
+  id               String   @id @default(cuid())
+  clientKey        String?  @unique
+  householdId      String
+  createdById      String
+  date             String   // "YYYY-MM-DD" — a local calendar day, no times
+  meal             String   @default("dinner") // breakfast|lunch|dinner|snack (zod vocab)
+  position         Int      // order within (household, date, meal)
+  kind             String   // "recipe" | "item" | "note"
+  recipeId         String?  // kind=recipe: the household's OWN book (forks included —
+                            // foreign recipes are forked first, fork-on-save)
+  servingsOverride Int?     // per-instance scaling (kind=recipe), 1..999
+  text             String?  // kind=item: ingredient/product text; kind=note: the note
+  createdAt        DateTime @default(now())
+
+  household Household @relation(fields: [householdId], references: [id])
+  // SetNull (not Cascade): deleting a recipe must not delete its plan entries;
+  // the entry survives as a tombstone (week() renders a null-recipeId
+  // kind=recipe entry as "(deleted recipe)") so a planned day never silently
+  // loses a slot.
+  recipe    Recipe?   @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+
+  @@index([householdId, date])
+}
+
+// One persistent shopping list per household. Rows are NEVER silently removed
+// (H2, PTE's pantry lesson): generation UPSERTS, only explicit user actions
+// delete. unit is ''-normalized (not null) so the merge key is a real unique.
+model ShoppingItem {
+  id             String   @id @default(cuid())
+  clientKey      String?  @unique
+  householdId    String
+  title          String   // display text (original casing)
+  normalizedName String   // normalizeIngredientName(title) — merge/category/G2 key
+  unit           String   @default("") // merge partition: NO cross-unit math (H2)
+  amounts        String?  // merged summary: numeric same-unit amounts sum ("3 cups"),
+                          // unparseable ones join (" + a splash")
+  category       String?  // resolved from CategoryAssignment at write; editable
+  checked        Boolean  @default(false)
+  manual         Boolean  @default(false)
+  sourceNote     String?  // provenance: "Lasagna ×2 · Tacos" — which entries fed it
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id])
+
+  @@unique([householdId, normalizedName, unit])
+  @@index([householdId])
+}
+
+// Learned per-household category memory (same pattern as IngredientLink):
+// written only by the explicit setCategory action, applied at generation.
+model CategoryAssignment {
+  id             String @id @default(cuid())
+  householdId    String
+  normalizedName String
+  category       String
+
+  household Household @relation(fields: [householdId], references: [id])
 
   @@unique([householdId, normalizedName])
 }

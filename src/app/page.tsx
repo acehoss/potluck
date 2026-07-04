@@ -110,6 +110,16 @@ export default async function PantriesPage() {
           <span className="text-text">📖 Recipes</span>
           <span className="float-right text-text-muted">→</span>
         </Link>
+        {/* Meal planner (REWORK H). Like the strips above: a plain label, no
+            count — the plan and list live behind the client views. */}
+        <Link
+          data-testid="plan-strip"
+          href="/plan"
+          className="rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-medium shadow-sm"
+        >
+          <span className="text-text">🗓️ Meal plan</span>
+          <span className="float-right text-text-muted">→</span>
+        </Link>
         {others.length > 0 && (
           <div className="flex flex-col gap-2">
             {others.map((h) => {

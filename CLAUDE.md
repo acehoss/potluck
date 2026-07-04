@@ -4,15 +4,18 @@ Potluck (formerly "Private Coop"): a self-hosted web app (PWA) for mutual aid be
 
 ## Current state (2026-07-04)
 
-**v1 shipped (all seven slices + hardening + two iteration rounds), and the "Potluck"
-mutual-aid rework's Round 1 (network core) is COMPLETE** — an overnight autonomous
-session (2026-07-03→04) shipped all five slices: R1S1 network-core schema + data
-migration, R1S2 capability/grant authz + acting-household switcher + username login, R1S3
-connection management UI + shared flags, R1S4 onboarding + instance admin, R1S5 rebrand →
-Potluck + SPEC/blueprint rewrite. Each committed and green on both engines against the
-real container. **Next: Rounds 2–4 (needs & surpluses → recipes → planner/shopping)** —
-design locked in docs/REWORK.md, not built. See PLAN.md's Round-1 notes (newest first)
-for the full record.
+**v1 shipped, and the "Potluck" mutual-aid rework is COMPLETE — all four rounds.**
+Round 1 (network core, five slices) shipped in an overnight autonomous session
+(2026-07-03→04); Rounds 2–4 shipped 2026-07-04 as coordinated teammate rounds (a
+server / UI / e2e teammate per round, coordinator-integrated): **Round 2** needs &
+surpluses (SharePost/ShareClaim, $0 gift takes, anonymized hop-limited reshares),
+**Round 3** recipes (browse-live/fork-on-save over the `recipes` grant, learned
+IngredientLink map, paste-to-parse + SSRF-guarded URL import), **Round 4** planner +
+shopping (PlanEntry week planner, a persistent never-silently-removed ShoppingItem list
+with PTE-conservative merging, learned categories, cross-pantry availability badges
+feeding the existing order flow). Every round committed green on both engines against
+the real container; all migrations additive. See PLAN.md (newest first) for per-round
+records and docs/REWORK.md for the decision log.
 
 What the rework changed structurally (read PLAN.md + docs/REWORK.md before touching):
 - **Membership replaces `User.householdId`** — a user belongs to N households, each with
@@ -29,13 +32,25 @@ What the rework changed structurally (read PLAN.md + docs/REWORK.md before touch
 - Identity is username-or-email; demo seed grew to **three households** (Heise, In-Laws,
   Neighbors) with Teen/multi-membership fixtures — see `prisma/seed.ts`.
 
-Migrations added this rework: `20260703100000_network_core` (the big data-preserving one),
-`20260703120000_household_invites`. **Every money invariant and the append-only ledger
-survived untouched** — the migrations are additive/data-preserving and proven against the
-real accumulated dev volume as well as a fresh stack.
+Rounds 2–4 added (all connection-scoped, all rider on the same authz choke point):
+`SharePost`/`SharePostLot`/`ShareClaim` + `Take.shareClaimId` (a take with it set is a
+**$0 gift** — no ledger entry, the one sanctioned cross-household no-money take;
+blueprint-01 invariant 4 records it), `Recipe`/`RecipeIngredient`/`IngredientLink`,
+`PlanEntry`/`ShoppingItem`/`CategoryAssignment`. New image kinds `shares`/`recipes`.
+Routers `share`/`recipe`/`plan`/`shopping`; new pages `/shares` `/recipes` `/plan`
+`/shopping` ride home-tab strips (the 5-slot tab bar is untouched — a "Kitchen" tab
+consolidation is an open conversation).
 
-Do not start large autonomous workflows without an explicit ask. Rounds 2–4 are still
-"design locked, not built" — resume from PLAN.md + docs/REWORK.md.
+Migrations added this rework: `20260703100000_network_core` (the big data-preserving
+one), `20260703120000_household_invites`, `20260704090000_shares`,
+`20260704110000_recipes`, `20260704130000_planner`. **Every money invariant and the
+append-only ledger survived untouched** — shares/recipes/planner add zero money paths
+(gifts post $0 takes, shopping's add-to-order calls the existing `order.addToCart`).
+
+Do not start large autonomous workflows without an explicit ask. The rework's deferred
+list (notifications round, federation build-out, staples/stores/menus/queue,
+capability-hiding polish, connection-scoped image serving, per-invite grant presets)
+lives in REWORK.md's round plan + PLAN.md's round notes — resume from there.
 
 **SPEC.md was rewritten and the blueprints amended for Round 1 (R1S5)** — they describe
 the running app again. Rebrand notes: cookies are `potluck_session`/`potluck_household`
