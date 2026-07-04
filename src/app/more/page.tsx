@@ -4,6 +4,7 @@ import { activeConnectionsOf } from '@/server/authz';
 import { db } from '@/server/db';
 import { InviteMember } from '../invite-member';
 import { LogoutButton } from '../logout-button';
+import { ConnectionsCard } from './connections-card';
 import { HouseholdSwitcher } from './household-switcher';
 import { InstallCard, NotificationsCard } from './pwa-cards';
 
@@ -59,9 +60,17 @@ export default async function MorePage() {
               className="rounded-xl border border-border bg-surface-raised p-4 shadow-sm"
             >
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-lg font-semibold">{household.name}</h2>
+                <div className="min-w-0">
+                  <h2 className="truncate text-lg font-semibold">{household.name}</h2>
+                  {isYours && (
+                    <p className="text-xs text-text-muted">
+                      handle: <span className="font-mono">@{user.household.slug}</span> — share it
+                      so other households can connect
+                    </p>
+                  )}
+                </div>
                 {isYours && (
-                  <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
+                  <span className="shrink-0 rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
                     your household
                   </span>
                 )}
@@ -75,6 +84,8 @@ export default async function MorePage() {
             </section>
           );
         })}
+
+        <ConnectionsCard />
 
         <h2 className="mt-2 text-xs font-medium uppercase tracking-wide text-text-muted">
           This device

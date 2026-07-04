@@ -129,6 +129,8 @@ export const itemRouter = router({
         notes: z.string().trim().max(500).nullish(),
         feeCents: z.number().int().min(0).max(MAX_CENTS).optional(),
         photoPath: z.string().min(1).max(300).nullish(),
+        // Shared/private flag (REWORK B3) — household management, not lending.
+        shared: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -146,6 +148,10 @@ export const itemRouter = router({
         if (input.feeCents !== undefined && input.feeCents !== item.feeCents) {
           requireCapability(ctx.user, 'settleMoney');
         }
+        // Shared flags belong to household managers (A3a).
+        if (input.shared !== undefined && input.shared !== item.shared) {
+          requireCapability(ctx.user, 'manageHousehold');
+        }
         if (typeof input.photoPath === 'string') {
           await assertFreshItemPhoto(tx, input.photoPath);
         }
@@ -154,6 +160,7 @@ export const itemRouter = router({
           data: {
             name: input.name,
             feeCents: input.feeCents,
+            shared: input.shared,
             // undefined = leave untouched; null/'' = clear.
             notes: input.notes === undefined ? undefined : input.notes || null,
             photoPath: input.photoPath === undefined ? undefined : input.photoPath,

@@ -63,6 +63,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     photoPath: item.photoPath,
     notes: item.notes,
     feeCents: item.feeCents,
+    shared: item.shared,
     householdId: item.household.id,
     householdName: item.household.name,
     isYours: item.household.id === user.householdId,
@@ -85,5 +86,11 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     })),
   };
 
-  return <ItemDetailView item={detail} yourHouseholdId={user.householdId} />;
+  return (
+    <ItemDetailView
+      item={detail}
+      yourHouseholdId={user.householdId}
+      canManageShared={detail.isYours && user.activeMembership.manageHousehold}
+    />
+  );
 }

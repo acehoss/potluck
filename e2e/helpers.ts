@@ -17,6 +17,13 @@ const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 /** The canonical UI login: identifier is a username OR an email. */
 export async function login(page: Page, identifier: string) {
   await page.goto('/login');
+  // An already-authenticated page bounces off /login (server redirect) and
+  // the form never renders — sign out and come back, so tests can switch
+  // users on one page without per-test logout ceremony.
+  if (!/\/login$/.test(page.url())) {
+    await page.request.post('/api/trpc/auth.logout', { data: {} });
+    await page.goto('/login');
+  }
   await page.getByLabel('Username or email').fill(identifier);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();

@@ -28,11 +28,13 @@ async function openPantryOf(page: Page, household: string | 'own') {
       ? page.getByTestId('pantry-group').filter({ hasText: 'your household' })
       : page.getByTestId('pantry-group').filter({ hasText: household });
   await group.getByTestId('pantry-row').first().click();
-  // Wait for the pantry DETAIL (its always-present history link) rather than a
+  // Wait for the pantry DETAIL (its always-present back link) rather than a
   // product-row/empty check — on a freshly reseeded stack the home page's own
-  // "empty" pantry labels make that ambiguous.
+  // "empty" pantry labels make that ambiguous. (The history link is no longer
+  // the sentinel: it's owner-only since R1S3 — the history page is the
+  // household's books.)
   await expect(page).toHaveURL(/\/pantries\/[^/]+$/);
-  await expect(page.getByTestId('restock-history-link')).toBeVisible();
+  await expect(page.getByLabel('Back to pantries')).toBeVisible();
 }
 
 /** Receive one product into the signed-in user's own pantry; returns ids/cost. */
@@ -97,7 +99,7 @@ async function netCents(page: Page): Promise<number> {
 /** Availability (remaining − reserved) shown for a product on a pantry page. */
 async function availability(page: Page, pantryId: string, product: string): Promise<number> {
   await page.goto(`/pantries/${pantryId}`);
-  await expect(page.getByTestId('restock-history-link')).toBeVisible(); // page rendered
+  await expect(page.getByLabel('Back to pantries')).toBeVisible(); // page rendered
   const row = page.getByTestId('product-row').filter({ hasText: product });
   // A product with zero availability is filtered off the page entirely.
   if ((await row.count()) === 0) return 0;
@@ -114,6 +116,21 @@ async function orderOk(page: Page, proc: string, input: object) {
   const res = await orderPost(page, proc, input);
   expect(res.status(), `${proc} should succeed`).toBe(200);
   return (await res.json()).result.data;
+}
+
+/**
+ * Drop any leftover DRAFT cart this household has against the pantry. There
+ * is ONE cart per (household, pantry) shared across runs, so a run that died
+ * between addToCart and submit/cancel leaves stale lines that poison every
+ * later submit (a consumed old lot 409s the whole reservation). addToCart
+ * find-or-creates the cart, which hands us its id to cancel.
+ */
+async function freshCart(page: Page, pantryId: string, lotId: string) {
+  const probe = await orderPost(page, 'addToCart', { pantryId, lotId, quantity: 1 });
+  if (probe.ok()) {
+    const { orderId } = (await probe.json()).result.data as { orderId: string };
+    await orderPost(page, 'cancel', { orderId });
+  }
 }
 
 const clientKey = (label: string) => `${label}-${RUN}-key-000`.slice(0, 40);
@@ -139,6 +156,7 @@ test('order lifecycle: request reserves, picking locks, pickup posts the ledger'
     expect(await availability(aaron, pantryId, product)).toBe(5);
 
     // Build a DRAFT cart (2 units) — reserves nothing.
+    await freshCart(aaron, pantryId, lotId);
     const { orderId } = await orderOk(aaron, 'addToCart', { pantryId, lotId, quantity: 2 });
     expect(await availability(aaron, pantryId, product)).toBe(5);
 
@@ -190,6 +208,7 @@ test('canceling a requested order releases the reservation with no ledger moveme
   await login(aaron, 'aaron');
   try {
     const before = await netCents(aaron);
+    await freshCart(aaron, pantryId, lotId);
     const { orderId } = await orderOk(aaron, 'addToCart', { pantryId, lotId, quantity: 3 });
     await orderOk(aaron, 'submit', { orderId });
     expect(await availability(aaron, pantryId, product)).toBe(1); // 4 − 3 reserved
@@ -215,6 +234,7 @@ test('own-pantry order runs the full flow but posts no ledger entry', async ({ p
   const { pantryId, lotId } = await receiveLot(page, { product, units: 3, total: '6.00' });
 
   const before = await netCents(page);
+  await freshCart(page, pantryId, lotId);
   const { orderId } = await orderOk(page, 'addToCart', { pantryId, lotId, quantity: 2 });
   await orderOk(page, 'submit', { orderId });
   await orderOk(page, 'startPicking', { orderId });
@@ -244,6 +264,7 @@ test('server guards: zod, ownership, over-reserve, and wrong-state transitions',
     expect((await orderPost(aaron, 'addToCart', { pantryId, lotId, quantity: 0 })).status()).toBe(400);
 
     // Over-reserve: cart 5 of a 2-unit lot → submit fails 409, nothing reserved.
+    await freshCart(aaron, pantryId, lotId);
     const { orderId } = await orderOk(aaron, 'addToCart', { pantryId, lotId, quantity: 5 });
     expect((await orderPost(aaron, 'submit', { orderId })).status()).toBe(409);
     expect(await availability(aaron, pantryId, product)).toBe(2); // untouched
@@ -276,6 +297,7 @@ async function orderThroughPickup(
   lotId: string,
   quantity: number,
 ) {
+  await freshCart(requester, pantryId, lotId);
   const { orderId } = await orderOk(requester, 'addToCart', { pantryId, lotId, quantity });
   await orderOk(requester, 'submit', { orderId });
   await orderOk(owner, 'startPicking', { orderId });
@@ -293,13 +315,14 @@ test('the order flow works end to end through the UI (both households)', async (
 
   // Owner (In-Laws / Dana) stocks 4 units @ $8.00 → $2.00/u.
   await login(page, 'dana');
-  const { pantryId } = await receiveLot(page, { product, units: 4, total: '8.00' });
+  const { pantryId, lotId } = await receiveLot(page, { product, units: 4, total: '8.00' });
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
   await login(aaron, 'aaron');
   try {
     // Requester adds 2 to an order via the sheet, then opens the cart.
+    await freshCart(aaron, pantryId, lotId);
     await openPantryOf(aaron, 'In-Laws');
     await aaron.getByTestId('product-row').filter({ hasText: product }).getByRole('button').first().click();
     await expect(aaron.getByTestId('order-sheet')).toBeVisible();
@@ -447,6 +470,7 @@ test('open-order reservations block a below-reserved write-off/recount and a res
   await login(aaron, 'aaron');
   try {
     // Aaron reserves 3 of 5.
+    await freshCart(aaron, pantryId, lotId);
     const { orderId } = await orderOk(aaron, 'addToCart', { pantryId, lotId, quantity: 3 });
     await orderOk(aaron, 'submit', { orderId });
     expect(await availability(aaron, pantryId, product)).toBe(2);

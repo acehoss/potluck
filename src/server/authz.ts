@@ -46,6 +46,25 @@ export const GRANTS = ['pantry', 'lending', 'recipes', 'shareTo', 'shareFrom', '
 export type Grant = (typeof GRANTS)[number];
 export type GrantSet = Record<Grant, boolean>;
 
+function grantPreset(granted: readonly Grant[]): GrantSet {
+  return Object.fromEntries(GRANTS.map((g) => [g, granted.includes(g)])) as GrantSet;
+}
+
+/**
+ * Named "levels" over the grant flags (REWORK B2) — starting points in the
+ * connection UI, individually tunable afterwards, never a schema concept.
+ */
+export const GRANT_PRESETS = {
+  /** Neighbor — needs/surpluses flow both ways; nothing else. */
+  neighbor: grantPreset(['shareTo', 'shareFrom']),
+  /** Friend — plus pantry browsing/ordering, lending, recipes. */
+  friend: grantPreset(['pantry', 'lending', 'recipes', 'shareTo', 'shareFrom']),
+  /** Family — everything, including onward resharing. */
+  family: grantPreset([...GRANTS]),
+} as const;
+
+export type GrantPresetName = keyof typeof GRANT_PRESETS;
+
 type ConnectionRow = {
   householdAId: string;
   householdBId: string;

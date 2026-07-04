@@ -148,6 +148,8 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       yourHouseholdId={user.householdId}
       cart={cartInfo}
       cartQtyByLot={cartQtyByLot}
+      shared={pantry.shared}
+      canManageShared={isOwn && user.activeMembership.manageHousehold}
     />
   );
 }

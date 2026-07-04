@@ -20,12 +20,28 @@ export default async function PantriesPage() {
   const pantryGranters = new Set(
     connections.filter((c) => c.theyGrant.pantry).map((c) => c.counterpartyId),
   );
-  // All connected counterparties are fetched (a net strip shows regardless of
-  // grants — a balance is pair data); pantry GROUPS render only where the
-  // pantry grant reaches us.
+  // Net strips also cover SEVERED pairs with a nonzero balance (B6: the net
+  // survives forever and settlement still works — the strip is its only
+  // navigation entry point).
+  const net = await netByCounterparty(user.householdId);
+  const severedWithBalance = (
+    await db.connection.findMany({
+      where: {
+        status: 'SEVERED',
+        OR: [{ householdAId: user.householdId }, { householdBId: user.householdId }],
+      },
+      select: { householdAId: true, householdBId: true },
+    })
+  )
+    .map((e) => (e.householdAId === user.householdId ? e.householdBId : e.householdAId))
+    .filter((id) => (net.get(id) ?? 0) !== 0);
+  // All strip-worthy counterparties are fetched (a balance is pair data,
+  // grants or not); pantry GROUPS render only where the pantry grant reaches
+  // us.
+  const counterpartyIds = [...connections.map((c) => c.counterpartyId), ...severedWithBalance];
   const households = (
     await db.household.findMany({
-      where: { id: { in: [user.householdId, ...connections.map((c) => c.counterpartyId)] } },
+      where: { id: { in: [user.householdId, ...counterpartyIds] } },
       orderBy: { createdAt: 'asc' },
       include: { pantries: { orderBy: { createdAt: 'asc' } } },
     })
@@ -53,9 +69,7 @@ export default async function PantriesPage() {
     unitsByPantry.set(pantryId, (unitsByPantry.get(pantryId) ?? 0) + (r._sum.remainingCount ?? 0));
   }
 
-  // The net number is the product (SPEC §2): one strip per connected
-  // counterparty.
-  const net = await netByCounterparty(user.householdId);
+  // The net number is the product (SPEC §2): one strip per counterparty.
   const others = households.filter((h) => h.id !== user.householdId);
   const pantryGroups = households.filter(
     (h) => h.id === user.householdId || pantryGranters.has(h.id),

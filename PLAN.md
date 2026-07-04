@@ -140,6 +140,58 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+### Round 1 slice 3 — connection management UI + shared flags
+
+**2026-07-03 — done.** Connections are now self-service: request/accept/sever by
+household handle with directional grant editing (B1/B2/B6), plus the B3 shared/private
+flags on pantries and items. Gate: fresh `down -v` stack, **167 passed + 4 intentional
+skips, both engines, playwright exit 0** (one known-pattern webkit first-goto flake,
+retry-passed), after a real-browser drive of the connections card
+(`.playwright-mcp/network-core/s3-connections-card.png`).
+
+- **`connection` router.** `list` (any-status edges normalized to
+  weGrant/theyGrant) · `request` (by slug — B5's exact-handle rule, no discovery;
+  PENDING edge carrying OUR grant set; SEVERED pairs re-requestable with both sets
+  reset; self/unknown/duplicate → 400/404/409) · `respond` (addressee-only;
+  accept sets OUR grants + ACTIVE; decline deletes the row) · `setGrants`
+  (unilateral, PENDING or ACTIVE) · `sever` (PENDING = withdraw/delete; ACTIVE →
+  SEVERED **with B6 fallout in the same transaction: REQUESTED/PICKING/READY orders
+  across the pair auto-cancel and release their reservations**; loans run to return;
+  ledger/net survive). All manageConnections-gated.
+- **Grant presets** (B2 "levels", `GRANT_PRESETS` in authz.ts): Neighbor =
+  shareTo/shareFrom · Friend = + pantry/lending/recipes · Family = everything +
+  reshare.
+- **UI.** /more gains the Connections card (status pills, incoming
+  accept-with-preset/decline, expandable my-side grant editor with preset chips,
+  sever/withdraw with confirm) and the household card now shows YOUR handle
+  (`@heise — share it so other households can connect`). Pantry header gets a
+  shared/private chip (owner + manageHousehold; History link is now owner-only —
+  the page has been owner-only since S2); the item edit sheet gets a
+  "Shared with connections" checkbox (flag changes manageHousehold-gated on top of
+  lendBorrow; `pantry.setShared` is a new router). Severed pairs with a nonzero net
+  keep a net strip on `/` (their only /ledger entry point — closes an S2 review
+  note).
+- **e2e (`connections.spec.ts`,** 4 tests × 2 engines): the full lifecycle runs
+  against an EPHEMERAL fourth household through the slice6 container seam (the
+  seeded 3-household topology is load-bearing for other specs; household creation
+  gets a product surface in R1S4) — request by handle → directional accept (Neighbor
+  back = no pantry visibility despite ACTIVE edge) → unilateral grant edit flips
+  Fern's scope live → sever auto-cancels her REQUESTED order, releases the
+  reservation, blocks new ordering (404), keeps the balance settleable, and allows
+  re-request; private-pantry and private-item round-trips (visible → hidden → 404 →
+  restored) with capability 403s (Teen) and non-member 404s.
+- **Two suite-health fixes this round:** (a) `openPantryOf`'s render sentinel was
+  the History link — now owner-only, so foreign-pantry opens hung; sentinel is the
+  always-present back link. The failed-mid-flow runs this caused left poisoned DRAFT
+  carts (ONE cart per household+pantry, shared across runs) whose stale lines 409'd
+  every later submit — orders.spec now starts every cart flow with a `freshCart`
+  cancel, so a dead run can't poison the next. (b) **Gate invocations were piping
+  playwright through `tail`, masking its exit code** — one "green" run actually had
+  6 chromium failures. Gates now echo `PLAYWRIGHT_EXIT` explicitly; both fixes
+  re-proven on the fresh stack above.
+- Login helper now signs out and returns when an authenticated page bounces off
+  /login (the third test to trip that; fixed once in helpers.ts).
+
 ### Round 1 slice 2 — authz/capability layer, acting household, username login
 
 **2026-07-03 — done.** The network core now BEHAVES like a network: every mutation and
