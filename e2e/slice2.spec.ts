@@ -182,11 +182,23 @@ test('a draft survives refresh, resumes from the pantry, and can be abandoned', 
   await banner.click();
   await expect(page.getByRole('heading', { name: 'Receipt photos' })).toBeVisible();
 
-  // ✕ abandons after confirm and deletes the draft. Assert on THIS draft's
-  // retailer, not banner count — a crashed earlier run can leave an unrelated
-  // draft behind, and the banner shows whichever is newest.
+  // ✕ now just CLOSES — no confirm, no deletion. Back on the pantry the draft
+  // is still there, so its resume banner survives (Round A: the ✕ stopped
+  // abandoning; explicit Abandon is a separate button).
+  await page.getByLabel('Close (draft is saved)').click();
+  await expect(page).toHaveURL(pantryUrl);
+  await expect(
+    page.getByTestId('resume-draft').filter({ hasText: `Resume-${P}-${RUN}` }),
+  ).toBeVisible();
+
+  // Resume, then abandon for real via the explicit button — confirm, then the
+  // draft (and its banner) is gone. Assert on THIS draft's retailer, not banner
+  // count — a crashed earlier run can leave an unrelated draft behind, and the
+  // banner shows whichever is newest.
+  await page.getByTestId('resume-draft').filter({ hasText: `Resume-${P}-${RUN}` }).click();
+  await expect(page.getByRole('heading', { name: 'Receipt photos' })).toBeVisible();
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page).toHaveURL(pantryUrl);
   await expect(
     page.getByTestId('resume-draft').filter({ hasText: `Resume-${P}-${RUN}` }),
@@ -323,9 +335,9 @@ test('finalize and abandon are gated to the pantry-owner household', async ({ pa
   expect(abandon.status()).toBe(404);
   await danaContext.close();
 
-  // The creator can still abandon their own draft.
+  // The creator can still abandon their own draft (via the explicit button).
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page).toHaveURL(pantryUrl);
 });
 

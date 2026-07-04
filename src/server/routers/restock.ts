@@ -108,6 +108,11 @@ const lineSchema = z.object({
   receivedCount: z.number().int().min(0).max(10_000),
   lineTotalCents: z.number().int().min(0).max(MAX_CENTS),
   bestBy: dateOnly.nullable(),
+  // Optional unit photo captured in the line sheet (Round A): a freshly
+  // uploaded 'units' path, validated exactly like setUnitPhoto and applied to
+  // the created/updated lot in the same transaction. Absent = leave the lot's
+  // existing photo untouched.
+  unitPhotoPath: z.string().min(1).max(300).optional(),
 });
 
 /**
@@ -647,7 +652,7 @@ export const restockRouter = router({
     // One transaction: the DRAFT check holds through the write, a new Product
     // can't be orphaned by a failing lot write, and position assignment is
     // race-free.
-    const lotId = await dbTransaction(async (tx) => {
+    const { lotId, previousPhotoPath } = await dbTransaction(async (tx) => {
       const restock = await getDraftOrThrow(tx, ctx.user, input.restockId);
 
       // Canonical stored form (zod guarantees 8–14 digits, so this never
@@ -685,8 +690,19 @@ export const restockRouter = router({
         }
       }
 
+      // Optional unit photo captured in the line sheet (Round A): a fresh
+      // 'units' upload, validated exactly like setUnitPhoto (right kind,
+      // present on disk, referenced by no other row). Excluded lines carry no
+      // photo. Applied to the lot below in this same transaction.
+      let unitPhotoPath: string | undefined;
+      if (!excluded && input.unitPhotoPath) {
+        await assertFreshUpload(tx, 'units', input.unitPhotoPath);
+        unitPhotoPath = input.unitPhotoPath;
+      }
+
       // An excluded line carries only its total (weight for tax/fee split) and
-      // its taxable flag — no product, no units, no inventory.
+      // its taxable flag — no product, no units, no inventory. The photo is set
+      // only when a fresh one was captured — an unchanged edit leaves it be.
       const data = {
         productId,
         purchasedCount: excluded ? 0 : input.purchasedCount,
@@ -696,13 +712,16 @@ export const restockRouter = router({
         excluded,
         receiptText: input.receiptText || null,
         bestBy: excluded ? null : input.bestBy,
+        ...(unitPhotoPath ? { unitPhotoPath } : {}),
       };
 
       if (input.lotId) {
         const lot = await tx.lot.findUnique({ where: { id: input.lotId } });
         if (!lot || lot.restockId !== input.restockId) throw new TRPCError({ code: 'NOT_FOUND' });
         await tx.lot.update({ where: { id: input.lotId }, data });
-        return input.lotId;
+        // A replaced photo's old file is unlinked after commit (below), never
+        // before — same DB-first ordering as setUnitPhoto.
+        return { lotId: input.lotId, previousPhotoPath: unitPhotoPath ? lot.unitPhotoPath : null };
       }
 
       const last = await tx.lot.findFirst({
@@ -712,8 +731,11 @@ export const restockRouter = router({
       const lot = await tx.lot.create({
         data: { ...data, restockId: input.restockId, position: (last?.position ?? 0) + 1 },
       });
-      return lot.id;
+      return { lotId: lot.id, previousPhotoPath: null };
     });
+    // Drop the replaced file only after the DB commit, and only if nothing
+    // else references it.
+    if (previousPhotoPath) await unlinkIfUnreferenced(previousPhotoPath);
     return { lotId };
   }),
 

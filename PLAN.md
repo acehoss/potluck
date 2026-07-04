@@ -140,6 +140,28 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 2 Round A — receiving tweaks (2026-07-04)
+
+**Done** (Aaron's list, REWORK Phase-2 §P7). The wizard ✕ now CLOSES and keeps the
+draft (aria "Close (draft is saved)"; the resume banner re-surfaces it); abandoning is
+an explicit text-danger "Abandon restock…" button on every draft step (confirm +
+deleteDraft unchanged). The Process sheet is now the one line-dispositioning surface:
+it shows the restock's lot code in its header (the modal covers the screen behind it —
+the user labels jars from the sheet), gains inline unit-photo capture (same
+downscale/'units' pipeline; `saveLine` takes an optional fresh-upload-validated
+`unitPhotoPath` applied to the lot in the same transaction; step-4 and the lot ⋯ menu
+keep `setUnitPhoto`), and the **one-tap Confirm on matched proposals is gone** — every
+line is Processed or Ignored, working the haul line by line.
+
+Gate note (deviation, recorded honestly): built and verified in an ISOLATED WORKTREE
+at HEAD + these four files because the shared working tree held the circles round's
+in-progress non-compiling refactor — receiving-scope e2e (slice2/slice5/tweaks/orders)
+green on BOTH engines from a fresh stack (61 passed / 3 expected skips, exit 0) plus a
+hand-driven browser demo (screenshots `.playwright-mcp/round-a/`). The full-suite
+proof rides the Round-B integration gate. e2e updates: slice5's landProposal always
+goes through Process; "no proposal ever offers one-tap Confirm"; new sheet-photo test;
+slice2's abandon flow moved to the explicit button + a ✕-persists-then-resume check.
+
 ## Round 4 — meal planner + shopping (2026-07-04) — THE REWORK IS COMPLETE
 
 **Done, and with it all four Potluck rework rounds.** Planner + shopping (REWORK §H),

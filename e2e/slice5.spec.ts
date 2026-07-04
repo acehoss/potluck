@@ -11,10 +11,12 @@ import { login } from './helpers';
  * selected file before the canvas downscale, so the lookup is deterministic
  * on both engines.
  *
- * Covered: extract → 1-tap confirm per line → lines in draft → finalize;
- * proposal persistence across step-back and reload (blueprint 02's survival
- * contract); re-extract deduping already-confirmed lines; proposal→product
- * match suggestions; edit-prefilled proposal with hold-back; dismiss
+ * Covered: extract → Process/Ignore each proposal → lines in draft → finalize
+ * (Round A: the one-tap Confirm is gone — every proposal is dispositioned via
+ * the Process sheet or Ignore); proposal persistence across step-back and
+ * reload (blueprint 02's survival contract); re-extract deduping
+ * already-confirmed lines; proposal→product match suggestions;
+ * edit-prefilled proposal with hold-back; dismiss
  * (persisted); hostile model output sanitized (edge fixture); zero-line
  * extraction; unknown-sha simulated failure + retry + dismissible notice +
  * untouched manual path; off-mode affordance hiding; authz and rate-limit
@@ -137,22 +139,24 @@ const lineRow = (page: Page, text: string) =>
 
 /**
  * Resolve a proposed line into a real draft line, deterministically on any
- * stack state. A proposal that MATCHED an existing product offers one-tap
- * Confirm; an UNMATCHED one has no Confirm and must be Processed — the receipt
- * description is never auto-adopted as a product name, so we pick/create a real
- * product. Waits for the async match to settle before deciding.
+ * stack state. Round A: there is no one-tap Confirm — EVERY proposal is
+ * dispositioned through the Process sheet. A matched proposal opens with the
+ * product already picked (Save straight through); an unmatched one opens with
+ * an empty picker, so we pick/create a real product — the receipt description
+ * is never auto-adopted as a product name. Waits for the async match to settle
+ * so the sheet's prefill is deterministic.
  */
 async function landProposal(page: Page, name: string) {
   const row = proposedRow(page, name);
   await expect(row.getByTestId('proposed-match')).not.toHaveText('matching…');
-  if (await row.getByTestId('proposed-confirm').count()) {
-    await row.getByTestId('proposed-confirm').click();
-  } else {
-    await row.getByTestId('proposed-edit').click(); // relabeled "Process"
-    await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+  await row.getByTestId('proposed-edit').click(); // "Process"
+  await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+  // Matched proposals prefill the product (no search field); unmatched ones
+  // need a product chosen before Save.
+  if (await page.getByTestId('product-search').count()) {
     await pickOrCreateProduct(page, name);
-    await page.getByTestId('save-line').click();
   }
+  await page.getByTestId('save-line').click();
   await expect(lineRow(page, name)).toBeVisible();
 }
 
@@ -179,10 +183,9 @@ test('extract → land/process/ignore proposals → lines land in the draft → 
   await expect(page.getByRole('heading', { name: 'Review lines' })).toBeVisible();
   await expect(page.getByTestId('proposed-row')).toHaveCount(12);
 
-  // Land a proposal as a real draft line (blueprint 02's tap budget): a matched
-  // line is one-tap Confirm, an unmatched one is Processed (pick/create a
-  // product with a real name) — landProposal does whichever the stack state
-  // calls for.
+  // Land a proposal as a real draft line: Process opens the sheet prefilled
+  // (matched product already picked, or an empty picker to name an unmatched
+  // one) and Save lands it — landProposal handles whichever the stack calls for.
   await landProposal(page, MARINARA);
   await expect(proposedRow(page, MARINARA)).toHaveCount(0);
   // D1 preview on the landed line: $8.99 / 3 units → $3.00/u.
@@ -238,7 +241,7 @@ test('extract → land/process/ignore proposals → lines land in the draft → 
   expect(await page.getByTestId('restock-code').textContent()).toMatch(/^\d{6}-\d{2,}$/);
 });
 
-test('an unmatched proposal has no one-tap Confirm — Process forces a real product name', async ({ page }, testInfo) => {
+test('no proposal offers one-tap Confirm; Process forces a real product name for an unmatched line', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
   await login(page, 'aaron');
   await openOwnPantry(page);
@@ -247,13 +250,14 @@ test('an unmatched proposal has no one-tap Confirm — Process forces a real pro
   await page.getByTestId('extract').click();
   await expect(page.getByTestId('proposed-row')).toHaveCount(12);
 
+  // Round A: the one-tap Confirm is gone entirely — NO proposal row, matched
+  // or not, carries a Confirm affordance. Every line goes through Process/Ignore.
+  await expect(page.getByTestId('proposed-confirm')).toHaveCount(0);
+
   // TORTILLA CHIPS is never turned into a product anywhere in this suite, so
   // its proposal is deterministically UNMATCHED on every engine and re-run.
   const row = proposedRow(page, CHIPS);
   await expect(row.getByTestId('proposed-match')).toContainText('no match');
-  // No one-tap path for an unmatched line — it can't be dropped into a product
-  // named after the (often unusable) receipt text.
-  await expect(row.getByTestId('proposed-confirm')).toHaveCount(0);
 
   // Process opens the sheet with the raw receipt text for reference but an
   // EMPTY product picker — the user must decide.
@@ -277,7 +281,7 @@ test('an unmatched proposal has no one-tap Confirm — Process forces a real pro
   await expect(proposedRow(page, CHIPS)).toHaveCount(0);
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
@@ -299,7 +303,12 @@ test('proposals match existing products; re-extract never re-proposes confirmed 
   // The suggestion runs through the existing product.search (word match).
   const marinara = proposedRow(page, MARINARA);
   await expect(marinara.getByTestId('proposed-match')).toContainText(`matches ${MARINARA}`);
-  await marinara.getByTestId('proposed-confirm').click();
+  // Process opens the sheet with the matched product already prefilled (no
+  // picker); Save lands the receipt's $8.99 lot alongside the pre-created one.
+  await marinara.getByTestId('proposed-edit').click();
+  await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+  await expect(page.getByTestId('product-search')).toHaveCount(0);
+  await page.getByTestId('save-line').click();
   await expect(
     page.getByTestId('line-row').filter({ hasText: MARINARA }).filter({ hasText: '$8.99' }),
   ).toBeVisible();
@@ -317,7 +326,7 @@ test('proposals match existing products; re-extract never re-proposes confirmed 
 
   // Abandon: this draft only exists to prove the match/dedupe paths.
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
@@ -358,7 +367,7 @@ test('hostile model output is sanitized: clamps, 200-char cap, discounts dropped
   await expect(proposedRow(page, 'ZERO COUNT ITEM')).toHaveCount(0);
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
@@ -380,7 +389,7 @@ test('zero-line extraction shows a dismissible notice', async ({ page }, testInf
   await expect(notice).toHaveCount(0);
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
@@ -459,7 +468,7 @@ test('extract affordance hides when the server reports extraction disabled', asy
   await expect(page.getByTestId('extract')).toHaveCount(0);
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
@@ -487,7 +496,7 @@ test('off mode hides the extraction affordance', async ({ page }, testInfo) => {
   }
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 
   test.skip(enabled, 'stack is not running EXTRACTION_MODE=off — run via `npm run e2e:off`');
@@ -549,41 +558,88 @@ test('extraction is rate-limited per user', async ({ page }, testInfo) => {
   expect(statuses.every((s) => s === 200 || s === 429)).toBe(true);
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });
 
-test('a matched proposal offers one-tap Confirm; the saved flash shows the line already below', async ({ page }, testInfo) => {
+test('a matched proposal shows no Confirm; Process opens prefilled with the matched product and shows the lot code', async ({ page }, testInfo) => {
   const P = testInfo.project.name;
   await login(page, 'aaron');
   await openOwnPantry(page);
-  await startRestock(page, { retailer: `MatchFlash-${P}-${RUN}` });
+  await startRestock(page, { retailer: `Matched-${P}-${RUN}` });
   await uploadReceiptAndGoToLines(page, 'e2e/fixtures/receipt-costco.jpg');
 
   // Pre-create the product so the CHICKEN proposal deterministically MATCHES on
   // every engine/run (a $1.00 line, unlike the receipt's $4.99, so the lot
-  // dedupe can't hide the proposal). Only a matched line gets one-tap Confirm;
-  // an unmatched line's absence of Confirm is proven by the gating test above.
+  // dedupe can't hide the proposal).
   await addLineWithProduct(page, CHICKEN, '1.00');
 
   await page.getByTestId('extract').click();
   const row = proposedRow(page, CHICKEN);
   await expect(row.getByTestId('proposed-match')).toContainText('matches', { timeout: 10_000 });
-  await expect(row.getByTestId('proposed-confirm')).toBeVisible();
+  // Round A: even a matched proposal carries NO one-tap Confirm — Process is the
+  // only disposition besides Ignore.
+  await expect(row.getByTestId('proposed-confirm')).toHaveCount(0);
 
-  // Confirm: the "✓ Added — now in the lines below" flash must be TRUE while it
-  // displays — the lots list below already contains the confirmed line (the
-  // resolve + refetch fire immediately; only the flash is on a timer). A CHICKEN
-  // line already exists from the pre-create, so match .first().
-  await row.getByTestId('proposed-confirm').click();
-  const flash = page.getByTestId('proposed-row-saved').filter({ hasText: CHICKEN });
-  await expect(flash).toBeVisible();
-  await expect(lineRow(page, CHICKEN).first()).toBeVisible();
-  // …and the flash collapses on its own shortly after.
-  await expect(flash).toHaveCount(0);
-  await expect(lineRow(page, CHICKEN).first()).toBeVisible();
+  // Process opens the sheet prefilled with the matched product (no picker), and
+  // the sheet shows the restock's lot code so the user can label the jar without
+  // the sheet covering the code behind it.
+  await row.getByTestId('proposed-edit').click();
+  await expect(page.getByRole('heading', { name: 'Process line' })).toBeVisible();
+  await expect(page.getByTestId('product-search')).toHaveCount(0);
+  await expect(page.getByTestId('line-lot-code')).toHaveText(/^\d{6}-\d{2,}$/);
+
+  // Save lands the receipt's $4.99 CHICKEN lot alongside the pre-created one,
+  // and the proposal is consumed.
+  await page.getByTestId('save-line').click();
+  await expect(
+    page.getByTestId('line-row').filter({ hasText: CHICKEN }).filter({ hasText: '$4.99' }),
+  ).toBeVisible();
+  await expect(proposedRow(page, CHICKEN)).toHaveCount(0);
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByLabel('Abandon restock').click();
+  await page.getByTestId('abandon-restock').click();
+  await expect(page.getByTestId('receive-fab')).toBeVisible();
+});
+
+test('the line sheet captures a unit photo that lands on the lot and shows already-set at step 4', async ({ page }, testInfo) => {
+  const P = testInfo.project.name;
+  await login(page, 'aaron');
+  await openOwnPantry(page);
+  await startRestock(page, { retailer: `SheetPhoto-${P}-${RUN}` });
+  await page.getByRole('button', { name: 'Skip photos' }).click();
+  await expect(page.getByRole('heading', { name: 'Review lines' })).toBeVisible();
+
+  // A single manual line, so there's exactly one lot to disambiguate at step 4.
+  const product = uniq('Sheet Photo Jam', P);
+  await page.getByTestId('add-line').click();
+  await page.getByTestId('product-search').fill(product);
+  await page.getByTestId('create-product').click();
+  await page.getByTestId('line-total').fill('5.00');
+
+  // The lot code is shown in the sheet header (label-the-jar affordance).
+  await expect(page.getByTestId('line-lot-code')).toHaveText(/^\d{6}-\d{2,}$/);
+
+  // Capture a unit photo right here in the sheet — a thumb appears and the
+  // button flips to Retake once the upload lands.
+  const photo = page.getByTestId('line-unit-photo');
+  await expect(photo.getByRole('button', { name: 'Photo' })).toBeVisible();
+  await page.setInputFiles('[data-testid=line-unit-photo-input]', 'e2e/fixtures/unit-tomatoes.jpg');
+  await expect(photo.locator('img')).toBeVisible();
+  await expect(photo.getByRole('button', { name: 'Retake' })).toBeVisible();
+  await page.getByTestId('save-line').click();
+  await expect(lineRow(page, product)).toBeVisible();
+
+  // The photo landed on the lot atomically with the save: step 4 shows the
+  // lot's card already carrying an image, with a Retake (not a first-time Photo)
+  // control.
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Unit photos' })).toBeVisible();
+  const card = page.getByTestId('unit-photo-card').filter({ hasText: product });
+  await expect(card.locator('img')).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Retake' })).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByTestId('abandon-restock').click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
 });

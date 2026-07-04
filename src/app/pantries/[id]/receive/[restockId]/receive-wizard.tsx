@@ -88,14 +88,13 @@ export function ReceiveWizard({ pantryId, restockId }: { pantryId: string; resto
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 p-4 sm:p-6">
       <header className="flex items-center justify-between gap-3">
         {step < 6 ? (
+          // ✕ just leaves — the draft (and its photos) persist, and the
+          // pantry's resume banner brings the user back. Destroying the draft
+          // is the explicit "Abandon restock…" button at the bottom.
           <button
             type="button"
-            aria-label="Abandon restock"
-            onClick={() => {
-              if (window.confirm('Abandon this restock? The draft and its photos are deleted.')) {
-                deleteDraft.mutate({ restockId });
-              }
-            }}
+            aria-label="Close (draft is saved)"
+            onClick={() => router.push(`/pantries/${pantryId}`)}
             className="text-lg text-text-muted"
           >
             ✕
@@ -181,6 +180,24 @@ export function ReceiveWizard({ pantryId, restockId }: { pantryId: string; resto
         />
       )}
       {step === 6 && <DoneStep restock={restock} pantryId={pantryId} />}
+
+      {step < 6 && restock.status === 'DRAFT' && (
+        // The explicit, clearly-destructive path (the ✕ only closes now):
+        // confirm, then delete the draft + its photos. Errors surface via
+        // abandonError above.
+        <button
+          type="button"
+          data-testid="abandon-restock"
+          onClick={() => {
+            if (window.confirm('Abandon this restock? The draft and its photos are deleted.')) {
+              deleteDraft.mutate({ restockId });
+            }
+          }}
+          className="min-h-11 self-center px-4 py-2.5 text-sm font-medium text-danger hover:underline"
+        >
+          Abandon restock…
+        </button>
+      )}
 
       {editOpen && (
         <EditDetailsSheet
@@ -689,21 +706,15 @@ function pendingProposals(restock: Restock): ProposedLine[] {
 }
 
 function ProposalRow({
-  restockId,
   proposal,
   onConsumed,
-  onSaved,
   onEdit,
 }: {
-  restockId: string;
   proposal: ProposedLine;
   onConsumed: () => void;
-  onSaved: () => void;
   onEdit: (suggested: { id: string; name: string } | null) => void;
 }) {
   const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
 
   const suggestionQuery = suggestionQueryFor(proposal.description);
   const search = useQuery(
@@ -714,43 +725,9 @@ function ProposalRow({
   );
   const suggested = search.data?.[0] ?? null;
   // The match suggestion resolves asynchronously AFTER the row renders; until
-  // it lands the row must say "matching…" (with Confirm held disabled below),
-  // never "new product" — or a fast Confirm creates a duplicate product.
+  // it lands the row says "matching…", never "no match" — Process opens
+  // prefilled with whatever the match resolved to (or blank if none).
   const matching = suggestionQuery.length > 0 && search.isPending;
-
-  const saveLine = useMutation(
-    trpc.restock.saveLine.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries(trpc.product.search.pathFilter());
-        // The parent resolves the proposal + refetches IMMEDIATELY (so the
-        // lines list and the reconcile totals already contain the new lot
-        // while the "✓ Added" flash shows) and keeps the flash row alive for
-        // a beat — otherwise the confirmed line "teleports" to the lots list
-        // below with no nearby feedback.
-        onSaved();
-      },
-      onError: (e) => setError(e.message),
-    }),
-  );
-
-  // The 1-tap confirm (blueprint 02): the normal saveLine flow, prefilled with
-  // the MATCHED product. Offered only when a match exists (the button is hidden
-  // otherwise), so an unmatched line can never be one-tapped into a product
-  // named after the raw receipt text — it must go through Process. All units
-  // received by default; hold-backs via Process.
-  function confirm() {
-    if (!suggested) return;
-    saveLine.mutate({
-      restockId,
-      productId: suggested.id,
-      purchasedCount: proposal.unitCount,
-      receivedCount: proposal.unitCount,
-      lineTotalCents: proposal.lineTotalCents,
-      taxable: proposal.taxable ?? false,
-      receiptText: proposal.receiptText ?? proposal.description,
-      bestBy: null,
-    });
-  }
 
   const unitCost = unitCostCents(proposal.lineTotalCents, proposal.unitCount);
   const smallBtn =
@@ -793,26 +770,11 @@ function ProposalRow({
           )}
         </p>
       </div>
-      {error && (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
-      )}
+      {/* Every proposal is dispositioned line by line: Process opens the sheet
+          prefilled (with the matched product, if any) so the user labels,
+          photographs and confirms the count before Save lands it — or Ignore.
+          There is no one-tap Confirm. */}
       <div className="flex gap-2">
-        {/* One-tap Confirm appears ONLY once the line has matched an existing
-            product; an unmatched line (or one still matching) must be Processed
-            so the user picks/creates a product with a real name. */}
-        {suggested && (
-          <button
-            type="button"
-            data-testid="proposed-confirm"
-            onClick={confirm}
-            disabled={saveLine.isPending}
-            className={`${smallBtn} flex-1 bg-accent text-accent-contrast hover:bg-accent-strong`}
-          >
-            {saveLine.isPending ? 'Saving…' : 'Confirm'}
-          </button>
-        )}
         <button
           type="button"
           data-testid="proposed-edit"
@@ -901,31 +863,13 @@ function LinesStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canExtract, restock.extractedAt]);
 
-  // Confirm/dismiss/edit-save all resolve the line server-side so it never
-  // comes back; refetch on settle updates both the lot list and proposals.
+  // Process-save/dismiss both resolve the line server-side so it never comes
+  // back; refetch on settle updates both the lot list and proposals. A saved
+  // Process lands the lot in the lines list below (via the sheet's onClose).
   const resolve = useMutation(
     trpc.restock.resolveProposal.mutationOptions({ onSettled: refetch }),
   );
   const consumeProposal = (index: number) => resolve.mutate({ restockId: restock.id, index });
-
-  // Confirmed proposals collapse to a "✓ Added" flash for a beat so the row
-  // doesn't teleport to the lots list with no nearby feedback. The resolve +
-  // refetch fire IMMEDIATELY (the lot is really "in the lines below" and the
-  // reconcile math is current while the flash shows); only this purely visual
-  // row lives on the timer. A tab-kill mid-flash is covered by the lot dedupe.
-  const [savedFlashes, setSavedFlashes] = useState<ProposedLine[]>([]);
-  function onProposalSaved(proposal: ProposedLine) {
-    consumeProposal(proposal.index);
-    setSavedFlashes((f) => [...f, proposal]);
-    setTimeout(
-      () => setSavedFlashes((f) => f.filter((p) => p.index !== proposal.index)),
-      900,
-    );
-  }
-  // Until the resolve's refetch lands, the confirmed line is still in the
-  // derived pending set — the flash replaces the row, never joins it.
-  const flashing = new Set(savedFlashes.map((p) => p.index));
-  const visibleProposals = proposals.filter((p) => !flashing.has(p.index));
 
   return (
     <div className="flex flex-col gap-4">
@@ -1005,28 +949,17 @@ function LinesStep({
         </div>
       )}
 
-      {!extract.isPending && (visibleProposals.length > 0 || savedFlashes.length > 0) && (
+      {!extract.isPending && proposals.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
-            Proposed from receipt — confirm a match, or process each
+            Proposed from receipt — process or ignore each
           </h2>
           <ul className="flex flex-col gap-2">
-            {savedFlashes.map((proposal) => (
-              <li
-                key={`saved-${proposal.index}`}
-                data-testid="proposed-row-saved"
-                className="flex min-h-11 items-center gap-2 rounded-xl border border-success/30 bg-success-soft p-3 text-sm font-medium text-success shadow-sm"
-              >
-                ✓ Added {proposal.description} — now in the lines below
-              </li>
-            ))}
-            {visibleProposals.map((proposal) => (
+            {proposals.map((proposal) => (
               <ProposalRow
                 key={proposal.index}
-                restockId={restock.id}
                 proposal={proposal}
                 onConsumed={() => consumeProposal(proposal.index)}
-                onSaved={() => onProposalSaved(proposal)}
                 onEdit={(suggested) =>
                   setSheet({ open: true, line: null, proposal: { ...proposal, suggested } })
                 }
@@ -1038,8 +971,7 @@ function LinesStep({
 
       {restock.lots.length === 0 &&
         !extract.isPending &&
-        proposals.length === 0 &&
-        savedFlashes.length === 0 && (
+        proposals.length === 0 && (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
             <p className="text-sm font-medium text-text">No lines yet.</p>
             <p className="text-sm text-text-muted">
@@ -1150,12 +1082,13 @@ function LinesStep({
       {sheet.open && (
         <LineSheet
           restockId={restock.id}
+          lotCode={restock.code}
           line={sheet.line}
           proposal={sheet.proposal}
           startExcluded={sheet.startExcluded}
           onClose={async (changed) => {
-            // A saved proposal-edit consumes its proposal, like Confirm
-            // (consumeProposal refetches when it settles).
+            // A saved Process consumes its proposal (consumeProposal refetches
+            // when it settles), landing the lot in the lines list below.
             if (changed && sheet.proposal) consumeProposal(sheet.proposal.index);
             else if (changed) await refetch();
             setSheet({ open: false, line: null, proposal: null });
@@ -1168,12 +1101,16 @@ function LinesStep({
 
 function LineSheet({
   restockId,
+  lotCode,
   line,
   proposal,
   startExcluded,
   onClose,
 }: {
   restockId: string;
+  /** The restock's display code (e.g. "260704-01") — shown so the user can
+      label the jar from the sheet even when it covers the code behind it. */
+  lotCode: string | null;
   line: Line | null;
   /** VLM proposal prefill (slice 5): editing a proposed line opens the normal sheet, prefilled. */
   proposal?: (ProposedLine & { suggested: { id: string; name: string } | null }) | null;
@@ -1225,6 +1162,35 @@ function LineSheet({
   );
   const [bestBy, setBestBy] = useState(line?.bestBy ?? '');
   const [error, setError] = useState<string | null>(null);
+
+  // Optional unit photo, captured right here in the sheet (Round A) so a line
+  // gets labelled + photographed + count-confirmed in one pass. A freshly
+  // uploaded 'units' path rides along with saveLine and is applied atomically
+  // to the created/updated lot; step 4 and the lot ⋯ menu still use
+  // setUnitPhoto for later re-snaps. `capturedPhotoPath` is only the NEW
+  // upload — an unchanged edit never re-sends the existing (already-referenced)
+  // path, which would fail the fresh-upload check.
+  const unitPhotoRef = useRef<HTMLInputElement>(null);
+  const [unitPhotoUploading, setUnitPhotoUploading] = useState(false);
+  const [capturedPhotoPath, setCapturedPhotoPath] = useState<string | null>(null);
+  const shownPhotoPath = capturedPhotoPath ?? line?.unitPhotoPath ?? null;
+
+  async function handleUnitPhoto(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setUnitPhotoUploading(true);
+    setError(null);
+    try {
+      const jpeg = await downscaleToJpeg(file);
+      const { path } = await uploadImage('units', jpeg);
+      setCapturedPhotoPath(path);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Photo upload failed');
+    } finally {
+      setUnitPhotoUploading(false);
+      if (unitPhotoRef.current) unitPhotoRef.current.value = '';
+    }
+  }
 
   const search = useQuery(
     trpc.product.search.queryOptions(
@@ -1299,6 +1265,9 @@ function LineSheet({
       receivedCount: effectiveReceived,
       lineTotalCents: totalCents,
       bestBy: bestBy || null,
+      // Only a fresh capture is sent — an untouched edit leaves the lot's
+      // existing photo in place server-side.
+      unitPhotoPath: capturedPhotoPath ?? undefined,
     });
   }
 
@@ -1333,9 +1302,21 @@ function LineSheet({
   return (
     <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
       <div className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl">
-        <h2 className="text-lg font-semibold">
-          {line ? 'Edit line' : excluded ? 'Non-coop line' : proposal ? 'Process line' : 'Add line'}
-        </h2>
+        <div className="flex items-baseline justify-between gap-2">
+          <h2 className="text-lg font-semibold">
+            {line ? 'Edit line' : excluded ? 'Non-coop line' : proposal ? 'Process line' : 'Add line'}
+          </h2>
+          {/* The lot label code, so the user can write it on the jar straight
+              from the sheet (the sheet may cover the draft banner behind it). */}
+          {lotCode && (
+            <span
+              data-testid="line-lot-code"
+              className="font-mono text-sm font-semibold tabular-nums text-accent-strong"
+            >
+              {lotCode}
+            </span>
+          )}
+        </div>
 
         {/* The receipt line exactly as printed (extraction) — always shown so
             the user can reconcile the product they pick against the paper. */}
@@ -1594,6 +1575,50 @@ function LineSheet({
               className={inputClass}
             />
           </label>
+        )}
+
+        {/* Unit photo, captured in-sheet (Round A). Optional; documents the
+            packaging and becomes the product photo. Saved atomically with the
+            line. */}
+        {!excluded && (
+          <div
+            data-testid="line-unit-photo"
+            className="flex items-center gap-3 rounded-lg border border-border bg-surface-sunken p-3"
+          >
+            {shownPhotoPath ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={`/api/images/${shownPhotoPath}`}
+                alt="Unit photo"
+                className="size-14 shrink-0 rounded-lg border border-border object-cover"
+              />
+            ) : (
+              <span className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-text-muted">
+                🖼
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-text">Unit photo</p>
+              <p className="text-xs text-text-muted">Optional — snap the packaging.</p>
+            </div>
+            <input
+              ref={unitPhotoRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              data-testid="line-unit-photo-input"
+              onChange={(e) => handleUnitPhoto(e.target.files)}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => unitPhotoRef.current?.click()}
+              disabled={unitPhotoUploading}
+              className="min-h-11 shrink-0 rounded-lg border border-border-strong px-3 py-2 text-sm font-medium text-text hover:bg-surface-raised disabled:opacity-50"
+            >
+              {unitPhotoUploading ? 'Uploading…' : shownPhotoPath ? 'Retake' : 'Photo'}
+            </button>
+          </div>
         )}
 
         {error && (
