@@ -175,9 +175,13 @@ flakies, retry-passed).
   `neighbors.spec.ts` (5 tests incl. severed-with-balance and founded-household
   dashboards), slice4's dot assertions retargeted to the Neighbors tab. Docs:
   blueprint 02 Round-E nav amendment, 03 tab comment, SPEC Home-tab reference.
-- Polish gaps recorded: no spec drives the order flow through `neighbors-pantry-row`
-  yet (browser-verified only); the pre-existing `/ledger` React #418 hydration
-  warning (ledger-view.tsx client-side date formatting) predates the flip — follow-up.
+- Late correction: the e2e teammate's final pass DID wire the order-flow UI test
+  through `neighbors-pantry-row` (plus a netCents post-reload visibility hardening
+  that made the two lingering webkit delta-flakes deterministic) — those spec deltas
+  landed after the closing gate ran, so they were re-verified separately:
+  orders + neighbors + slice4, 47/47 green both engines, zero flakes. Remaining
+  follow-up: the pre-existing `/ledger` React #418 hydration warning
+  (ledger-view.tsx client-side date formatting) predates the flip.
 
 ## Phase 2 Rounds C + D — contact layer & Activity (2026-07-04/05)
 
