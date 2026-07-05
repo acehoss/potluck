@@ -575,3 +575,177 @@ test('UI smoke: plan a recipe, then generate and edit the shopping list', async 
     await deleteRecipeQuietly(page.request, recipeId);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Plan-surface network sections (Phase-2 P3): the same server data /plan hands
+// to PlanView — the acting household's outgoing orders, its own live posts, and
+// the in-calendar picker's shared-recipe block that FORKS on pick. API setup +
+// browser assertions; per-run tokens keep the shared accumulating DB rerun-safe,
+// and every fixture (order, post, recipe, fork, plan entry) is swept in finally.
+// ---------------------------------------------------------------------------
+
+/** Local YYYY-MM-DD — the plan UI's "Today" card (never toISOString, which is UTC). */
+function localToday() {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(
+    n.getDate(),
+  ).padStart(2, '0')}`;
+}
+
+test('Plan surface (P3): an outgoing REQUESTED order renders under plan-outgoing-orders and deep-links to its detail', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  const dana = await apiLogin('dana');
+  await login(page, 'aaron');
+  let orderId: string | undefined;
+  try {
+    // Dana (In-Laws) stocks a lot; Aaron orders 1 unit and submits → a REQUESTED
+    // order on ANOTHER household's pantry, exactly what the Plan section lists.
+    const { pantryId, lotId } = await receiveLotApi(dana, uniq('PlanOrder', P), 3);
+    await freshCartApi(page.request, pantryId, lotId);
+    orderId = (await ok(page.request, 'order.addToCart', { pantryId, lotId, quantity: 1 }))
+      .orderId as string;
+    await ok(page.request, 'order.submit', { orderId });
+
+    await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();
+    await expect(page).toHaveURL(/\/plan$/);
+
+    // Keyed by its own order id (other runs' orders may share the section), the
+    // row shows the owner household + status and deep-links to the detail page.
+    const row = page.locator(`a[data-testid="plan-order-row"][href="/orders/${orderId}"]`);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText('In-Laws');
+    await expect(row).toContainText('Requested');
+    await row.click();
+    await expect(page).toHaveURL(new RegExp(`/orders/${orderId}$`));
+  } finally {
+    if (orderId) await rpc(page.request, 'order.cancel', { orderId });
+  }
+});
+
+test('Plan surface (P3): an own live post renders under plan-my-posts and deep-links to /shares', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  await login(page, 'aaron');
+  const title = uniq('PlanPost Need', P);
+  let postId: string | undefined;
+  try {
+    postId = (await ok(page.request, 'share.create', { type: 'NEED', title })).id as string;
+
+    await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();
+    await expect(page).toHaveURL(/\/plan$/);
+
+    // Per-run-unique title → the row is unambiguous even as posts accumulate.
+    const row = page
+      .getByTestId('plan-my-posts')
+      .getByTestId('plan-post-row')
+      .filter({ hasText: title });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText('open'); // OPEN status, lowercased
+    await row.click();
+    await expect(page).toHaveURL(/\/shares$/);
+  } finally {
+    if (postId) await rpc(page.request, 'share.withdraw', { postId });
+  }
+});
+
+test('Plan surface (P3): the in-calendar picker forks a connection recipe into your book and plans the fork, not the original', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  const dana = await apiLogin('dana');
+  const title = uniq('Shared Chili', P);
+  const ingText = uniq('smoked paprika', P);
+  const today = localToday();
+  let danaRecipeId: string | undefined;
+  let forkId: string | undefined;
+  await login(page, 'aaron');
+  try {
+    // Dana (In-Laws, recipe-granted to Heise) publishes a NON-private recipe.
+    danaRecipeId = (
+      await ok(dana, 'recipe.create', {
+        title,
+        servings: 4,
+        ingredients: [{ kind: 'item', amount: '2', unit: 'tsp', text: ingText }],
+      })
+    ).id as string;
+
+    // Aaron plans it from TODAY's card via the picker's "from your connections"
+    // block (default kind=recipe, meal=dinner).
+    await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();
+    await expect(page).toHaveURL(/\/plan$/);
+    await page.getByTestId('plan-day').filter({ hasText: 'Today' }).getByTestId('plan-add').click();
+    await expect(page.getByTestId('plan-add-sheet')).toBeVisible();
+    await page.getByLabel('Search recipes').fill(title);
+    const shared = page
+      .getByTestId('plan-picker-shared')
+      .getByTestId('plan-shared-recipe')
+      .filter({ hasText: title });
+    await expect(shared).toBeVisible();
+    await expect(shared).toContainText('In-Laws'); // attribution shown in the picker
+    await shared.click();
+    await page.getByTestId('plan-add-submit').click();
+    await expect(page.getByTestId('plan-add-sheet')).toBeHidden();
+    await expect(page.getByTestId('plan-entry').filter({ hasText: title }).first()).toBeVisible();
+
+    // A FORK now lives in Aaron's OWN book — private, attributed to In-Laws.
+    const list = (await okGet(page.request, 'recipe.list')) as {
+      mine: { id: string; title: string }[];
+    };
+    const forked = list.mine.find((r) => r.title === title);
+    expect(forked, 'the shared recipe forked into the own book').toBeTruthy();
+    forkId = forked!.id;
+    expect(forkId).not.toBe(danaRecipeId);
+    const got = (await okGet(page.request, 'recipe.get', { id: forkId })) as {
+      mine: boolean;
+      private: boolean;
+      forkedFromHouseholdName: string | null;
+      forkedFromTitle: string | null;
+      ingredients: { text: string | null }[];
+    };
+    expect(got.mine).toBe(true);
+    expect(got.private).toBe(true);
+    expect(got.forkedFromHouseholdName).toBe('In-Laws');
+    expect(got.forkedFromTitle).toBe(title);
+
+    // The plan entry references the FORK, not Dana's original.
+    const week = await planWeek(page.request, today);
+    const entry = week.days
+      .find((d) => d.date === today)
+      ?.meals['dinner']?.find((e) => e.recipeTitle === title);
+    expect(entry, 'planned entry on today/dinner').toBeTruthy();
+    expect(entry!.recipeId).toBe(forkId);
+    expect(entry!.recipeId).not.toBe(danaRecipeId);
+
+    // Author edits DON'T propagate: Dana renames + reworks her original; the
+    // fork is an independent copy and stays put.
+    await ok(dana, 'recipe.update', {
+      recipeId: danaRecipeId,
+      title: uniq('Shared Chili EDITED', P),
+      ingredients: [{ kind: 'item', amount: '9', unit: 'tsp', text: uniq('cayenne', P) }],
+    });
+    const after = (await okGet(page.request, 'recipe.get', { id: forkId })) as {
+      title: string;
+      ingredients: { text: string | null }[];
+    };
+    expect(after.title).toBe(title);
+    expect(after.ingredients[0]?.text).toBe(ingText);
+  } finally {
+    // Remove the planned fork entry BEFORE deleting the fork (so it's found by
+    // id, not left a tombstone), then both recipes.
+    const week = await planWeek(page.request, today).catch(() => null);
+    for (const day of week?.days ?? []) {
+      for (const meal of Object.keys(day.meals)) {
+        for (const e of day.meals[meal]) {
+          if ((forkId && e.recipeId === forkId) || e.recipeTitle === title) {
+            await rpc(page.request, 'plan.removeEntry', { entryId: e.id });
+          }
+        }
+      }
+    }
+    await deleteRecipeQuietly(page.request, forkId);
+    await deleteRecipeQuietly(dana, danaRecipeId);
+  }
+});

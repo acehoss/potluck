@@ -175,6 +175,10 @@ flakies, retry-passed).
   `neighbors.spec.ts` (5 tests incl. severed-with-balance and founded-household
   dashboards), slice4's dot assertions retargeted to the Neighbors tab. Docs:
   blueprint 02 Round-E nav amendment, 03 tab comment, SPEC Home-tab reference.
+- Follow-up coverage landed: three "Plan surface (P3)" tests pin plan-outgoing-orders,
+  plan-my-posts, and the fork-then-plan invariant (the picked shared recipe FORKS into
+  the own book — private, attributed — the plan entry references the fork, and author
+  edits never propagate to it). 16/16 planner.spec both engines.
 - Late correction: the e2e teammate's final pass DID wire the order-flow UI test
   through `neighbors-pantry-row` (plus a netCents post-reload visibility hardening
   that made the two lingering webkit delta-flakes deterministic) — those spec deltas
