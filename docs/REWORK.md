@@ -492,3 +492,165 @@ recorded here). All five voted adopt-with-changes on the workflow-tab sketch.
 - ✅ **Round E — the IA flip** (P1/P2/P3): Neighbors/Plan/Home/More, routes stable,
   ledger folded into Neighbors (dot on the Neighbors tab), shared-pantry rows as
   the order entry, in-calendar shared-book picker (fork-then-plan).
+
+## Phase 3 — notifications, email, auth flows (decided 2026-07-05)
+
+The deferred "notifications round," scoped up with Aaron. Seeded by three research
+agents (DreamHost as a transport, fresh-domain deliverability, and whether email links
+open an installed PWA) and a five-agent notification focus group (personas: Sam the
+time-starved parent, Priya the two-household coordinator, Walt the email-native elder
+who never installed the PWA, Theo the push-native Teen, and an adversarial privacy/
+fatigue critic — full reports in the 2026-07-05 session; synthesis recorded here).
+Domain is **potluckmutualaid.app** (DNS + email at DreamHost; web via Aaron's DO-droplet
+Tailscale reverse proxy).
+
+### Research headlines (load-bearing, cited in-session)
+
+- **Transport.** DreamHost's hosted-mailbox SMTP carries a **100-recipients/hour cap
+  that "cannot be adjusted," and mailboxes that trip it repeatedly are blocked
+  *permanently*** (support ticket to lift) — a real hazard on the very mailbox password
+  resets flow through. Outbound egresses through **MailChannels' shared relay pool**, so
+  you inherit a shared IP reputation you don't control. BUT: reputation attaches to the
+  **domain** (which you build and carry forward) separately from the **IP** (which you
+  leave behind on switch). Verdict: **DreamHost is fine through the family pilot**, switch
+  to a dedicated sender (Resend free 3k/mo, or SES) when widening past it. DreamHost
+  **auto-publishes SPF and auto-signs DKIM** for domains hosted there (but only signs mail
+  sent via *authenticated* SMTP, not sendmail); DMARC is add-it-yourself.
+- **PWA email links.** iOS **cannot** open an installed home-screen web app from an email
+  link — it opens in Safari, in a **separate storage jar where the user is signed out**
+  (cookies/localStorage isolated since iOS 14; home-screen web apps can't register as URL
+  handlers). Android (Chrome WebAPK) and desktop Chrome 139+ *do* capture in-scope links.
+  A **web-push notification click lands inside the installed app, authenticated, on every
+  platform including iOS 16.4+.** ⇒ **push is the deep-link channel; email links must
+  self-authenticate but stay navigation-only** (Aaron: magic-link-as-login would be very
+  frustrating for PWA users, hold that line).
+
+### Focus-group consensus (drove the decisions below)
+
+- **The one rule everyone stated independently:** push only for "**needs my hands**"
+  (pickup ready, request to fulfill, share claimed) or "**touches my money**" (settlement,
+  adjustment); **digest** for "nice to know" (new shares, plan changes, balance nudges);
+  never mix them, or you lose the user in one week.
+- Notifications reveal a **category**, never names / dollar amounts / addresses /
+  who-claimed-what — lock screens and mail providers leak the intimate graph ("In-Laws
+  claimed your $12 of formula" is neighborhood gossip and a hardship signal).
+- **Transactional and subscription mail are two separate pipelines**: transactional
+  (verify / reset / MFA) ignores all prefs + suppression and carries no unsubscribe;
+  digests/subscription carry RFC-8058 one-click unsubscribe, honored fast.
+- **Two-household users (Priya):** every notification stamped with which household it's
+  for; tapping switches the acting household automatically; never a merged anonymous
+  stream. Per-household toggles + one combined inbox.
+- **Walt:** never sees push, never checks junk → the digest must be the *home* for ambient
+  mail so his inbox isn't buried (tunes out past ~5–6/week), and security mail landing in
+  spam is a silent lockout (deliverability is a correctness requirement, not a nicety).
+- **Theo:** shares as push (the whole app to him), money noise = none; teen
+  money/commitment actions should route to a parent to approve (leaves a seam for the
+  deferred minors work, P6).
+- Conservative first-week defaults; **coalesce/rate-limit at the send layer** (5 shares in
+  an hour = one push, not five).
+
+### Decisions
+
+- **N1. Transport — DECIDED.** Swappable nodemailer driver. **DreamHost authenticated
+  SMTP through the pilot** (family + in-laws), **Resend as a config-swap** when widening.
+  DreamHost keeps DNS + inbound mailboxes. Send from the root domain for the pilot
+  (subdomain isolation deferred — back-pocket if reputation gets shaky). App must send via
+  authenticated `smtp.dreamhost.com` or DKIM won't sign. Transition gotcha: a custom SPF
+  record **replaces** DreamHost's auto one — **merge** the includes when adding Resend.
+  **Env contract** (live creds in gitignored `.env`, host env at deploy): `EMAIL_FROM`,
+  `EMAIL_USERNAME`, `EMAIL_PASSWORD`, `EMAIL_SMTP_SERVER`, `EMAIL_SMTP_PORT` (587 ⇒
+  STARTTLS: `secure:false` + `requireTLS:true`), `EMAIL_IMAP_SERVER`, `EMAIL_IMAP_PORT`
+  (993). Sender identity is `no-reply@potluckmutualaid.app`.
+- **N2. DNS/deliverability — DECIDED.** Verify DreamHost's auto SPF + DKIM are live;
+  **add DMARC `p=none; rua=…` from day one**, ramp to `quarantine`→`reject` once reports
+  show 100% pass. Route `rua` to a free aggregator (Postmark DMARC / Valimail) — the only
+  telemetry at low volume (Google Postmaster stays empty below ~hundreds/day). All email
+  links **https-only** (`.app` is HSTS-preloaded). No IP warm-up needed at pilot volume.
+- **N3. Two mail pipelines — DECIDED.** `sendTransactional()` (never consults prefs /
+  suppression / unsubscribe / batching; no `List-Unsubscribe`; always sends) vs
+  `sendSubscription()` (prefs + suppression + RFC-8058 one-click, honored immediately +
+  idempotently, no auth required to unsub). Hard enum at the call site + a test asserting
+  the transactional path ignores an unsubscribe-all preference. Suppression (bounces/
+  complaints) applies to subscription mail only — a bounced digest must never block a reset.
+- **N4. Notification-content reveal rule — DECIDED.** Push payload + email subject carry a
+  **category only** — never other households' names, dollar amounts, addresses, item
+  specifics, quantities, or who-claimed/borrowed-what. Email body may say marginally more
+  but no dollars/addresses; details load after auth in-app. Web-push payloads encrypted
+  (spec-standard) with generic decrypted content. Per-user "**show details in
+  notifications**" toggle, default **off**.
+- **N5. Channel matrix + conservative defaults — DECIDED.** ~4 opt-out **categories**
+  (not per-event), each with per-channel push/email/in-app toggles:
+  (1) **Pickups & waiting-on-you** — push + email ON; (2) **Circle activity** — digest +
+  in-app, individual push/email OFF (shares get **opt-in per-circle/keyword push**);
+  (3) **Ledger/money** — in-app + optional digest, no per-event push/email by default;
+  (4) **Account & security** — transactional, always on, not unsubscribable. First-run
+  one-screen "how should Potluck reach you?" with these pre-selected (explicit consent,
+  no silent firehose). Coalesce at send layer. Every notification **stamped with its
+  household**; tapping **switches acting household** to match.
+- **N6. Digest — DECIDED.** **Weekly, Sunday, user-local timezone** (idempotent per user
+  per window — no double-fire on restart). The home for all ambient/nice-to-know mail.
+  Scannable: balances/standings, open loops needing action, new shares — headers + counts,
+  and a subject line that front-loads the point ("you're owed $12, 1 pickup waiting").
+- **N7. Deep-link / magic token — DECIDED (navigation-only, Aaron held the line).** Email
+  tokens **route + mark-read only**; **acting** (claim, confirm pickup, view ledger/
+  addresses, change settings) requires a live session — no session ⇒ normal login, then
+  continue to the deep-linked screen. Single-use; nav tokens ≤24h, any login-grade token
+  (not used here) would be 10–15 min; kept **out of logs** (URL fragment + `no-referrer`
+  + redacted access-log routes). Tokens **never** elevate to money moves or
+  security-setting changes. **Push is the primary in-app deep-link channel** (lands
+  authenticated everywhere incl. iOS); email routes then asks for login to act.
+- **N8. Auth flows — DECIDED.** **Email verification** + **password reset** (single-use
+  short-TTL token, invalidated on use/login, not logged) — both **enumeration-safe** ("if
+  an account exists, we've sent…", constant-ish timing). **MFA: TOTP (the real factor) +
+  emailed codes (labeled a convenience factor — email is also the reset channel, circular
+  trust).** Opt-in per user; **TOTP REQUIRED for the instance-admin account**. If TOTP is
+  enrolled, a password reset does **not** bypass it. Emailed codes: 6-digit, 5–10 min,
+  single-use, rate-limited both directions (request cap + attempt cap). **Backup codes
+  mandatory** (8–10, hashed, shown once, ack required). TOTP secret **encrypted at rest**;
+  ±1 step skew; replay-reject. **Throttle, not permanent lockout**; instance-admin can
+  **reset a member's MFA** (audited, admin's own MFA required) as the small-community
+  recovery path.
+- **N9. Dev mail-capture — DECIDED (fail-closed).** Default allowlist **empty** ⇒
+  captured-not-sent; missing/unparseable config ⇒ capture, **never** send normally; boot
+  **refuses** if prod + capture enabled, and dev cannot deliver to non-allowlisted
+  addresses even pointed at a prod-shaped DB. Exact-match allowlist preferred; if regex,
+  lint against bare `.*` / provider-wide domains. Capture sink = local maildir/catcher
+  (not a real forwarding inbox that hoards PII). Forced subject prefix `[Potluck Dev] ` is
+  courtesy, not the safety mechanism. Tests: non-prod + non-allowlisted ⇒ captured;
+  prod + capture ⇒ boot fails; missing config ⇒ captured. Redirect + allowlist accept the
+  regex form Aaron uses (per-dev local working copy: own address in allow + redirect).
+- **N10. Durable dev TOTP — DECIDED.** Fixture TOTP secrets baked into `prisma/seed.ts`
+  (same demo-only class as the committed VAPID dev pair — entrypoint refuses them in a
+  non-demo stack). Seeded accounts boot **already-enrolled** (flag + secret + hashed
+  backup codes), so a `down -v` + reseed restores identical secrets. `scripts/
+  dump-demo-creds` emits each account's username/email + `demo-password` + a
+  **`otpauth://totp/Potluck:…?secret=…&issuer=Potluck`** URI + QR codes for one-time
+  1Password import. e2e computes the live code from the fixture secret via otplib, so the
+  TOTP-gated admin login is testable on both engines.
+- **N11. Minors/teen approval routing — STILL DEFERRED** (Phase 2 P6). The matrix leaves
+  the seam (teen money/commitment → parent approval) but Phase 3 does not build it.
+
+### Round plan (team pattern: server → UI ∥ e2e per round, both-engine gate each)
+
+- **Round A — mail infrastructure**: swappable transport + the two pipelines (N3) +
+  dev-capture fail-closed (N9) + DNS/DMARC + deploy-runbook docs (N1/N2). Gate on
+  capture-mode tests (fast, deterministic, no external dependency).
+- **Real-send verification (opt-in suite, NOT the default gate).** A separate suite
+  (pattern: `e2e:off`) that sends a real verification/reset/MFA mail through DreamHost to
+  a **live `testuser{1,2,3}@potluckmutualaid.app` mailbox**, then **IMAP-polls
+  (`EMAIL_IMAP_SERVER:993`, per-user login) to confirm delivery and extract the
+  code/link** — validates auth + DKIM signing + deliverability end-to-end. Kept out of the
+  default gate (external dependency, DreamHost rate limits, latency). These three live
+  accounts are the real-mail fixtures; the seeded `@demo.coop` accounts stay capture-only.
+- **Round B — auth flows** (N8/N10): email verification, password reset, TOTP + emailed
+  MFA, backup codes, admin-required-TOTP, durable fixture TOTP + `dump-demo-creds`.
+- **Round C — notification prefs + push** (N4/N5/N6): category matrix, per-channel
+  toggles, first-run consent, per-household stamping, weekly digest, extending the
+  existing VAPID/web-push wiring (Phase-1 subscription endpoints already exist; two events
+  already notify — generalize to the matrix). Also lands the `/unsub` one-click route that
+  HONORS the RFC-8058 token minted in Round A — and **must require a real `MAIL_UNSUB_SECRET`
+  in production** (entrypoint should refuse `MAIL_PRODUCTION=1` without it), or the unsub
+  HMAC's committed dev-secret fallback makes tokens forgeable. Fills the Round-A stub hooks
+  `isSuppressed`/`subscriptionAllowed` with the real `NotificationPreference` lookup.
+- **Round D — deep-link routing** (N7): navigation-only magic tokens, push as the
+  authenticated deep-link channel, email-routes-then-login-to-act, tap-switches-household.

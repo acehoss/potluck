@@ -32,4 +32,25 @@ if [ "$SEED_DEMO" != "1" ]; then
   fi
 fi
 
+# Mail substrate boot guards (Phase 3 Round A; docs/REWORK.md N1–N11).
+# MAIL_MODE defaults to capture (record-only, never touches SMTP). Two guards:
+#   1. FATAL: a seeded/demo stack must NEVER send unfiltered to real recipients.
+#      SEED_DEMO=1 + MAIL_MODE=live + MAIL_PRODUCTION=1 (dev-filter disabled) is
+#      exactly that combination — refuse to start.
+#   2. WARN: a production stack (SEED_DEMO!=1) in capture mode silently drops all
+#      mail — loud, non-fatal, so the operator knows it is intentional.
+MAIL_MODE="${MAIL_MODE:-capture}"
+if [ "$SEED_DEMO" = "1" ] && [ "$MAIL_MODE" = "live" ] && [ "$MAIL_PRODUCTION" = "1" ]; then
+  echo "FATAL: SEED_DEMO=1 with MAIL_MODE=live and MAIL_PRODUCTION=1 would send" >&2
+  echo "       unfiltered mail from a seeded/demo stack to real recipients." >&2
+  echo "       Drop MAIL_PRODUCTION (keep the dev-filter) or MAIL_MODE=capture." >&2
+  echo "       Refusing to start." >&2
+  exit 1
+fi
+if [ "$SEED_DEMO" != "1" ] && [ "$MAIL_MODE" = "capture" ]; then
+  echo "WARNING: MAIL_MODE=capture on a non-demo stack — outgoing mail is recorded" >&2
+  echo "         to the CapturedEmail table but NEVER sent. Set MAIL_MODE=live to" >&2
+  echo "         actually deliver." >&2
+fi
+
 exec npm run start

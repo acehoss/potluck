@@ -137,6 +137,52 @@ client-supplied `X-Forwarded-For` through unmodified.
 - **VAPID keys** — generate your own (below); the committed dev pair is public
   and the entrypoint refuses to start a non-demo stack configured with it.
 
+### 5. Configure email (transactional + notifications)
+
+The app sends email for account flows (verification, password reset, MFA codes)
+and — opt-in — notification digests. Outbound goes through any SMTP host via a
+swappable driver; the reference setup is **DreamHost** on the domain
+`potluckmutualaid.app`. Set these in the host env (or the gitignored `.env`):
+
+```bash
+EMAIL_FROM=no-reply@potluckmutualaid.app     # visible From: (keep it on your domain)
+EMAIL_USERNAME=no-reply@potluckmutualaid.app # SMTP auth user
+EMAIL_PASSWORD=…                             # SMTP auth password (never commit)
+EMAIL_SMTP_SERVER=smtp.dreamhost.com
+EMAIL_SMTP_PORT=587                          # 587 ⇒ STARTTLS
+MAIL_MODE=live                               # 'live' to send; 'capture' (default) records only
+MAIL_PRODUCTION=1                            # explicit opt-in: deliver to real recipients unfiltered
+```
+
+`MAIL_MODE` defaults to **`capture`** — a safe default that records every message to
+the `CapturedEmail` table and sends nothing. A real deployment must set
+`MAIL_MODE=live` **and** `MAIL_PRODUCTION=1` (the second is a deliberate second key so a
+demo/staging stack can never blast real users — the entrypoint refuses to start a
+`SEED_DEMO=1` stack that has both). A production stack left in `capture` mode logs a loud
+warning, since mail would silently vanish.
+
+**DNS — do this before real users depend on password resets landing:**
+
+1. **SPF + DKIM are automatic on DreamHost** for a domain whose DNS + email are both
+   hosted there — DreamHost publishes the SPF record and signs DKIM (selector
+   `dreamhost._domainkey`) for you. Just **verify** both are live in the DNS panel. Note
+   DreamHost only DKIM-signs mail sent via *authenticated* SMTP, which this app does.
+2. **Add a DMARC record** (DreamHost does not create one). Start in monitor mode and ramp:
+   ```
+   _dmarc  TXT  "v=DMARC1; p=none; rua=mailto:dmarc@potluckmutualaid.app; adkim=r; aspf=r"
+   ```
+   Route `rua` to a free aggregator (Postmark DMARC / Valimail) — at low volume this is your
+   only deliverability telemetry (Google Postmaster Tools stays empty). Once reports show
+   SPF/DKIM passing, tighten to `p=quarantine`, then `p=reject`.
+3. All email links are `https://` (the `.app` TLD is HSTS-preloaded — required, not optional).
+
+**Scaling past a small pilot:** DreamHost caps outbound at 100 recipients/hour per mailbox
+(unraisable, and repeated overflow blocks the mailbox), on a shared relay pool. That's fine
+for a family pilot but switch the transport to a dedicated sender (Resend/SES) before wider
+use — the domain reputation you built carries over. When you do, the one DNS gotcha: a custom
+SPF record **replaces** DreamHost's auto one, so **merge** the provider's `include:` into a
+single SPF record rather than adding a second.
+
 ## Receipt extraction (VLM)
 
 The receiving wizard can prefill receipt lines from the photos via Claude.

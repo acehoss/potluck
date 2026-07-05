@@ -274,6 +274,41 @@ model LedgerSeen {
   @@id([userId, ownHouseholdId, counterpartyHouseholdId])
 }
 
+// Audit of every message either mail pipeline TRIED to send (Phase 3 Round A;
+// docs/REWORK.md N1–N11). A row is written whether or not SMTP was actually
+// touched: on a capture-mode stack it is the only record, and the dev/e2e
+// flows read it back. `toAddress` is the ACTUAL recipient after the dev-filter
+// (redirect applied); `originalTo` is the intended recipient before redirect;
+// `delivered` is true only when a real SMTP send also happened (MAIL_MODE=live
+// past the fail-closed filter).
+model CapturedEmail {
+  id          String   @id @default(cuid())
+  pipeline    String // "transactional" | "subscription"
+  kind        String // "verify" | "reset" | "mfa" | "digest" | "share" | "test" | ...
+  toAddress   String // the ACTUAL recipient after dev-filter (redirect applied)
+  originalTo  String // the intended recipient before redirect
+  fromAddress String
+  subject     String
+  textBody    String
+  htmlBody    String?
+  headersJson String // JSON of extra headers (List-Unsubscribe etc.)
+  delivered   Boolean  @default(false) // true if a real SMTP send also happened
+  createdAt   DateTime @default(now())
+
+  @@index([originalTo])
+  @@index([createdAt])
+}
+
+// Hard-suppression list for SUBSCRIPTION mail only (bounces, spam complaints,
+// one-click unsubscribes). Round A: the table exists; nothing populates it yet
+// (isSuppressed is therefore always false). Round C wires population + honors
+// the /unsub route. Transactional mail never consults this.
+model MailSuppression {
+  email     String   @id
+  reason    String // "bounce" | "complaint" | "unsubscribe" | ...
+  createdAt DateTime @default(now())
+}
+
 model Session {
   // sha256 hex of the session token; the raw token lives only in the cookie
   id        String   @id

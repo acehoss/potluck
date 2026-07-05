@@ -25,6 +25,27 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:potluck@example.com}
+      # Mail substrate (Phase 3 Round A; docs/REWORK.md N1–N11). MAIL_MODE
+      # defaults to capture (record to CapturedEmail, never touch SMTP); the
+      # entrypoint refuses a seeded stack that would send unfiltered to real
+      # recipients. EMAIL_* are the DreamHost transport creds (live in the
+      # gitignored .env / host env; empty here disables live send). The
+      # MAIL_DEV_* vars are the fail-closed dev filter; MAIL_PRODUCTION=1 is the
+      # explicit prod opt-in that disables that filter.
+      MAIL_MODE: ${MAIL_MODE:-capture}
+      MAIL_PRODUCTION: ${MAIL_PRODUCTION:-}
+      MAIL_DEV_ALLOWLIST: ${MAIL_DEV_ALLOWLIST:-}
+      MAIL_DEV_REDIRECT: ${MAIL_DEV_REDIRECT:-}
+      MAIL_DEV_SUBJECT_PREFIX: ${MAIL_DEV_SUBJECT_PREFIX:-}
+      MAIL_PUBLIC_URL: ${MAIL_PUBLIC_URL:-https://potluckmutualaid.app}
+      MAIL_UNSUB_SECRET: ${MAIL_UNSUB_SECRET:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER:-}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-587}
+      EMAIL_IMAP_SERVER: ${EMAIL_IMAP_SERVER:-}
+      EMAIL_IMAP_PORT: ${EMAIL_IMAP_PORT:-993}
     volumes:
       - coop-data:/data
     healthcheck:

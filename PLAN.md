@@ -140,6 +140,56 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 3 Round A — mail infrastructure (2026-07-05)
+
+**Done. The mail substrate for the notifications phase** (design record: docs/REWORK.md
+"Phase 3", N1–N11). No user-facing surface yet — Round A is the transport layer the auth
+flows (Round B) and notification prefs/digests (Round C) ride on. Built by a two-teammate
+team (mail-server: server + schema + guards; mail-e2e: tests) against a fixed contract,
+coordinator-integrated. New migration `20260705100000_mail` (additive — `CapturedEmail`
+audit table + `MailSuppression`; no money paths touched).
+
+- **Swappable transport + two deliberately separate pipelines.** `mailConfig()` mirrors
+  `vapidConfig()` (null when EMAIL_* incomplete; nodemailer over DreamHost, 587/STARTTLS).
+  `sendTransactional` (verify/reset/mfa) carries NO `List-Unsubscribe` and never consults
+  prefs/suppression — you can't unsubscribe from your own password reset. `sendSubscription`
+  (digests/shares) carries RFC-8058 `List-Unsubscribe` + `List-Unsubscribe-Post` and gates on
+  suppression + a per-user prefs hook BEFORE delivery. The two are separate exported functions
+  so they can't be confused at a call site. Round-C hook signatures fixed now
+  (`isSuppressed` queries the real table; `subscriptionAllowed` stubs true).
+- **Fail-closed dev mail-capture** (the leakage guard, N9). Pure `resolveRecipients` (modeled
+  on `isAllowedPushEndpoint`): production delivers as-is; else allowlist-regex match delivers,
+  non-match + redirect → redirected with `X-Original-To`, non-match + empty redirect →
+  capture-only, empty/empty → nobody gets real mail, malformed regex → non-matching (never
+  opens the gate, never throws). `[Potluck Dev]` subject prefix dev-only. Every attempted send
+  writes a `CapturedEmail` row regardless; real SMTP only in `MAIL_MODE=live` past the filter;
+  SMTP errors logged+swallowed (never break the caller). Boot guards clone the VAPID
+  refuse-to-start block: FATAL on `SEED_DEMO=1 + MAIL_MODE=live + MAIL_PRODUCTION=1`; loud WARN
+  on prod+capture; `MAIL_MODE` defaults capture.
+- **Gate — green.** Static: typecheck + lint:tokens clean, unit **110/110** (incl. 14 new mail
+  tests: the fail-closed dev-filter matrix + the RFC-8058 header/token contract). Full
+  both-engine e2e on a fresh `down -v` fixture stack: **279 passed + 4 capture-mail tests ×2
+  engines** (transactional has no List-Unsubscribe; subscription has both headers; capture never
+  flags delivered; suppression gates subscription only while transactional still records). One
+  pre-existing slice4 webkit flake recovered on retry. **Integration fix (coordinator, 1 line):**
+  `mail.spec.ts` sweep inlined a JSON-stringified value inside a double-quoted SQL string in the
+  `node -e` container seam, so its quotes closed the JS string (`ReferenceError`); reparameterized
+  to a bound `?` like the sibling queries.
+- **Live pipeline proven end-to-end** (opt-in `e2e:mail`, run once at the gate). The app's own
+  live-send test is currently **blocked on the `no-reply@potluckmutualaid.app` credential** —
+  DreamHost returns `535 5.7.8 authentication failed` for it (creds reached the container
+  byte-identical; STARTTLS negotiates; it's the credential/mailbox itself). Isolated and proven
+  it's not code: `testuser1@` authenticates fine, and a full `testuser1→testuser1` self-send
+  went SMTP→DreamHost relay→**real delivery**→IMAP-receipt-confirmed. So transport/TLS/send/IMAP
+  all work; **Aaron to fix the `no-reply@` mailbox** (correct its password in `.env`, provision it
+  as a real mailbox, or auth as a real mailbox while keeping `From: no-reply@`), after which
+  `npm run e2e:mail` goes green with zero code change. README "Configure email" documents the
+  DNS runbook (verify DreamHost auto SPF/DKIM; add DMARC p=none→ramp; merge-SPF gotcha for the
+  eventual Resend switch).
+- **Round-C follow-up recorded:** the unsubscribe HMAC falls back to a committed dev secret when
+  `MAIL_UNSUB_SECRET` is unset — Round C's `/unsub` route must require a real secret in prod
+  (ideally the entrypoint refuses `MAIL_PRODUCTION=1` without it) or tokens are forgeable.
+
 ## Phase 2 Round E — the IA flip (2026-07-05) — PHASE 2 COMPLETE
 
 **Done, and with it all five Phase-2 rounds.** The workflow IA shipped: tab bar is
