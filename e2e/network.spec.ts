@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { login } from './helpers';
+import { login, openHome } from './helpers';
 
 /**
  * Round 1 slice 2 acceptance — the network core behaves like a network:
@@ -118,14 +118,21 @@ test('multi-membership: the switcher re-scopes the whole app; single-membership 
   data = await overview(marie);
   expect(data.households.find((h) => h.id === data.yourHouseholdId)?.name).toBe('Neighbors');
   expect(data.households.map((h) => h.name).sort()).toEqual(['Heise', 'Neighbors']);
-  await expect(marie.getByTestId('pantry-group')).toHaveCount(1);
-  await expect(marie.getByTestId('pantry-group')).toContainText('Neighbors');
-  await expect(marie.getByTestId('pantry-group')).toContainText('your household');
+  // The Home tab re-scopes too: the acting household is now Neighbors (its name
+  // + "your household" head the page), showing its own Garage Shelves pantry.
+  await openHome(marie);
+  await expect(marie.getByRole('heading', { name: 'Neighbors' })).toBeVisible();
+  await expect(marie.getByText('your household')).toBeVisible();
+  await expect(
+    marie.getByTestId('home-pantries').getByTestId('pantry-row').filter({ hasText: 'Garage Shelves' }),
+  ).toBeVisible();
 
   // The choice is sticky across a fresh load of the app.
-  await marie.goto('/');
-  await expect(marie.getByTestId('pantry-group')).toHaveCount(1);
-  await expect(marie.getByTestId('pantry-group')).toContainText('Neighbors');
+  await marie.goto('/home');
+  await expect(marie.getByRole('heading', { name: 'Neighbors' })).toBeVisible();
+  await expect(
+    marie.getByTestId('home-pantries').getByTestId('pantry-row').filter({ hasText: 'Garage Shelves' }),
+  ).toBeVisible();
 
   await marieContext.close();
 });
@@ -135,24 +142,24 @@ test('unconnected and ungranted households are invisible: Nia sees only her own 
 }) => {
   await login(page, 'nia');
 
-  // Pantry groups: only Neighbors (Heise extends no pantry grant on the
-  // share-only edge; In-Laws is not connected at all).
-  await expect(page.getByTestId('pantry-group')).toHaveCount(1);
-  await expect(page.getByTestId('pantry-group')).toContainText('Neighbors');
-  // One net strip — the Heise connection — and never In-Laws.
-  await expect(page.getByTestId('net-strip')).toHaveCount(1);
-  await expect(page.getByTestId('net-strip')).toContainText('Heise');
+  // Neighbors dashboard: one household section — the Heise connection — and
+  // never In-Laws (unconnected).
+  await expect(page.getByTestId('neighbors-household-section')).toHaveCount(1);
+  await expect(page.getByTestId('neighbors-household-section')).toContainText('Heise');
+
+  // Home tab — her own Neighbors pantry (Garage Shelves). Heise extends no
+  // pantry grant on the share-only edge; In-Laws is not connected at all.
+  await openHome(page);
+  await expect(
+    page.getByTestId('home-pantries').getByTestId('pantry-row').filter({ hasText: 'Garage Shelves' }),
+  ).toBeVisible();
 
   const data = await overview(page);
   expect(data.households.map((h) => h.name).sort()).toEqual(['Heise', 'Neighbors']);
   // Heise is visible as a household but extends no pantry grant — its
-  // pantries are not listed.
+  // pantries are not listed. (In-Laws' invisibility is proven above: the
+  // Neighbors dashboard shows exactly one section, Heise — never In-Laws.)
   expect(data.households.find((h) => h.name === 'Heise')?.pantries).toEqual([]);
-
-  // /more household cards mirror the same scope.
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'More' }).click();
-  await expect(page.getByTestId('household-card')).toHaveCount(2);
-  await expect(page.getByTestId('household-card').filter({ hasText: 'In-Laws' })).toHaveCount(0);
 });
 
 test('pantry grant gates ordering: a share-only neighbor gets 404 where a granted household succeeds', async ({
@@ -248,10 +255,12 @@ test('Teen capabilities: draft yes, cross-household submit no; money and invento
   });
   expect(recount.status).toBe(403);
 
-  // manageHousehold denied: no invite affordance, and the API refuses.
-  await theo.getByTestId('tab-bar').getByRole('link', { name: 'More' }).click();
-  await expect(theo.getByRole('heading', { name: 'More' })).toBeVisible();
+  // manageHousehold denied: no invite affordance on the Home tab (where member
+  // management lives after the Round-E IA flip), and the API refuses.
+  await theo.goto('/home');
+  await expect(theo.getByTestId('home-members')).toBeVisible();
   await expect(theo.getByTestId('invite-url')).toHaveCount(0);
+  await expect(theo.getByRole('button', { name: 'Invite a member' })).toHaveCount(0);
   const invite = await rpc(theo, 'invite.create', {});
   expect(invite.status).toBe(403);
 

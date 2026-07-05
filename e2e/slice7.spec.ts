@@ -6,7 +6,7 @@ import {
   type APIRequestContext,
   type Page,
 } from '@playwright/test';
-import { apiLogin, login } from './helpers';
+import { apiLogin, login, openHome } from './helpers';
 
 /**
  * Slice 7 acceptance: PWA installability (manifest, icons, iOS meta,
@@ -469,11 +469,9 @@ test('a 410 from the push service prunes the subscription', async ({ page }, tes
 
 /** Start a draft restock in the signed-in user's own pantry, land on step 3. */
 async function startDraft(page: Page, retailer: string) {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await openHome(page);
   await page
-    .getByTestId('pantry-group')
-    .filter({ hasText: 'your household' })
+    .getByTestId('home-pantries')
     .getByTestId('pantry-row')
     .first()
     .click();
@@ -566,11 +564,10 @@ test('scan buttons are hidden when no camera API exists (plain-http LAN degradat
   expect(del.ok()).toBe(true);
 
   // Pantry inventory: search input renders without its Scan neighbor.
-  // (The wizard screen has no tab bar — go home directly.)
-  await page.goto('/');
+  // (The wizard screen has no tab bar — go to the Home tab directly.)
+  await page.goto('/home');
   await page
-    .getByTestId('pantry-group')
-    .filter({ hasText: 'your household' })
+    .getByTestId('home-pantries')
     .getByTestId('pantry-row')
     .first()
     .click();
@@ -665,9 +662,9 @@ test('order flow: scanning at the pantry opens the add-to-order sheet for the ma
   const { mine } = await householdIds(page);
 
   // Land on the own pantry and grab its id from the URL.
+  await openHome(page);
   await page
-    .getByTestId('pantry-group')
-    .filter({ hasText: 'your household' })
+    .getByTestId('home-pantries')
     .getByTestId('pantry-row')
     .first()
     .click();

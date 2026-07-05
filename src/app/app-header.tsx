@@ -2,11 +2,12 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 import type { ActivityItem } from '@/server/routers/activity';
 import { HouseholdSwitcher } from './more/household-switcher';
+import { ReceiveAction } from './receive-action';
 
 /**
  * Global top toolbar (Phase-2 Round D): acting-household chip (multi-membership
@@ -40,8 +41,8 @@ export function itemHref(item: ActivityItem): string {
   }
 }
 
-/** One-line preview label for a bell-popover row. */
-function itemLabel(item: ActivityItem): string {
+/** One-line preview label for a bell-popover / attention row. */
+export function itemLabel(item: ActivityItem): string {
   switch (item.type) {
     case 'draft':
       return `Receiving at ${item.pantryName}${item.code ? ` · ${item.code}` : ''}`;
@@ -56,7 +57,7 @@ function itemLabel(item: ActivityItem): string {
   }
 }
 
-const GROUP_LABEL: Record<ActivityItem['type'], string> = {
+export const GROUP_LABEL: Record<ActivityItem['type'], string> = {
   draft: 'Receiving',
   'order-in': 'Incoming orders',
   'order-out': 'Your orders',
@@ -69,11 +70,9 @@ const iconBtn =
 
 export function AppHeader({ data }: { data: HeaderData }) {
   const pathname = usePathname();
-  const router = useRouter();
   const trpc = useTRPC();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
-  const [receiveOpen, setReceiveOpen] = useState(false);
 
   const hidden =
     !data ||
@@ -105,14 +104,6 @@ export function AppHeader({ data }: { data: HeaderData }) {
   const multi = data.memberships.length > 1;
   const count = activity.data?.actionableCount ?? 0;
   const preview = (activity.data?.items ?? []).slice(0, 5);
-
-  const goReceive = () => {
-    if (data.pantries.length === 1) {
-      router.push(`/pantries/${data.pantries[0].id}`);
-    } else {
-      setReceiveOpen(true);
-    }
-  };
 
   return (
     <header
@@ -146,15 +137,9 @@ export function AppHeader({ data }: { data: HeaderData }) {
 
       <div className="flex items-center gap-1">
         {data.canReceive && data.pantries.length > 0 && (
-          <button
-            type="button"
-            data-testid="header-receive"
-            aria-label="Receive a shopping trip"
-            onClick={goReceive}
-            className={iconBtn}
-          >
+          <ReceiveAction pantries={data.pantries} testId="header-receive" className={iconBtn}>
             🧺
-          </button>
+          </ReceiveAction>
         )}
 
         <div className="relative">
@@ -234,28 +219,6 @@ export function AppHeader({ data }: { data: HeaderData }) {
         </Sheet>
       )}
 
-      {/* Receive pantry picker (several own pantries). */}
-      {receiveOpen && (
-        <Sheet onClose={() => setReceiveOpen(false)} testId="header-receive-sheet">
-          <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-4 shadow-sm">
-            <h2 className="text-lg font-semibold">Receive into which pantry?</h2>
-            <ul className="flex flex-col gap-1">
-              {data.pantries.map((p) => (
-                <li key={p.id}>
-                  <Link
-                    href={`/pantries/${p.id}`}
-                    data-testid="header-receive-pantry"
-                    onClick={() => setReceiveOpen(false)}
-                    className="flex min-h-11 items-center rounded-lg border border-border px-3 font-medium text-text hover:bg-surface-sunken"
-                  >
-                    {p.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </Sheet>
-      )}
     </header>
   );
 }

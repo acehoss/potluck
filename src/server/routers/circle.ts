@@ -94,6 +94,23 @@ export const circleRouter = router({
     };
   }),
 
+  /**
+   * Circle NAMES only (id + name), for ANY member of the acting household — no
+   * manageConnections gate (unlike `list`, which is connection administration).
+   * The member-visibility SELECT control (P5) needs to show a member their own
+   * household's circles to scope their card to, and hiding yourself needs no
+   * connection-management capability. Leaks nothing but the id+name a member
+   * already lives under.
+   */
+  names: protectedProcedure.query(async ({ ctx }) => {
+    const circles = await db.circle.findMany({
+      where: { householdId: ctx.user.householdId },
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, name: true },
+    });
+    return { circles };
+  }),
+
   /** Create a circle (name 1..40, unique per household → 409; six grant flags). */
   create: protectedProcedure
     .input(z.object({ name: nameSchema, grants: grantsSchema }))

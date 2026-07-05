@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { login, PASSWORD } from './helpers';
+import { gotoStable, login, PASSWORD } from './helpers';
 
 /**
  * Slice 6 acceptance (blueprint 02 anchors): items visible across households,
@@ -26,18 +26,19 @@ const RUN = Date.now().toString(36);
 const uniq = (name: string, project: string) => `${name} ${project}-${RUN}`;
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
-/** Navigate to the Items tab via the tab bar (client-side, like slice 3+). */
+/** Open the Items list (its tab retired in the Round-E IA flip; route stays). */
 async function openItems(page: Page) {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Items' }).click();
+  await page.goto('/items');
   await expect(page).toHaveURL(/\/items$/);
   await expect(page.getByTestId('item-group').first()).toBeVisible();
 }
 
 /** Signed net with the (single) counterparty, in cents, from /ledger's hero. */
 async function netCents(page: Page) {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await gotoStable(page, '/ledger');
   await expect(page.getByTestId('net-hero')).toBeVisible();
   await page.reload();
+  await expect(page.getByTestId('net-hero')).toBeVisible();
   const text = (await page.getByTestId('net-hero').textContent())!;
   const m = text.match(/You're (up|down) \$(\d+)\.(\d{2})/);
   if (!m) {

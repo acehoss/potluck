@@ -1,5 +1,5 @@
 import { expect, test, type APIResponse, type Page } from '@playwright/test';
-import { login } from './helpers';
+import { gotoStable, login, openHome } from './helpers';
 
 /**
  * Orders engine (PLAN "Orders & requests + receiving refinement", Slice B):
@@ -20,14 +20,9 @@ const RUN = Date.now().toString(36);
 
 const uniq = (name: string, project: string) => `${name} ${project}-${RUN}`;
 
-async function openPantryOf(page: Page, household: string | 'own') {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  const group =
-    household === 'own'
-      ? page.getByTestId('pantry-group').filter({ hasText: 'your household' })
-      : page.getByTestId('pantry-group').filter({ hasText: household });
-  await group.getByTestId('pantry-row').first().click();
+async function openOwnPantry(page: Page) {
+  await openHome(page);
+  await page.getByTestId('home-pantries').getByTestId('pantry-row').first().click();
   // Wait for the pantry DETAIL (its always-present back link) rather than a
   // product-row/empty check — on a freshly reseeded stack the home page's own
   // "empty" pantry labels make that ambiguous. (The history link is no longer
@@ -42,7 +37,7 @@ async function receiveLot(
   page: Page,
   opts: { product: string; units: number; total: string; date?: string; existingProduct?: boolean },
 ): Promise<{ restockId: string; pantryId: string; lotId: string }> {
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await page.getByTestId('receive-fab').click();
   await page.getByLabel('Retailer').fill(`Orders-${RUN}`);
   if (opts.date) await page.getByLabel('Receipt date').fill(opts.date);
@@ -83,9 +78,10 @@ async function receiveLot(
 
 /** Signed net with the (single) counterparty, in cents, from /ledger's hero. */
 async function netCents(page: Page): Promise<number> {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await gotoStable(page, '/ledger');
   await expect(page.getByTestId('net-hero')).toBeVisible();
   await page.reload();
+  await expect(page.getByTestId('net-hero')).toBeVisible();
   const text = (await page.getByTestId('net-hero').textContent())!;
   const m = text.match(/You're (up|down) \$(\d+)\.(\d{2})/);
   if (!m) {
@@ -321,9 +317,19 @@ test('the order flow works end to end through the UI (both households)', async (
   const aaron = await ctx.newPage();
   await login(aaron, 'aaron');
   try {
-    // Requester adds 2 to an order via the sheet, then opens the cart.
+    // Requester adds 2 to an order via the sheet, then opens the cart. Aaron
+    // reaches In-Laws' pantry the way a user does: the Neighbors dashboard's
+    // In-Laws section lists its shared pantries, and the row deep-links to the
+    // pantry page (the Round-E "Shared pantries" list on each granted section).
     await freshCart(aaron, pantryId, lotId);
-    await openPantryOf(aaron, 'In-Laws');
+    await aaron.goto('/');
+    await aaron
+      .getByTestId('neighbors-household-section')
+      .filter({ hasText: 'In-Laws' })
+      .getByTestId('neighbors-pantry-row')
+      .first()
+      .click();
+    await expect(aaron).toHaveURL(/\/pantries\//);
     await aaron.getByTestId('product-row').filter({ hasText: product }).getByRole('button').first().click();
     await expect(aaron.getByTestId('order-sheet')).toBeVisible();
     await aaron.getByRole('button', { name: 'More' }).click();
@@ -341,7 +347,7 @@ test('the order flow works end to end through the UI (both households)', async (
     expect(await availability(aaron, pantryId, product)).toBe(2);
 
     // Owner sees it in the incoming list, then fulfills it (start → ready).
-    await page.getByTestId('tab-bar').getByRole('link', { name: 'Orders' }).click();
+    await page.goto('/orders');
     await expect(page.getByTestId('incoming-row').first()).toBeVisible();
     await page.goto(`/orders/${orderId}`);
     await page.getByTestId('order-start-picking').click();
@@ -443,7 +449,7 @@ test('the add-to-order sheet preselects the oldest lot (FIFO)', async ({ page },
   await receiveLot(page, { product, units: 2, total: '4.00', date: '2026-06-01' });
   await receiveLot(page, { product, units: 2, total: '4.40', existingProduct: true });
 
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await page.getByTestId('product-row').filter({ hasText: product }).getByRole('button').first().click();
   const lotSelect = page.getByTestId('order-lot');
   // The oldest lot (dated 2026-06-01 → code 260601-NN) is preselected (FIFO);

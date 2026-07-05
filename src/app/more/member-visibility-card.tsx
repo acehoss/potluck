@@ -10,9 +10,9 @@ import { useTRPC } from '@/lib/trpc';
  * can see their card on a connected household's contact page: ALL (everyone I've
  * connected with) / SELECT (only the listed circles) / PRIVATE. Runs through
  * membership.setVisibility against the ACTING membership — no capability needed
- * to hide yourself. The SELECT circle list is manageConnections-gated
- * server-side (circle.list); a member without it can still pick ALL/PRIVATE and
- * sees the server's error inline if they reach for SELECT.
+ * to hide yourself. The SELECT circle list uses circle.names (any-member,
+ * id+name only), so a plain member without manageConnections can still scope
+ * their card to specific circles (Round E closes that Round-C gap).
  */
 
 type Visibility = 'ALL' | 'SELECT' | 'PRIVATE';
@@ -50,9 +50,9 @@ export function MemberVisibilityCard({
   const [selected, setSelected] = useState<Set<string>>(new Set(circleIds));
   const [error, setError] = useState<string | null>(null);
 
-  // Only fetch circles once the sheet opens — a member without manageConnections
-  // never fires the gated query unless they reach for SELECT.
-  const circles = useQuery({ ...trpc.circle.list.queryOptions(), enabled: open, retry: false });
+  // Only fetch circles once the sheet opens. circle.names is any-member, so a
+  // plain member can scope to SELECT circles without manageConnections.
+  const circles = useQuery({ ...trpc.circle.names.queryOptions(), enabled: open, retry: false });
 
   const setVis = useMutation(
     trpc.membership.setVisibility.mutationOptions({

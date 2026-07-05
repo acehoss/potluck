@@ -34,6 +34,20 @@ type PlanEntry = {
   text: string | null;
 };
 type WeekRecipe = { id: string; title: string; servings: number | null };
+type OutgoingOrder = {
+  id: string;
+  status: string;
+  pantryName: string;
+  ownerHouseholdName: string;
+  lineCount: number;
+};
+type MyPost = { id: string; type: string; title: string; status: string };
+
+const ORDER_STATUS: Record<string, string> = {
+  REQUESTED: 'Requested',
+  PICKING: 'Being picked',
+  READY: 'Ready — go pick up',
+};
 
 const inputClass =
   'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
@@ -84,7 +98,13 @@ function rangeLabel(start: string) {
   return `${fmt(a, true)} – ${fmt(b, !sameMonth)}`;
 }
 
-export function PlanView() {
+export function PlanView({
+  outgoingOrders,
+  myPosts,
+}: {
+  outgoingOrders: OutgoingOrder[];
+  myPosts: MyPost[];
+}) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const todayYmd = useMemo(() => ymd(new Date()), []);
@@ -142,6 +162,64 @@ export function PlanView() {
           </div>
         </div>
       </header>
+
+      {outgoingOrders.length > 0 && (
+        <section data-testid="plan-outgoing-orders" className="flex flex-col gap-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
+            Your orders
+          </h2>
+          <ul className="divide-y divide-border rounded-xl border border-border bg-surface-raised px-4 shadow-sm">
+            {outgoingOrders.map((o) => (
+              <li key={o.id}>
+                <Link
+                  href={`/orders/${o.id}`}
+                  data-testid="plan-order-row"
+                  className="flex min-h-14 items-center justify-between gap-3 py-2.5"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm text-text">
+                      {o.ownerHouseholdName} · {o.pantryName}
+                    </span>
+                    <span className="block text-xs text-text-muted">
+                      {o.lineCount} {o.lineCount === 1 ? 'item' : 'items'}
+                    </span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-text-muted">
+                    {ORDER_STATUS[o.status] ?? o.status}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {myPosts.length > 0 && (
+        <section data-testid="plan-my-posts" className="flex flex-col gap-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
+            Your posts
+          </h2>
+          <ul className="divide-y divide-border rounded-xl border border-border bg-surface-raised px-4 shadow-sm">
+            {myPosts.map((p) => (
+              <li key={p.id}>
+                <Link
+                  href="/shares"
+                  data-testid="plan-post-row"
+                  className="flex min-h-14 items-center justify-between gap-3 py-2.5"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span aria-hidden>{p.type === 'SURPLUS' ? '🥘' : '🙋'}</span>
+                    <span className="truncate text-sm text-text">{p.title}</span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-text-muted">
+                    {p.status.toLowerCase()}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="flex flex-col gap-3">
         {days.map((day) => {
@@ -263,21 +341,37 @@ function AddSheet({
   const [clientKey] = useState(newClientKey);
   const [meal, setMeal] = useState<Meal>('dinner');
   const [kind, setKind] = useState<'recipe' | 'item' | 'note'>('recipe');
-  const [recipeId, setRecipeId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{
+    source: 'own' | 'shared';
+    id: string;
+    baseServings: number | null;
+  } | null>(null);
   const [servings, setServings] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const selectedRecipe = recipes.find((r) => r.id === recipeId) ?? null;
-  const filtered = recipes.filter((r) => r.title.toLowerCase().includes(search.trim().toLowerCase()));
+  // Own book comes from plan.week (the `recipes` prop). Connections' shared books
+  // come from recipe.list — picking one FORKS a copy into your book first (plan
+  // entries are always own-book, Priya's in-calendar picker rule).
+  const recipeList = useQuery(trpc.recipe.list.queryOptions());
+  const q = search.trim().toLowerCase();
+  const filtered = recipes.filter((r) => r.title.toLowerCase().includes(q));
+  const shared = (recipeList.data?.shared ?? []).filter((r) => r.title.toLowerCase().includes(q));
 
   const add = useMutation(
     trpc.plan.addEntry.mutationOptions({ onSuccess: onDone, onError: (e) => setError(e.message) }),
   );
+  const fork = useMutation(trpc.recipe.fork.mutationOptions());
+  const busy = add.isPending || fork.isPending;
 
-  const pickRecipe = (r: WeekRecipe) => {
-    setRecipeId(r.id);
+  const pickOwn = (r: WeekRecipe) => {
+    setSelected({ source: 'own', id: r.id, baseServings: r.servings ?? null });
+    setServings(r.servings ?? null);
+    setError(null);
+  };
+  const pickShared = (r: { id: string; servings: number | null }) => {
+    setSelected({ source: 'shared', id: r.id, baseServings: r.servings ?? null });
     setServings(r.servings ?? null);
     setError(null);
   };
@@ -289,18 +383,29 @@ function AddSheet({
         : 'border border-border-strong text-text hover:bg-surface-sunken'
     }`;
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     if (kind === 'recipe') {
-      if (!recipeId) {
+      if (!selected) {
         setError('Pick a recipe to plan.');
         return;
       }
       const override =
-        selectedRecipe && servings != null && servings !== selectedRecipe.servings
+        selected.baseServings != null && servings != null && servings !== selected.baseServings
           ? servings
           : undefined;
+      let recipeId = selected.id;
+      // A connection's recipe is forked into our book first, then planned.
+      if (selected.source === 'shared') {
+        try {
+          const forked = await fork.mutateAsync({ recipeId: selected.id, clientKey: `${clientKey}-fork` });
+          recipeId = forked.id;
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Could not save that recipe to your book.');
+          return;
+        }
+      }
       add.mutate({ date, meal, kind: 'recipe', recipeId, servingsOverride: override, clientKey });
     } else {
       if (!text.trim()) {
@@ -361,7 +466,7 @@ function AddSheet({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search your book…"
+              placeholder="Search recipes…"
               aria-label="Search recipes"
               className={inputClass}
             />
@@ -369,10 +474,10 @@ function AddSheet({
               data-testid="plan-entry-recipe-picker"
               className="flex max-h-52 flex-col gap-1 overflow-y-auto"
             >
-              {filtered.length === 0 && (
+              {filtered.length === 0 && shared.length === 0 && (
                 <p className="px-1 py-2 text-sm text-text-muted">
-                  {recipes.length === 0
-                    ? 'Your book is empty — add a recipe first, or plan an item instead.'
+                  {recipes.length === 0 && shared.length === 0
+                    ? 'No recipes yet — add one to your book, or plan an item instead.'
                     : 'No recipes match.'}
                 </p>
               )}
@@ -380,9 +485,9 @@ function AddSheet({
                 <button
                   key={r.id}
                   type="button"
-                  onClick={() => pickRecipe(r)}
+                  onClick={() => pickOwn(r)}
                   className={`flex min-h-11 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
-                    recipeId === r.id
+                    selected?.source === 'own' && selected.id === r.id
                       ? 'border-accent bg-accent-soft text-accent-strong'
                       : 'border-border text-text hover:bg-surface-sunken'
                   }`}
@@ -393,9 +498,33 @@ function AddSheet({
                   )}
                 </button>
               ))}
+
+              {shared.length > 0 && (
+                <div data-testid="plan-picker-shared" className="flex flex-col gap-1">
+                  <p className="px-1 pt-2 text-xs font-medium uppercase tracking-wide text-text-muted">
+                    From your connections — saves a copy to your book
+                  </p>
+                  {shared.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      data-testid="plan-shared-recipe"
+                      onClick={() => pickShared(r)}
+                      className={`flex min-h-11 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                        selected?.source === 'shared' && selected.id === r.id
+                          ? 'border-accent bg-accent-soft text-accent-strong'
+                          : 'border-border text-text hover:bg-surface-sunken'
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                      <span className="shrink-0 text-xs text-text-muted">{r.householdName}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {selectedRecipe && (
+            {selected && (
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium text-text">Servings</span>
                 <div className="flex items-center gap-3">
@@ -460,10 +589,10 @@ function AddSheet({
           <button
             type="submit"
             data-testid="plan-add-submit"
-            disabled={add.isPending}
+            disabled={busy}
             className={primaryBtn}
           >
-            {add.isPending ? 'Adding…' : 'Add'}
+            {busy ? 'Adding…' : 'Add'}
           </button>
         </div>
       </form>

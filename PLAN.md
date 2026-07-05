@@ -140,6 +140,45 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 2 Round E — the IA flip (2026-07-05) — PHASE 2 COMPLETE
+
+**Done, and with it all five Phase-2 rounds.** The workflow IA shipped: tab bar is
+**Neighbors(/) · Plan(/plan) · Home(/home) · More** — every old route (/ledger,
+/orders, /items, /recipes, /shares, /shopping) still works, tabs re-parented (deep
+links + muscle memory survive). Gate: fresh `down -v` stack, **272 passed + 4
+intentional skips, playwright exit 0, both engines** (two known-pattern webkit
+flakies, retry-passed).
+
+- **Neighbors (home):** attention strip (activity.list, deep-links only — the
+  density-not-actions rule), needs-&-surpluses preview (the Walt rule), then
+  per-connected-household sections: @handle → /households/[id], net balance +
+  age-of-last-entry → the pair ledger (Settle lives there — the Ledger tab is
+  retired into this), lending line, member avatars, and **shared-pantry rows**
+  (the cross-household order entry point). SEVERED-with-balance sections persist
+  (money stays settleable). Sparse-user honesty verified as nia.
+- **Home:** own pantries + Receive FAB (can/hide on receiveStock; shares one
+  component with the header quick-action), Items/Recipes/Shopping doors, household
+  members/management (moved off More). **Plan:** + outgoing orders + my posts, and
+  the in-calendar picker now lists connections' shared books — picking one forks
+  then plans (the Priya rule). **More:** curated. `circle.names` (any-member,
+  id+name) closes the Round-C gap — member-visibility SELECT no longer needs
+  manageConnections.
+- **Two regressions the team caught itself before ship:** (1) the flip initially
+  left connected pantries unreachable — no UI path to CREATE a cross-household
+  order (both the builder and the e2e teammate flagged it independently); fixed
+  with the Neighbors shared-pantry rows and browser-verified end-to-end. (2) the
+  ledger-new-dot went down with the Ledger tab, orphaning the LedgerSeen
+  settlement nudge; restored on the Neighbors tab, same hasNew/markSeen machinery,
+  lifecycle browser-verified. Recorded because the CATCH is the process working.
+- e2e: suite-wide anchor migration (14 specs; tab clicks → stable routes or the
+  new tabs; helpers gained openHome/openNeighbors/gotoStable), new
+  `neighbors.spec.ts` (5 tests incl. severed-with-balance and founded-household
+  dashboards), slice4's dot assertions retargeted to the Neighbors tab. Docs:
+  blueprint 02 Round-E nav amendment, 03 tab comment, SPEC Home-tab reference.
+- Polish gaps recorded: no spec drives the order flow through `neighbors-pantry-row`
+  yet (browser-verified only); the pre-existing `/ledger` React #418 hydration
+  warning (ledger-view.tsx client-side date formatting) predates the flip — follow-up.
+
 ## Phase 2 Rounds C + D — contact layer & Activity (2026-07-04/05)
 
 **Both done**, built by parallel teams and committed together (one commit: the router

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { login, PASSWORD } from './helpers';
+import { login, openHome, PASSWORD } from './helpers';
 
 /**
  * Round 1 slice 4 acceptance — onboarding + instance admin (REWORK A1/A3/A4/D2):
@@ -120,19 +120,22 @@ test('a household invite founds a new connected household (anonymous acceptance)
     await expect(guest).toHaveURL(/\/$/);
     await expect(guest.getByTestId('tab-bar')).toBeVisible();
 
-    // The first edge exists with Friend grants BOTH ways: the newcomer sees
-    // Heise's shared pantry group, and Aaron sees Casa connected.
+    // The first edge exists with Friend grants BOTH ways: Heise (the inviter)
+    // shows as a section on the newcomer's Neighbors dashboard, their own Casa
+    // household heads the Home tab, and Aaron sees Casa connected.
     await expect(
-      guest.getByTestId('pantry-group').filter({ hasText: casa }),
-    ).toContainText('your household');
-    await expect(guest.getByTestId('pantry-group').filter({ hasText: 'Heise' })).toBeVisible();
+      guest.getByTestId('neighbors-household-section').filter({ hasText: 'Heise' }),
+    ).toBeVisible();
+    await openHome(guest);
+    await expect(guest.getByRole('heading', { name: casa })).toBeVisible();
+    await expect(guest.getByText('your household')).toBeVisible();
 
     // Founded households start pantry-less — the owner creates the first one.
     await guest.getByTestId('add-pantry').click();
     await guest.getByTestId('add-pantry-name').fill('Casa Shelf');
     await guest.getByTestId('add-pantry-save').click();
     await expect(
-      guest.getByTestId('pantry-row').filter({ hasText: 'Casa Shelf' }),
+      guest.getByTestId('home-pantries').getByTestId('pantry-row').filter({ hasText: 'Casa Shelf' }),
     ).toBeVisible();
     await page.reload();
     await expect(
@@ -187,10 +190,10 @@ test('a signed-in user accepts a member invite into a second household and switc
     await expect(theo.getByText("You're signed in as Theo")).toBeVisible();
     await theo.getByTestId('invite-accept-existing').click();
     await theo.waitForURL(/\/$/);
-    // The acting household switched to the new membership…
-    await expect(
-      theo.getByTestId('pantry-group').filter({ hasText: casa }),
-    ).toContainText('your household');
+    // The acting household switched to the new membership: Casa heads the Home tab.
+    await openHome(theo);
+    await expect(theo.getByRole('heading', { name: casa })).toBeVisible();
+    await expect(theo.getByText('your household')).toBeVisible();
     // …and the switcher now exists (multi-membership) listing both.
     await theo.getByTestId('tab-bar').getByRole('link', { name: 'More' }).click();
     const switcher = theo.getByTestId('household-switcher');

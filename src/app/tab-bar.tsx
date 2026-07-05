@@ -6,21 +6,30 @@ import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
+/**
+ * Bottom tab bar (Phase-2 P1, the IA flip): Neighbors (home) · Plan · Home ·
+ * More. "Neighbors" leads with the network — attention items and per-household
+ * sections; "Home" is the acting household's own surface (pantries, items,
+ * recipes, members); "Plan" is the calendar + shopping + outgoing orders + my
+ * posts; "More" is a curated menu. The retired Ledger/Orders tabs keep their
+ * routes (/ledger, /orders) — deep links survive; they're just re-parented onto
+ * Neighbors/Plan. Hidden on auth screens and inside the full-screen receive
+ * wizard.
+ *
+ * The counterparty-ledger nudge (a settlement/adjustment/credit the OTHER
+ * household posted since you last viewed the ledger) rides the NEIGHBORS tab now
+ * that Ledger has no tab of its own — the bell/Activity deliberately doesn't
+ * cover money events, so this stays their only signal. Same ledger.hasNew query
+ * + markSeen clearing as before; only the host tab moved.
+ */
+
 const TABS = [
-  { href: '/', label: 'Pantries', icon: '▣' },
-  { href: '/orders', label: 'Orders', icon: '▤' },
-  { href: '/ledger', label: 'Ledger', icon: '◫' },
-  { href: '/items', label: 'Items', icon: '⛏' },
+  { href: '/', label: 'Neighbors', icon: '🤝' },
+  { href: '/plan', label: 'Plan', icon: '🗓️' },
+  { href: '/home', label: 'Home', icon: '🏠' },
   { href: '/more', label: 'More', icon: '☰' },
 ] as const;
 
-/**
- * Bottom tab bar (blueprint 02). Hidden on auth screens and inside the
- * full-screen receive wizard. All four tabs are live as of slice 6.
- * The Ledger tab carries a "new" dot when the other household posted ledger
- * entries since this user last viewed the ledger (blueprint 01 slice 4 —
- * the v1 counterparty notification; push arrives in slice 7).
- */
 export function TabBar() {
   const pathname = usePathname();
   const trpc = useTRPC();
@@ -39,8 +48,8 @@ export function TabBar() {
   );
 
   // The tab bar lives in the layout and never remounts on client-side
-  // navigation, so re-check explicitly per route change; viewing the ledger
-  // additionally invalidates the query (markSeen).
+  // navigation, so re-check per route change; viewing the ledger invalidates
+  // the query (markSeen).
   const { refetch } = hasNew;
   useEffect(() => {
     if (!hidden) void refetch();
@@ -55,7 +64,7 @@ export function TabBar() {
     >
       {TABS.map((tab) => {
         const active = tab.href === '/' ? pathname === '/' : pathname.startsWith(tab.href);
-        const showDot = tab.href === '/ledger' && hasNew.data?.hasNew === true;
+        const showDot = tab.href === '/' && hasNew.data?.hasNew === true;
         return (
           <Link
             key={tab.href}

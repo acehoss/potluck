@@ -581,10 +581,11 @@ test('UI smoke: compose a surplus, claim it, confirm it, watch it reach FULFILLE
   const P = testInfo.project.name;
   const title = uniq('UI Cukes', P);
 
-  // Aaron composes a counted surplus (quantity 1). The home strip is a link
-  // into /shares, where the composer lives.
+  // Aaron composes a counted surplus (quantity 1). The Neighbors dashboard's
+  // shares section links into /shares, where the composer lives (Round-E IA
+  // flip — the old home strip retired).
   await login(page, 'aaron');
-  await page.getByTestId('shares-strip').click();
+  await page.getByTestId('neighbors-shares-all').click();
   await expect(page).toHaveURL(/\/shares$/);
   await page.getByTestId('share-compose-open').click();
   await expect(page.getByTestId('share-compose-sheet')).toBeVisible();

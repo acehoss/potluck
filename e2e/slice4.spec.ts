@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { login } from './helpers';
+import { gotoStable, login, openHome, openNeighbors } from './helpers';
 
 /**
  * Slice 4 acceptance (blueprint 02 anchors): settle-to-zero with prefills,
@@ -21,15 +21,10 @@ const fmt = (cents: number) =>
 /** Matches the UI's signed rendering: "+$1.23" / "−$1.23" (U+2212 minus). */
 const fmtSigned = (cents: number) => `${cents > 0 ? '+' : '−'}${fmt(Math.abs(cents))}`;
 
-/** Open the first pantry of the matching household section, via the tab bar. */
-async function openPantryOf(page: Page, household: string | 'own') {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(page).toHaveURL(/\/$/);
-  const group =
-    household === 'own'
-      ? page.getByTestId('pantry-group').filter({ hasText: 'your household' })
-      : page.getByTestId('pantry-group').filter({ hasText: household });
-  await group.getByTestId('pantry-row').first().click();
+/** Open the acting household's own first pantry (Home tab → its pantry card). */
+async function openOwnPantry(page: Page) {
+  await openHome(page);
+  await page.getByTestId('home-pantries').getByTestId('pantry-row').first().click();
   await expect(
     page.getByTestId('product-row').first().or(page.getByText(/empty|Nothing to browse/i)),
   ).toBeVisible();
@@ -43,7 +38,7 @@ async function receiveLot(
   page: Page,
   opts: { product: string; units: number; total: string },
 ) {
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await page.getByTestId('receive-fab').click();
   await page.getByLabel('Retailer').fill(`S4-${RUN}`);
   await page.getByRole('button', { name: 'Start' }).click();
@@ -108,9 +103,10 @@ async function orderPickup(
 
 /** Signed net with the (single) counterparty, in cents, from /ledger's hero. */
 async function netCents(page: Page) {
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await gotoStable(page, '/ledger');
   await expect(page.getByTestId('net-hero')).toBeVisible();
   await page.reload();
+  await expect(page.getByTestId('net-hero')).toBeVisible();
   const text = (await page.getByTestId('net-hero').textContent())!;
   const m = text.match(/You're (up|down) \$(\d+)\.(\d{2})/);
   if (!m) {
@@ -193,7 +189,7 @@ test('settle up prefills toward zero, zeroes the pair, and renders from both sid
   const marie = await marieContext.newPage();
   await login(marie, 'marie');
   await expect(marie.getByTestId('ledger-new-dot')).toBeVisible();
-  await marie.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await marie.goto('/ledger');
   const marieRow = marie.getByTestId('ledger-row').filter({ hasText: rowText });
   await expect(marieRow.getByTestId('ledger-row-new')).toBeVisible();
   expect(await marieRow.getAttribute('data-new')).toBe('true');
@@ -222,9 +218,9 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
   const product = uniq('Recount Peas', P);
 
   await login(page, 'aaron');
-  const { lotId, code } = await receiveLot(page, { product, units: 5, total: '5.00' });
+  const { lotId, code, pantryId } = await receiveLot(page, { product, units: 5, total: '5.00' });
   const before = await netCents(page);
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   const row = page.getByTestId('product-row').filter({ hasText: product });
 
   // Recount down: 5 → 3. The sheet shows the app's current count.
@@ -251,7 +247,7 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
   expect(await netCents(page)).toBe(before);
 
   // Both recounts are on the restock detail's adjustment history.
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await row.getByTestId('product-expand').click();
   await page.getByRole('link', { name: code }).click();
   await expect(page).toHaveURL(/\/restocks\//);
@@ -268,8 +264,12 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
     data: { lotId, countAfter: 0 },
   });
   expect(foreign.status()).toBe(403);
-  await openPantryOf(dana, 'Heise');
+  // Dana browses Heise's pantry by its (visibility-gated) URL — the Round-E IA
+  // flip dropped the cross-household pantry list from the shell, but the pantry
+  // page itself is unchanged and reachable for a granted connection.
+  await dana.goto(`/pantries/${pantryId}`);
   const danaRow = dana.getByTestId('product-row').filter({ hasText: product });
+  await expect(danaRow).toBeVisible();
   await danaRow.getByTestId('product-expand').click();
   await expect(danaRow.getByTestId('lot-row').first()).toBeVisible();
   await expect(danaRow.getByTestId('lot-menu')).toHaveCount(0);
@@ -291,7 +291,7 @@ test('write-off requires a reason, decrements, and the owner eats the cost', asy
   await login(page, 'aaron');
   const { lotId, code } = await receiveLot(page, { product, units: 4, total: '8.00' });
   const before = await netCents(page);
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   const row = page.getByTestId('product-row').filter({ hasText: product });
 
   // Sheet: count defaults to all remaining; take it down to 3, pick Damaged.
@@ -311,7 +311,7 @@ test('write-off requires a reason, decrements, and the owner eats the cost', asy
   expect(await netCents(page)).toBe(before);
 
   // History shows the write-off with its reason, typed distinctly.
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await row.getByTestId('product-expand').click();
   await page.getByRole('link', { name: code }).click();
   const adj = page
@@ -392,17 +392,19 @@ test('manual adjustment requires a note and moves the net in the chosen directio
 
   // The note is REQUIRED server-side; household ids come from the net strips
   // (filtered by name — Aaron has a strip per connected counterparty now).
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
+  await openNeighbors(page);
   const inLawsId = (await page
-    .getByTestId('net-strip')
+    .getByTestId('neighbors-household-section')
     .filter({ hasText: 'In-Laws' })
+    .getByTestId('neighbors-balance')
     .getAttribute('href'))!.split('with=')[1];
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
   await login(dana, 'dana');
   const heiseId = (await dana
-    .getByTestId('net-strip')
+    .getByTestId('neighbors-household-section')
     .filter({ hasText: 'Heise' })
+    .getByTestId('neighbors-balance')
     .getAttribute('href'))!.split('with=')[1];
   await danaContext.close();
 
@@ -450,16 +452,15 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   const danaContext = await browser.newContext({ baseURL: BASE });
   const dana = await danaContext.newPage();
   await login(dana, 'dana');
-  await dana.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await dana.goto('/ledger');
   await expect(dana.getByTestId('net-hero')).toBeVisible();
   await expect(dana.getByTestId('ledger-new-dot')).toHaveCount(0); // markSeen landed
-  await dana.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(dana).toHaveURL(/\/$/);
+  await openNeighbors(dana);
 
   // Aaron posts a manual adjustment — the v1 counterparty notification is
   // the in-app "new" marker (push arrives in slice 7).
   await login(page, 'aaron');
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await page.goto('/ledger');
   await page.getByTestId('ledger-menu').click();
   await page.getByTestId('open-adjust').click();
   await page.getByTestId('adjust-amount').fill('0.11');
@@ -473,8 +474,10 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   // payload — a bare toHaveCount(0) could pass vacuously against the stale
   // pre-adjustment cache while the refetch is still in flight.
   const hasNewSettled = page.waitForResponse((r) => r.url().includes('ledger.hasNew'));
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(page.getByTestId('net-strip').filter({ hasText: 'In-Laws' })).toBeVisible();
+  await openNeighbors(page);
+  await expect(
+    page.getByTestId('neighbors-household-section').filter({ hasText: 'In-Laws' }),
+  ).toBeVisible();
   // httpBatchLink may batch other queries (the global header's activity.list)
   // into the same request — the body is then an ARRAY ordered by the URL's
   // comma-joined procedure list, so find hasNew's position, never assume [0].
@@ -485,7 +488,7 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   const hasNewPayload = Array.isArray(hasNewBody) ? hasNewBody[hasNewIdx] : hasNewBody;
   expect(hasNewPayload.result.data.hasNew).toBe(false);
   await expect(page.getByTestId('ledger-new-dot')).toHaveCount(0);
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await page.goto('/ledger');
   const aaronRow = page
     .getByTestId('ledger-row')
     .filter({ hasText: 'Manual adjustment' })
@@ -497,7 +500,7 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   await expect(dana.getByTestId('ledger-new-dot')).toBeVisible();
 
   // …the ledger highlights the new row (marker + data-new)…
-  await dana.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await dana.goto('/ledger');
   // Aaron chose "In-Laws owes us": from Dana's side the entry reads −$0.11.
   const danaRow = dana
     .getByTestId('ledger-row')
@@ -510,10 +513,12 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   // …viewing IS the acknowledgment: the dot clears now, the highlight on the
   // next visit.
   await expect(dana.getByTestId('ledger-new-dot')).toHaveCount(0);
-  await dana.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-  await expect(dana.getByTestId('net-strip').filter({ hasText: 'Heise' })).toBeVisible();
+  await openNeighbors(dana);
+  await expect(
+    dana.getByTestId('neighbors-household-section').filter({ hasText: 'Heise' }),
+  ).toBeVisible();
   await expect(dana.getByTestId('ledger-new-dot')).toHaveCount(0);
-  await dana.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();
+  await dana.goto('/ledger');
   await expect(dana.getByTestId('net-hero')).toBeVisible();
   await expect(danaRow.getByTestId('ledger-row-new')).toHaveCount(0);
 
@@ -532,10 +537,11 @@ test('settle, adjust, and write-off replays with the same clientKey post once', 
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
   const heiseId = (await got.json()).result.data.pantry.householdId as string;
-  await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
+  await openNeighbors(page);
   const inLawsId = (await page
-    .getByTestId('net-strip')
+    .getByTestId('neighbors-household-section')
     .filter({ hasText: 'In-Laws' })
+    .getByTestId('neighbors-balance')
     .getAttribute('href'))!.split('with=')[1];
   const before = await netCents(page);
 
@@ -601,7 +607,7 @@ test('settle, adjust, and write-off replays with the same clientKey post once', 
   });
   expect(writeOff2.ok()).toBe(true);
   expect((await writeOff2.json()).result.data).toEqual(writeOff1Data);
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await expect(
     page.getByTestId('product-row').filter({ hasText: product }).getByTestId('product-total'),
   ).toHaveText('3');
@@ -617,7 +623,7 @@ test('recount and write-off are rejected while the restock is a draft', async ({
   // finalize will overwrite remainingCount, so adjustments against it would
   // record counts that never described the shelf (invariant 9).
   await login(page, 'aaron');
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   await page.getByTestId('receive-fab').click();
   await page.getByLabel('Retailer').fill(`S4-draft-${RUN}`);
   await page.getByRole('button', { name: 'Start' }).click();
@@ -659,7 +665,7 @@ test('a skipped unit photo can be added later from the lot ⋯ menu', async ({
   // "You can add photos later" (blueprint 02 receiving step 4).
   await login(page, 'aaron');
   await receiveLot(page, { product, units: 2, total: '3.00' });
-  await openPantryOf(page, 'own');
+  await openOwnPantry(page);
   const row = page.getByTestId('product-row').filter({ hasText: product });
   await expect(row.locator('img')).toHaveCount(0); // placeholder, no photo yet
 

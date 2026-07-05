@@ -19,8 +19,8 @@ const RUN = Date.now().toString(36);
 const uniq = (name: string, project: string) => `${name}-${project}-${RUN}`;
 
 async function openOwnPantry(page: Page) {
-  await page.goto('/');
-  const ownGroup = page.getByTestId('pantry-group').filter({ hasText: 'your household' });
+  await page.goto('/home');
+  const ownGroup = page.getByTestId('home-pantries');
   await ownGroup.getByTestId('pantry-row').first().click();
   await expect(page.getByTestId('receive-fab')).toBeVisible();
   return page.url().match(/\/pantries\/([^/?]+)/)![1];

@@ -526,8 +526,8 @@ test('UI smoke: plan a recipe, then generate and edit the shopping list', async 
   ).id;
 
   try {
-    // Home strip → /plan.
-    await page.getByTestId('plan-strip').click();
+    // Plan tab → /plan (the home strip retired in the Round-E IA flip).
+    await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();
     await expect(page).toHaveURL(/\/plan$/);
 
     // plan-add is per-day → open the sheet on TODAY's card so the entry lands on

@@ -144,7 +144,7 @@ unilaterally, any time.
 **Onboard:** a member invite adds a person to your household (new account, or a second
 membership for an existing one). A household invite founds a new household — named by the
 newcomer — already connected to yours. New households add their first pantry from the
-Pantries tab.
+Home tab.
 
 **Restock:** snap the receipt → VLM proposes lines → review/correct (Confirm a match /
 Process / Ignore) → set received units and unit photos → reconcile against the receipt

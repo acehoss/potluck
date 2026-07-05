@@ -9,6 +9,26 @@ Bottom tab bar, fixed — `▣ Pantries · ▤ Orders · ◫ Ledger · ⛏ Items
 inside the receive wizard (full-screen flow). *(**Orders** added 2026-07-03 → 5 tabs;
 `/orders` list + `/orders/[id]` detail — see the Order flow section below.)*
 
+> **Amended 2026-07-04 — Round E (the IA flip).** The tab set is now
+> `👥 Neighbors · 🗓️ Plan · 🏠 Home · ☰ More` (four tabs). ~~`▣ Pantries · ▤ Orders ·
+> ◫ Ledger · ⛏ Items · ☰ More`~~ retires. What moved:
+> - **Neighbors** `/` — the root becomes the **network dashboard**: an attention strip
+>   (same source as the Activity bell, Round D) ABOVE a shares section and one section per
+>   connected household — balance (→ the folded-in pair ledger), a lending line, and member
+>   cards into `/households/[id]`. Severed pairs keep a section while a balance survives (B6).
+>   The pair ledger + Settle live under a household section now, so the **Ledger tab retires**.
+> - **Home** `/home` — the old Pantries dashboard (the acting household's pantry cards +
+>   the Receive FAB, plus the Items/Recipes strips) moves here intact.
+> - **Plan** `/plan` — gains an outgoing-orders section, a "my posts" section, and an
+>   in-calendar shared-books recipe picker; the **Orders tab retires** (outgoing → Plan,
+>   incoming → the Activity bell).
+> - **More** — curated menu (connections, admin, profile, install), no longer a sitemap;
+>   the old home strips (shares/recipes/plan) are gone.
+>
+> **Routes stay:** `/ledger`, `/orders`, `/items` still resolve — only their *tabs* are
+> gone (deep links, the balance tap-through, and older bookmarks keep working). The
+> sections below describe the pre-flip shell; read them through this amendment.
+
 - **Pantries** `/` — the old dashboard route becomes this tab. ~~Every pantry across all
   households (transparency principle)~~ *(superseded 2026-07-04 — Round 1)*: the acting
   household's own pantries **+ the SHARED pantries of ACTIVE connections that extend the

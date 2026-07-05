@@ -4,7 +4,20 @@ Potluck (formerly "Private Coop"): a self-hosted web app (PWA) for mutual aid be
 
 ## Current state (2026-07-04)
 
-**v1 shipped, and the "Potluck" mutual-aid rework is COMPLETE — all four rounds.**
+**v1 shipped, the four-round mutual-aid rework is COMPLETE, and Phase 2 (workflow
+IA + circles + contact layer) is COMPLETE — five more rounds, 2026-07-04/05.** The
+app now runs the workflow IA: tabs **Neighbors(/) · Plan · Home · More** (old routes
+/ledger /orders /items all still work — re-parented, not removed), a global header
+(acting-household chip · Receive quick-action · bell → /activity with
+capability-gated inline actions), **circles** as the entire permissions model (named
+per-household grant bundles replace per-connection grants; pantry/item/member
+visibility = ALL/SELECT[circles]/PRIVATE; `grantsFrom` resolves circles behind the
+unchanged authz API; grant loss reads 404), and the **contact layer** (profiles with
+photo/phone/bio, household address + pickup notes, /households/[id] member cards
+with tel:/sms:/vCard — connection IS the gate). Phase-2 decision record: REWORK.md
+"Phase 2" section (focus-group synthesis + P1–P7); per-round records in PLAN.md.
+
+**v1 + rework state (still true underneath):**
 Round 1 (network core, five slices) shipped in an overnight autonomous session
 (2026-07-03→04); Rounds 2–4 shipped 2026-07-04 as coordinated teammate rounds (a
 server / UI / e2e teammate per round, coordinator-integrated): **Round 2** needs &
@@ -27,8 +40,9 @@ What the rework changed structurally (read PLAN.md + docs/REWORK.md before touch
   (`requireCapability`, `hasActiveGrant`, `activeConnectionsOf`, `loadAccessiblePantry`).
   Error convention: missing capability = 403, missing visibility = 404 (never leak
   existence). Money reach is re-checked at the money moment (pickup/finalize).
-- **Per-household `Product`**, `Pantry.shared`/`Item.shared`, `Take.householdId` /
-  `Loan.borrowerHouseholdId` attribution snapshots, instance-settings + `isInstanceAdmin`.
+- **Per-household `Product`**, `Take.householdId` / `Loan.borrowerHouseholdId`
+  attribution snapshots, instance-settings + `isInstanceAdmin`. (The old
+  `Pantry.shared`/`Item.shared` booleans became circle-scoped `visibility` in Phase 2.)
 - Identity is username-or-email; demo seed grew to **three households** (Heise, In-Laws,
   Neighbors) with Teen/multi-membership fixtures — see `prisma/seed.ts`.
 
@@ -37,20 +51,23 @@ Rounds 2–4 added (all connection-scoped, all rider on the same authz choke poi
 **$0 gift** — no ledger entry, the one sanctioned cross-household no-money take;
 blueprint-01 invariant 4 records it), `Recipe`/`RecipeIngredient`/`IngredientLink`,
 `PlanEntry`/`ShoppingItem`/`CategoryAssignment`. New image kinds `shares`/`recipes`.
-Routers `share`/`recipe`/`plan`/`shopping`; new pages `/shares` `/recipes` `/plan`
-`/shopping` ride home-tab strips (the 5-slot tab bar is untouched — a "Kitchen" tab
-consolidation is an open conversation).
+Routers `share`/`recipe`/`plan`/`shopping`. (Their pages originally rode home-tab
+strips; Phase 2's IA flip re-homed them under Neighbors/Plan/Home.)
 
-Migrations added this rework: `20260703100000_network_core` (the big data-preserving
-one), `20260703120000_household_invites`, `20260704090000_shares`,
-`20260704110000_recipes`, `20260704130000_planner`. **Every money invariant and the
+Migrations: `20260703100000_network_core` (the big data-preserving one),
+`20260703120000_household_invites`, `20260704090000_shares`,
+`20260704110000_recipes`, `20260704130000_planner`, `20260704150000_circles`
+(rebuilds Connection/Pantry/Item; proven by scripts/verify-circles-migration.mjs),
+`20260704170000_contact`. **Every money invariant and the
 append-only ledger survived untouched** — shares/recipes/planner add zero money paths
 (gifts post $0 takes, shopping's add-to-order calls the existing `order.addToCart`).
 
-Do not start large autonomous workflows without an explicit ask. The rework's deferred
-list (notifications round, federation build-out, staples/stores/menus/queue,
-capability-hiding polish, connection-scoped image serving, per-invite grant presets)
-lives in REWORK.md's round plan + PLAN.md's round notes — resume from there.
+Do not start large autonomous workflows without an explicit ask. The deferred list
+(notifications round — now incl. ledger events + a persisted Activity feed for
+push/email; minors + the waiting-on-an-adult handoff state; staples/stores/menus/queue;
+federation build-out; connection-scoped image serving; per-invite grant presets; the
+pre-existing /ledger React #418 hydration warning) lives in REWORK.md + PLAN.md's
+round notes — resume from there.
 
 **SPEC.md was rewritten and the blueprints amended for Round 1 (R1S5)** — they describe
 the running app again. Rebrand notes: cookies are `potluck_session`/`potluck_household`

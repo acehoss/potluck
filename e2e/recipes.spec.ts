@@ -455,7 +455,9 @@ test('UI smoke: compose a recipe, save it, then fork it from the connected house
   const title = uniq('UI Frittata', P);
 
   await login(page, 'aaron');
-  await page.getByTestId('recipes-strip').click();
+  // The recipe book moved to a Home-tab strip in the Round-E IA flip.
+  await page.goto('/home');
+  await page.getByTestId('home-recipes').click();
   await expect(page).toHaveURL(/\/recipes$/);
 
   await page.getByTestId('recipe-new').click();

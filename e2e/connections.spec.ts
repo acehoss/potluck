@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { login, PASSWORD } from './helpers';
+import { login, openNeighbors, PASSWORD } from './helpers';
 
 /**
  * Round-1 slice-3 acceptance, RE-WORKED onto Phase-2 circles (REWORK P4):
@@ -181,18 +181,28 @@ test('connection lifecycle: request-by-handle with a circle → directional acce
     });
     expect(accepted.status).toBe('ACTIVE');
 
-    // Fern sees the ACTIVE edge and the In-Laws net strip — but NO In-Laws pantry
-    // group (Neighbors circle extends no pantry grant), and ordering 404s.
-    await fern.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-    await expect(fern.getByTestId('net-strip').filter({ hasText: 'In-Laws' })).toBeVisible();
-    await expect(fern.getByTestId('pantry-group')).toHaveCount(1);
+    // Fern sees the ACTIVE edge and the In-Laws balance on the Neighbors
+    // dashboard — but In-Laws' pantry stays hidden (Neighbors circle extends no
+    // pantry grant): the pantry page 404s and ordering 404s. (The Round-E IA
+    // flip dropped the cross-household pantry list, so visibility is proven by
+    // page access, not a home-list count.)
+    await openNeighbors(fern);
+    await expect(
+      fern.getByTestId('neighbors-household-section').filter({ hasText: 'In-Laws' }),
+    ).toBeVisible();
+    expect(
+      (await fern.request.get(`/pantries/${pantryId}`)).status(),
+      'Neighbors circle: In-Laws pantry hidden',
+    ).toBe(404);
     expect((await rpc(fern, 'order.addToCart', { pantryId, lotId, quantity: 1 })).status).toBe(404);
 
     // Dana MOVES Ferris into Family — the P4 "setGrants" is a circle re-assignment
-    // (unilateral, no consent). Fern's world re-scopes live.
+    // (unilateral, no consent). Fern's world re-scopes live: the pantry is visible.
     await ok(page, 'connection.assign', { connectionId: connId, circleId: inlawsFamily });
-    await fern.reload();
-    await expect(fern.getByTestId('pantry-group')).toHaveCount(2);
+    expect(
+      (await fern.request.get(`/pantries/${pantryId}`)).ok(),
+      'Family circle: In-Laws pantry visible',
+    ).toBe(true);
 
     // Fern submits an order (reserving 2 units) and Dana posts a $1 balance — the
     // sever fallout probes (B6).
@@ -213,8 +223,10 @@ test('connection lifecycle: request-by-handle with a circle → directional acce
     expect(severed.status).toBe('SEVERED');
     expect(severed.canceledOrders).toBe(1);
 
-    await fern.reload();
-    await expect(fern.getByTestId('pantry-group')).toHaveCount(1);
+    expect(
+      (await fern.request.get(`/pantries/${pantryId}`)).status(),
+      'severed: In-Laws pantry hidden again',
+    ).toBe(404);
     const orderPage = await fern.request.get(`/orders/${orderId}`);
     expect(orderPage.ok()).toBe(true);
     expect(await orderPage.text()).toContain('Canceled');
@@ -223,10 +235,12 @@ test('connection lifecycle: request-by-handle with a circle → directional acce
     await ok(page, 'order.submit', { orderId: danaCart.orderId });
     await ok(page, 'order.cancel', { orderId: danaCart.orderId });
 
-    // B6: the balance survives severing — the net strip keeps its entry point
-    // and settlement still posts.
-    await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
-    await expect(page.getByTestId('net-strip').filter({ hasText: 'Ferris' })).toBeVisible();
+    // B6: the balance survives severing — the household section keeps its entry
+    // point and settlement still posts.
+    await openNeighbors(page);
+    await expect(
+      page.getByTestId('neighbors-household-section').filter({ hasText: 'Ferris' }),
+    ).toBeVisible();
     await ok(page, 'ledger.settle', {
       payerHouseholdId: fernHouseholdId,
       payeeHouseholdId: danaHouseholdId,
@@ -297,18 +311,15 @@ test('a pantry set PRIVATE disappears from connections and reappears when re-sha
   const dana = await danaContext.newPage();
   await login(dana, 'dana');
   try {
-    await expect(
-      dana.getByTestId('pantry-group').filter({ hasText: 'Heise' }).getByTestId('pantry-row'),
-    ).toHaveCount(1);
+    // Heise's pantry is visible to Dana (Family grant). The Round-E IA flip
+    // dropped the cross-household pantry list from the shell, so visibility is
+    // proven by page access to the (still visibility-gated) pantry route.
+    expect((await dana.request.get(`/pantries/${heisePantryId}`)).ok()).toBe(true);
 
     // Aaron flips it PRIVATE.
     await ok(page, 'pantry.setVisibility', { pantryId: heisePantryId, visibility: 'PRIVATE' });
 
-    // Dana: the pantry row is gone and the page 404s — but Aaron still sees it.
-    await dana.reload();
-    await expect(
-      dana.getByTestId('pantry-group').filter({ hasText: 'Heise' }).getByTestId('pantry-row'),
-    ).toHaveCount(0);
+    // Dana: the pantry page 404s now — but Aaron still sees it.
     expect((await dana.request.get(`/pantries/${heisePantryId}`)).status()).toBe(404);
     await page.goto(`/pantries/${heisePantryId}`);
     await expect(page.getByRole('heading', { name: /Basement Pantry/ })).toBeVisible();

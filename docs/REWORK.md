@@ -480,14 +480,15 @@ recorded here). All five voted adopt-with-changes on the workflow-tab sketch.
 
 ### Round plan (team pattern: server → UI ∥ e2e per round, both-engine gate each)
 
-- **Round A — receiving tweaks** (P7; small, ships first).
-- **Round B — circles** (P4): schema + data-preserving migration + authz swap
-  (grantsFrom resolves the granter's circle; choke-point API unchanged) +
-  circle management UI + pantry/item scoping controls.
-- **Round C — contact layer** (P5): profile/address schema + member cards/detail +
-  request-card + ready-order pickup address; member visibility via circles.
-- **Round D — toolbar + Activity**: global top bar (switcher chip · Receive
-  shortcut · bell), Activity screen with inline actions, bell popover preview.
-- **Round E — the IA flip** (P1/P2/P3, last, one commit): Neighbors/Plan/Home/More,
-  ledger fold-in, Plan additions (outgoing orders, my posts, in-calendar recipe
-  picker), can/hide affordance pass, specs/blueprints/e2e updated together.
+**ALL FIVE ROUNDS SHIPPED 2026-07-04/05** — per-round records in PLAN.md.
+
+- ✅ **Round A — receiving tweaks** (P7).
+- ✅ **Round B — circles** (P4): migration proven behavior-equivalent; authz
+  choke-point API unchanged; grant revocation uniformly reads 404.
+- ✅ **Round C — contact layer** (P5): connection-is-the-gate reads; request
+  previews leak name/photo/bio only; shared vCard resolver.
+- ✅ **Round D — toolbar + Activity**: capability-gated actionable counts; money
+  never inlined; can/hide proven with the Teen fixture.
+- ✅ **Round E — the IA flip** (P1/P2/P3): Neighbors/Plan/Home/More, routes stable,
+  ledger folded into Neighbors (dot on the Neighbors tab), shared-pantry rows as
+  the order entry, in-calendar shared-book picker (fork-then-plan).

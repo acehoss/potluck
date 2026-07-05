@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { login } from './helpers';
+import { login, openHome } from './helpers';
 
 /**
  * Slice 1 acceptance: auth, invite-only registration, and the household
@@ -21,28 +21,21 @@ test('anonymous visitors are redirected to login', async ({ page }) => {
 test('a member signs in and sees the households their connections grant', async ({ page }) => {
   await login(page, 'aaron');
 
-  // Pantries tab: pantry GROUPS render only where the pantry grant reaches
-  // us — Heise (own) and In-Laws (full-grant connection); Neighbors is
-  // connected share-only, so its pantries stay invisible (REWORK B2/B4).
-  const groups = page.getByTestId('pantry-group');
-  await expect(groups).toHaveCount(2);
-  await expect(groups.first()).toContainText('Heise');
-  await expect(groups.last()).toContainText('In-Laws');
-  await expect(page.getByTestId('pantry-row')).toHaveCount(2);
-  // Net strips cover every connected counterparty, grants or not.
-  await expect(page.getByTestId('net-strip')).toHaveCount(2);
+  // Neighbors dashboard (the root after the Round-E IA flip): one section per
+  // connected counterparty — In-Laws (full grant) and Neighbors (share-only) —
+  // and each section carries that household's visible members. In-Laws → Dana.
+  const sections = page.getByTestId('neighbors-household-section');
+  await expect(sections).toHaveCount(2);
+  await expect(sections.filter({ hasText: 'In-Laws' })).toContainText('Dana');
+  await expect(sections.filter({ hasText: 'Neighbors' })).toBeVisible();
 
-  // Members moved to the More tab; every ACTIVE-connected household shows.
-  await page.goto('/more');
-  await expect(page.getByTestId('household-card')).toHaveCount(3);
-  // Scope to the household member lists — the Round-C profile card also
-  // renders the signed-in user's name on /more (strict-mode collision).
+  // Home tab: the acting household's OWN pantries and members only — the
+  // network's pantries/members live on Neighbors, not here (REWORK P1).
+  await openHome(page);
   await expect(
-    page.getByTestId('household-card').filter({ hasText: 'Heise' }).getByText('Aaron', { exact: true }),
+    page.getByTestId('home-pantries').getByTestId('pantry-row').filter({ hasText: 'Basement Pantry' }),
   ).toBeVisible();
-  await expect(
-    page.getByTestId('household-card').filter({ hasText: 'In-Laws' }).getByText('Dana', { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId('home-members').getByText('Aaron', { exact: true })).toBeVisible();
 });
 
 test('login rejects a wrong password', async ({ page }) => {
@@ -73,7 +66,8 @@ test('a member invites someone, who registers and appears in the household', asy
   // project name to 4 chars so 'terry-<project>-<run>' always fits the cap.
   const username = `terry-${testInfo.project.name.slice(0, 4)}-${RUN}`;
   await login(page, 'aaron');
-  await page.goto('/more');
+  // Member management moved to the Home tab in the Round-E IA flip.
+  await page.goto('/home');
 
   await page.getByPlaceholder('Name (optional)').fill(invitee);
   await page.getByRole('button', { name: 'Invite a member' }).click();
@@ -91,15 +85,17 @@ test('a member invites someone, who registers and appears in the household', asy
   await page.getByLabel('Password').fill('terry-password-123');
   await page.getByRole('button', { name: 'Join household' }).click();
 
-  await expect(page.getByText('your household')).toBeVisible();
-  await page.goto('/more');
-  const heiseCard = page.getByTestId('household-card').filter({ hasText: 'Heise' });
-  await expect(heiseCard.getByText(invitee, { exact: true })).toBeVisible();
+  // Signed in, landed on the Neighbors dashboard; they now appear among Heise's
+  // members on the Home tab.
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('tab-bar')).toBeVisible();
+  await page.goto('/home');
+  await expect(page.getByTestId('home-members').getByText(invitee, { exact: true })).toBeVisible();
 });
 
 test('an invite link cannot be used twice', async ({ page }, testInfo) => {
   await login(page, 'dana');
-  await page.goto('/more');
+  await page.goto('/home');
 
   await page.getByRole('button', { name: 'Invite a member' }).click();
   const inviteUrl = await page.getByTestId('invite-url').textContent();
@@ -119,7 +115,8 @@ test('an invite link cannot be used twice', async ({ page }, testInfo) => {
   // Correct the username and finish; the invite is only claimed on success.
   await page.getByLabel('Username').fill(`robin-${testInfo.project.name.slice(0, 4)}-${RUN}`);
   await page.getByRole('button', { name: 'Join household' }).click();
-  await expect(page.getByText('your household')).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('tab-bar')).toBeVisible();
 
   await page.context().clearCookies();
   await page.goto(inviteUrl!);

@@ -130,7 +130,7 @@ phone-in-a-basement use: every text pair below clears WCAG AA 4.5:1 (ratios veri
 // Badge ("your household", "on loan", lot codes)
 <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
 
-// Tab bar (bottom nav; live set since the orders round: Pantries · Orders · Ledger · Items · More)
+// Tab bar (bottom nav; live set since the Round-E IA flip, 2026-07-04: Neighbors · Plan · Home · More)
 <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)]">
   <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-accent">        {/* active */}
   <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-text-muted">    {/* inactive */}
