@@ -506,7 +506,13 @@ test('UI smoke: plan a recipe, then generate and edit the shopping list', async 
   const recipeTitle = uniq('UI Plan Recipe', P);
   const ingName = uniq('UI Ingredient', P);
   const manualName = uniq('UI Manual', P);
-  const today = new Date().toISOString().slice(0, 10);
+  // LOCAL calendar day, matching the plan UI's client-side "Today" (ymd of
+  // new Date()). toISOString() is UTC and lands on TOMORROW during evening
+  // hours west of Greenwich — the entry would be planned on local-today via
+  // the Today card while the generate range asked for UTC-today. Bit us at
+  // 20:19 EDT.
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   await login(page, 'aaron');
   // A known recipe (one ingredient) so the picker has a deterministic target and

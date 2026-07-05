@@ -1,8 +1,33 @@
-import { activeConnectionsOf } from '../authz';
+import { z } from 'zod';
+import { activeConnectionsOf, requireCapability } from '../authz';
 import { db } from '../db';
 import { protectedProcedure, router } from '../trpc';
 
 export const householdRouter = router({
+  /**
+   * Edit the acting household's pickup logistics (REWORK P5, Round C): the
+   * address + "usual pickup notes" a connected household sees on the card.
+   * Household management (A3a). undefined = keep, null/'' = clear.
+   */
+  updateContact: protectedProcedure
+    .input(
+      z.object({
+        address: z.string().trim().max(300).nullish(),
+        pickupNotes: z.string().trim().max(500).nullish(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'manageHousehold');
+      await db.household.update({
+        where: { id: ctx.user.householdId },
+        data: {
+          address: input.address === undefined ? undefined : input.address || null,
+          pickupNotes: input.pickupNotes === undefined ? undefined : input.pickupNotes || null,
+        },
+      });
+      return { ok: true };
+    }),
+
   /**
    * The acting household plus its ACTIVE connections (REWORK B4 replaces
    * SPEC §2's "everyone sees everything"): connected households appear with

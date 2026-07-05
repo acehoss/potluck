@@ -7,7 +7,10 @@ import { InviteMember } from '../invite-member';
 import { LogoutButton } from '../logout-button';
 import { CirclesCard } from './circles-card';
 import { ConnectionsCard } from './connections-card';
+import { HouseholdContactCard } from './household-contact-card';
 import { HouseholdSwitcher } from './household-switcher';
+import { MemberVisibilityCard } from './member-visibility-card';
+import { ProfileCard } from './profile-card';
 import { InstallCard, NotificationsCard } from './pwa-cards';
 
 /** More tab (blueprint 02): household members, invite link, sign out. */
@@ -31,6 +34,15 @@ export default async function MorePage() {
   ).map((h) => ({ id: h.id, name: h.name, members: h.memberships.map((m) => m.user) }));
   households.sort((a, b) => (a.id === user.householdId ? -1 : b.id === user.householdId ? 1 : 0));
 
+  // The acting membership's own card visibility + the circles it's scoped to
+  // when SELECT (REWORK P5) — feeds the self-serve MemberVisibilityCard.
+  const myVisibilityCircleIds = (
+    await db.membershipCircle.findMany({
+      where: { membershipId: user.activeMembership.id },
+      select: { circleId: true },
+    })
+  ).map((r) => r.circleId);
+
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex items-center justify-between gap-4">
@@ -53,6 +65,9 @@ export default async function MorePage() {
             activeHouseholdId={user.householdId}
           />
         )}
+
+        <ProfileCard />
+
         {households.map((household) => {
           const isYours = household.id === user.householdId;
           return (
@@ -82,10 +97,29 @@ export default async function MorePage() {
                   <li key={member.id}>{member.name}</li>
                 ))}
               </ul>
+              <Link
+                href={`/households/${household.id}`}
+                data-testid="people-contact-link"
+                className="mt-3 inline-flex min-h-11 w-fit items-center gap-1 text-sm font-medium text-accent transition-colors hover:text-accent-strong"
+              >
+                People &amp; contact →
+              </Link>
               {isYours && user.activeMembership.manageHousehold && <InviteMember />}
             </section>
           );
         })}
+
+        <HouseholdContactCard
+          householdName={user.household.name}
+          address={user.household.address}
+          pickupNotes={user.household.pickupNotes}
+          canManage={user.activeMembership.manageHousehold}
+        />
+        <MemberVisibilityCard
+          membershipId={user.activeMembership.id}
+          visibility={user.activeMembership.visibility as 'ALL' | 'SELECT' | 'PRIVATE'}
+          circleIds={myVisibilityCircleIds}
+        />
 
         <ConnectionsCard />
         <CirclesCard />

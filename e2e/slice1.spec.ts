@@ -35,8 +35,14 @@ test('a member signs in and sees the households their connections grant', async 
   // Members moved to the More tab; every ACTIVE-connected household shows.
   await page.goto('/more');
   await expect(page.getByTestId('household-card')).toHaveCount(3);
-  await expect(page.getByText('Aaron', { exact: true })).toBeVisible();
-  await expect(page.getByText('Dana', { exact: true })).toBeVisible();
+  // Scope to the household member lists — the Round-C profile card also
+  // renders the signed-in user's name on /more (strict-mode collision).
+  await expect(
+    page.getByTestId('household-card').filter({ hasText: 'Heise' }).getByText('Aaron', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId('household-card').filter({ hasText: 'In-Laws' }).getByText('Dana', { exact: true }),
+  ).toBeVisible();
 });
 
 test('login rejects a wrong password', async ({ page }) => {

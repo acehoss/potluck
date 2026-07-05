@@ -24,6 +24,8 @@ type Order = {
   pantryId: string;
   pantryName: string;
   ownerHouseholdName: string;
+  ownerAddress: string | null;
+  ownerPickupNotes: string | null;
   requesterHouseholdName: string;
   requestedAt: string | null;
   readyAt: string | null;
@@ -128,6 +130,37 @@ export function OrderDetail({
         {order.status === 'PICKED_UP' && order.pickedUpAt && <> · picked up {fmtDate(order.pickedUpAt)}</>}
         {order.status === 'READY' && <> · set aside for you</>}
       </p>
+
+      {/* Ready-order pickup logistics for the buyer (REWORK P5). */}
+      {role.isRequester &&
+        order.status === 'READY' &&
+        (order.ownerAddress || order.ownerPickupNotes) && (
+          <div
+            data-testid="order-pickup-info"
+            className="flex flex-col gap-2 rounded-xl border border-border bg-surface-raised p-4 shadow-sm"
+          >
+            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">
+              Pickup at {order.ownerHouseholdName}
+            </p>
+            {order.ownerAddress && (
+              <>
+                <p className="whitespace-pre-line text-base text-text">{order.ownerAddress}</p>
+                <a
+                  data-testid="order-map-link"
+                  href={`https://maps.apple.com/?q=${encodeURIComponent(order.ownerAddress)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex min-h-11 w-fit items-center gap-2 rounded-lg bg-accent-soft px-4 py-2.5 text-sm font-medium text-accent-strong transition-colors hover:bg-accent-soft/70"
+                >
+                  📍 Open in maps
+                </a>
+              </>
+            )}
+            {order.ownerPickupNotes && (
+              <p className="whitespace-pre-line text-sm text-text-muted">{order.ownerPickupNotes}</p>
+            )}
+          </div>
+        )}
 
       {lines.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border-strong px-6 py-8 text-center text-sm text-text-muted">

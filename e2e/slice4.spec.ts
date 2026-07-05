@@ -475,8 +475,14 @@ test('the counterparty gets the new marker and viewing the ledger clears it', as
   const hasNewSettled = page.waitForResponse((r) => r.url().includes('ledger.hasNew'));
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Pantries' }).click();
   await expect(page.getByTestId('net-strip').filter({ hasText: 'In-Laws' })).toBeVisible();
-  const hasNewBody = await (await hasNewSettled).json();
-  const hasNewPayload = Array.isArray(hasNewBody) ? hasNewBody[0] : hasNewBody;
+  // httpBatchLink may batch other queries (the global header's activity.list)
+  // into the same request — the body is then an ARRAY ordered by the URL's
+  // comma-joined procedure list, so find hasNew's position, never assume [0].
+  const hasNewRes = await hasNewSettled;
+  const hasNewBody = await hasNewRes.json();
+  const hasNewProcs = new URL(hasNewRes.url()).pathname.split('/').pop()!.split(',');
+  const hasNewIdx = Math.max(hasNewProcs.indexOf('ledger.hasNew'), 0);
+  const hasNewPayload = Array.isArray(hasNewBody) ? hasNewBody[hasNewIdx] : hasNewBody;
   expect(hasNewPayload.result.data.hasNew).toBe(false);
   await expect(page.getByTestId('ledger-new-dot')).toHaveCount(0);
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Ledger' }).click();

@@ -4,7 +4,7 @@ set -e
 npx prisma migrate deploy
 
 # Image volume layout (blueprint 04 §1); sh has no brace expansion.
-mkdir -p /data/images/receipts /data/images/units /data/images/items /data/images/shares /data/images/recipes
+mkdir -p /data/images/receipts /data/images/units /data/images/items /data/images/shares /data/images/recipes /data/images/avatars
 
 if [ "$SEED_DEMO" = "1" ]; then
   npx tsx prisma/seed.ts

@@ -1,9 +1,11 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
+import { Avatar } from './profile-card';
 
 /**
  * Connection management (REWORK P4 circles): the /more card where a household
@@ -57,7 +59,7 @@ const inputClass =
  * name plus a plain summary of what it grants — the same everywhere a household
  * chooses which of ITS circles to place a counterparty in.
  */
-function CirclePicker({
+export function CirclePicker({
   circles,
   value,
   onChange,
@@ -117,7 +119,7 @@ function statusPill(status: string, requestedByUs: boolean) {
 }
 
 /** Pick a sensible default circle to preselect (Friends-ish, else the first). */
-function defaultCircleId(circles: Circle[]): string | null {
+export function defaultCircleId(circles: Circle[]): string | null {
   if (circles.length === 0) return null;
   const friend = circles.find((c) => c.name.toLowerCase() === 'friends');
   return (friend ?? circles[0]).id;
@@ -222,19 +224,34 @@ export function ConnectionsCard() {
                       They grant us: {grantsSummary(c.theyGrant)}
                     </p>
                   )}
+                  {c.status === 'ACTIVE' && (
+                    <Link
+                      href={`/households/${c.counterparty.id}`}
+                      data-testid="people-contact-link"
+                      className="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-medium text-accent transition-colors hover:text-accent-strong"
+                    >
+                      People &amp; contact →
+                    </Link>
+                  )}
                 </div>
               )}
 
-              {/* Incoming request: answer it, choosing a circle first. */}
-              {canManage && c.status === 'PENDING' && !c.requestedByUs && (
-                <IncomingResponder
-                  circles={circles}
-                  onAccept={(circleId) =>
-                    respond.mutate({ connectionId: c.id, accept: true, circleId })
-                  }
-                  onDecline={() => respond.mutate({ connectionId: c.id, accept: false })}
-                  pending={respond.isPending}
-                />
+              {/* Incoming request: see who's asking (any member), then answer
+                  it choosing a circle first (manageConnections only). */}
+              {c.status === 'PENDING' && !c.requestedByUs && (
+                <div className="flex flex-col gap-3">
+                  <RequestPreview connectionId={c.id} />
+                  {canManage && (
+                    <IncomingResponder
+                      circles={circles}
+                      onAccept={(circleId) =>
+                        respond.mutate({ connectionId: c.id, accept: true, circleId })
+                      }
+                      onDecline={() => respond.mutate({ connectionId: c.id, accept: false })}
+                      pending={respond.isPending}
+                    />
+                  )}
+                </div>
               )}
 
               {/* Move + sever controls (our side, any non-severed edge). */}
@@ -485,6 +502,47 @@ function InviteHousehold() {
         <p role="alert" className="text-sm text-danger">
           {error}
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Name-only preview of the household behind an incoming request (REWORK P5):
+ * requester household name + member mini-cards (photo, name, bio) so the
+ * addressee can "see who before I say yes." No phone/email/address pre-accept —
+ * the server (contacts.requestPreview) returns exactly this narrow shape.
+ */
+function RequestPreview({ connectionId }: { connectionId: string }) {
+  const trpc = useTRPC();
+  const preview = useQuery({
+    ...trpc.contacts.requestPreview.queryOptions({ connectionId }),
+    retry: false,
+  });
+
+  if (!preview.data) return null;
+  const { householdName, members } = preview.data;
+
+  return (
+    <div
+      data-testid="request-preview"
+      className="flex flex-col gap-2 rounded-lg border border-border bg-surface-sunken p-3"
+    >
+      <p className="text-sm text-text">
+        <span className="font-medium">{householdName}</span> wants to connect.
+      </p>
+      {members.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {members.map((m, i) => (
+            <li key={i} className="flex items-center gap-3">
+              <Avatar photoPath={m.photoPath} name={m.name} className="size-10" />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-text">{m.name}</p>
+                {m.bio && <p className="truncate text-xs text-text-muted">{m.bio}</p>}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

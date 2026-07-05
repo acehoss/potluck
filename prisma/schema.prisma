@@ -14,6 +14,13 @@ model Household {
   // address (REWORK E2). Assigned at creation; raw cuids never leave the
   // instance unqualified.
   slug      String   @unique
+  // Contact layer (REWORK P5, Round C): the household's pickup logistics,
+  // shown on a connected household's card. address is a free-text (multiline)
+  // location; pickupNotes is the focus-group's top-ranked field ("side door,
+  // text when 5 min out"). Visible to any ACTIVE-connected household — the
+  // connection itself is the gate (P5).
+  address     String?
+  pickupNotes String?
   createdAt DateTime @default(now())
 
   memberships Membership[]
@@ -48,6 +55,13 @@ model User {
   // new-household-invite toggle and the admin usage view. Instance-scoped, so
   // it lives on User, not Membership.
   isInstanceAdmin Boolean @default(false)
+  // Contact layer (REWORK P5, Round C): the person's card. photoPath is an
+  // "avatars"-kind image; phone is free text (UI renders tel:/sms:); bio is a
+  // short blurb. All optional — visibility on a household card is governed by
+  // Membership.visibility + circles, never by presence.
+  photoPath    String?
+  phone        String?
+  bio          String?
   createdAt    DateTime @default(now())
 
   memberships       Membership[]

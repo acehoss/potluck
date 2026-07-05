@@ -19,7 +19,12 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
     where: { id },
     include: {
       pantry: {
-        select: { id: true, name: true, householdId: true, household: { select: { name: true } } },
+        select: {
+          id: true,
+          name: true,
+          householdId: true,
+          household: { select: { name: true, address: true, pickupNotes: true } },
+        },
       },
       household: { select: { name: true } },
       lines: {
@@ -72,6 +77,10 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         pantryId: order.pantry.id,
         pantryName: order.pantry.name,
         ownerHouseholdName: order.pantry.household.name,
+        // Seller pickup logistics (REWORK P5): shown to the BUYER on a READY
+        // cross-household order. Household-level info the connected buyer may see.
+        ownerAddress: cross ? order.pantry.household.address : null,
+        ownerPickupNotes: cross ? order.pantry.household.pickupNotes : null,
         requesterHouseholdName: order.household.name,
         requestedAt: order.requestedAt?.toISOString() ?? null,
         readyAt: order.readyAt?.toISOString() ?? null,

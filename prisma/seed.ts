@@ -38,15 +38,35 @@ const FIXTURES = [
     household: 'Heise',
     slug: 'heise',
     pantry: 'Basement Pantry',
+    // Contact layer (P5): real households get an address + pickup notes so the
+    // Round C card + e2e have fixtures.
+    address: '742 Evergreen Terrace\nSpringfield',
+    pickupNotes: 'Side door off the driveway — text when you’re 5 minutes out.',
     users: [
-      { name: 'Aaron', username: 'aaron', email: 'aaron@demo.coop', isInstanceAdmin: true },
-      { name: 'Marie', username: 'marie', email: 'marie@demo.coop', isInstanceAdmin: false },
+      {
+        name: 'Aaron',
+        username: 'aaron',
+        email: 'aaron@demo.coop',
+        isInstanceAdmin: true,
+        phone: '555-0142',
+        bio: 'Instance admin. Bakes sourdough and hoards mason jars.',
+      },
+      {
+        name: 'Marie',
+        username: 'marie',
+        email: 'marie@demo.coop',
+        isInstanceAdmin: false,
+        phone: '555-0143',
+        bio: 'Splits time between Heise and the Neighbors household.',
+      },
       {
         name: 'Theo',
         username: 'theo',
         email: 'theo@demo.coop',
         isInstanceAdmin: false,
         preset: TEEN_PRESET,
+        phone: '555-0144',
+        bio: null,
       },
     ],
   },
@@ -54,24 +74,50 @@ const FIXTURES = [
     household: 'In-Laws',
     slug: 'in-laws',
     pantry: 'Basement Pantry',
-    users: [{ name: 'Dana', username: 'dana', email: 'dana@demo.coop', isInstanceAdmin: false }],
+    address: '18 Oakhurst Lane\nShelbyville',
+    pickupNotes: 'Ring the bell twice; the dog is friendly.',
+    users: [
+      {
+        name: 'Dana',
+        username: 'dana',
+        email: 'dana@demo.coop',
+        isInstanceAdmin: false,
+        phone: '555-0188',
+        bio: 'Gardener with a chest freezer full of surplus.',
+      },
+    ],
   },
   {
     household: 'Neighbors',
     slug: 'neighbors',
     pantry: 'Garage Shelves',
-    users: [{ name: 'Nia', username: 'nia', email: 'nia@demo.coop', isInstanceAdmin: false }],
+    address: '744 Evergreen Terrace',
+    pickupNotes: 'Leave pickups on the porch bench if we’re out.',
+    users: [
+      {
+        name: 'Nia',
+        username: 'nia',
+        email: 'nia@demo.coop',
+        isInstanceAdmin: false,
+        phone: '555-0166',
+        bio: 'Right next door — share-only for now.',
+      },
+    ],
   },
 ] satisfies Array<{
   household: string;
   slug: string;
   pantry: string;
+  address: string;
+  pickupNotes: string;
   users: Array<{
     name: string;
     username: string;
     email: string;
     isInstanceAdmin: boolean;
     preset?: CapabilityFlags;
+    phone?: string | null;
+    bio?: string | null;
   }>;
 }>;
 
@@ -127,18 +173,25 @@ async function main() {
     household ??= await db.household.create({
       data: { name: fixture.household, slug: fixture.slug },
     });
+    // Contact layer (P5): keep the demo address/pickup notes current on re-seed.
+    await db.household.update({
+      where: { id: household.id },
+      data: { address: fixture.address, pickupNotes: fixture.pickupNotes },
+    });
     householdByName.set(fixture.household, household.id);
 
     for (const user of fixture.users) {
       const created = await db.user.upsert({
         where: { email: user.email },
-        update: {},
+        update: { phone: user.phone ?? null, bio: user.bio ?? null },
         create: {
           name: user.name,
           username: user.username,
           email: user.email,
           passwordHash,
           isInstanceAdmin: user.isInstanceAdmin,
+          phone: user.phone ?? null,
+          bio: user.bio ?? null,
         },
       });
       userByUsername.set(user.username, created.id);

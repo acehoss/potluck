@@ -140,6 +140,65 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 2 Rounds C + D — contact layer & Activity (2026-07-04/05)
+
+**Both done**, built by parallel teams and committed together (one commit: the router
+registrations in `index.ts` interleave, so the rounds aren't cleanly bisectable —
+recorded tradeoff).
+
+**Round C — contact layer (REWORK §P5).** Additive migration `20260704170000_contact`:
+`User.photoPath/phone/bio` (new **avatars** image kind) + `Household.address/
+pickupNotes`. Reads: `contacts.household` — **the connection IS the gate** (ACTIVE edge
+or own, else 404; no capability, no grant — the share-only edge exposes pickup
+logistics by design), members filtered by `reachesMember` (visibility enum is
+`ALL|SELECT|PRIVATE` — Round B's spelling, kept); `contacts.requestPreview` for PENDING
+incoming shows exactly {name, photoPath, bio} — no phone/email/address pre-accept
+(Walt's "see who before I say yes", minimally). `profile.update` self-only;
+`household.updateContact` manageHousehold; `membership.setVisibility` self-or-manager.
+vCard: `GET /api/vcard/[userId]` and the tRPC read share ONE resolver
+(`src/server/contacts.ts`) so the download can never leak a member the card UI
+wouldn't; RFC-6350 escaping unit-tested. UI: profile/household-contact/my-visibility
+cards on More (edit-in-sheets), the `/households/[id]` contact page (pickup-logistics
+FIRST: address → map link → pickup-notes callout → member cards with big photos →
+detail sheet with separate large tel:/sms:/mailto: rows + "Save contact" vCard),
+request-preview cards in the responder, and READY-order pickup info on the buyer's
+order detail. e2e `contacts.spec.ts` 7 tests × 2 engines incl. the UI smoke;
+restore-invariant DB-verified post-run.
+
+**Round D — global toolbar + Activity (focus-group consensus).** New `activity.list`
+derived read (NO schema, NO mutations): five item types — own restock drafts, incoming
+orders (REQUESTED/PICKING actionable for fulfill; owner-side READY informative),
+outgoing orders (READY actionable via spend — the pickup gate), pending connection
+requests, pending claims on live posts — with `actionableCount` computed per the ACTING
+USER's capabilities (the badge is a to-do count, not a read-state). Global sticky
+header in layout.tsx: acting-household chip (multi-membership; brand mark otherwise),
+Receive quick-action (hidden without receiveStock/pantries — can/hide), bell + badge +
+preview popover (top 5, deep-links only) → `/activity` with grouped sections and
+inline actions that REUSE existing mutations. **Money is never inlined** — a READY
+outgoing order deep-links to the order detail where pickup lives. Duplication rule
+held: list rows carry the same action set as origin surfaces or none. Proven live:
+theo (Teen) sees the same order in "In motion" with no advance buttons while his
+draft stays actionable. e2e `activity.spec.ts` 7 tests × 2 engines + slice7
+layout/safe-area regression green.
+
+Known gaps recorded for Round E: member-visibility SELECT requires manageConnections
+(circle.list is manager-gated — needs a lighter circle-name read); the can/hide pass
+across older surfaces.
+
+**Gate story (a process lesson).** The first integrated gate ran RED (8 failures):
+two teammates edited the tree mid-gate (chromium and webkit executed different
+versions of the same spec line) and an "isolated" teardown clobbered the main
+container mid-run — plus three real-but-shallow spec issues and one genuine find:
+`toISOString()` in a spec computes UTC-today while the plan UI's Today is
+client-local, so the planner smoke fails every evening west of Greenwich (fixed:
+specs compute local ymd). Also fixed: the header's `activity.list` now BATCHES with
+`ledger.hasNew` in one tRPC request, so response bodies are arrays ordered by the
+URL's procedure list (spec parses the right index); the Round-C profile card put a
+second exact-text "Aaron" on /more (slice1 scoped to household cards). Rule
+hardened for future rounds: NOTHING edits the tree or touches docker while the
+integration gate runs. Re-gate: **264 passed + 4 intentional skips, exit 0, both
+engines, zero flakes.**
+
 ## Phase 2 Round B — circles (2026-07-04)
 
 **Done** (REWORK Phase-2 §P4). Named per-household **circles replace per-connection

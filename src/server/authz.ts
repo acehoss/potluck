@@ -178,10 +178,33 @@ export async function reachesResource(
 }
 
 /**
- * Contact-layer member reach (REWORK P4/P5) — exported for Round C. A member is
- * NOT gated by one of the six grants (members ride the ACTIVE edge itself), only
- * by the member's own visibility mode against the circle the owner placed the
- * viewer into. The card UI is Round C's; this is the reach primitive.
+ * A member's own visibility against an ALREADY-RESOLVED circle (REWORK P4/P5).
+ * A member is NOT gated by one of the six grants (members ride the edge itself),
+ * only by their visibility mode against the circle the owner placed the viewer
+ * into: ALL always, PRIVATE never, SELECT iff a MembershipCircle ties them to
+ * that circle. A null circle (no reach) never shows the member. Shared by the
+ * ACTIVE-edge `reachesMember` and Round C's PENDING request-preview, which
+ * resolves the requester's circle itself.
+ */
+export async function memberVisibleUnderCircle(
+  dbc: Dbc,
+  circle: CircleReach | null,
+  member: { id: string; visibility: string },
+): Promise<boolean> {
+  if (!circle) return false;
+  if (member.visibility !== 'SELECT') return visibleUnderCircle(member.visibility, false);
+  return (
+    (await dbc.membershipCircle.findUnique({
+      where: { membershipId_circleId: { membershipId: member.id, circleId: circle.circleId } },
+    })) !== null
+  );
+}
+
+/**
+ * Contact-layer member reach over an ACTIVE edge (REWORK P4/P5) — exported for
+ * Round C. Resolves the circle the owner placed the viewer into, then defers to
+ * `memberVisibleUnderCircle`. Own-household is never a grant question — callers
+ * branch on it first.
  */
 export async function reachesMember(
   dbc: Dbc,
@@ -190,13 +213,7 @@ export async function reachesMember(
   member: { id: string; visibility: string },
 ): Promise<boolean> {
   const circle = await resolveGrantingCircle(dbc, ownerHouseholdId, viewerHouseholdId);
-  if (!circle) return false;
-  if (member.visibility !== 'SELECT') return visibleUnderCircle(member.visibility, false);
-  return (
-    (await dbc.membershipCircle.findUnique({
-      where: { membershipId_circleId: { membershipId: member.id, circleId: circle.circleId } },
-    })) !== null
-  );
+  return memberVisibleUnderCircle(dbc, circle, member);
 }
 
 /**

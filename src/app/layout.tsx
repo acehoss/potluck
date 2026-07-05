@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { getSessionUser } from "@/server/auth";
+import { db } from "@/server/db";
 import "./globals.css";
+import { AppHeader } from "./app-header";
 import { Providers } from "./providers";
 import { PwaSetup } from "./pwa-setup";
 import { TabBar } from "./tab-bar";
@@ -42,11 +45,38 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({
+/**
+ * Header data is resolved server-side from the acting session (REWORK P4/Round
+ * D). It's static per full page load — switching household reloads (A3b) — so
+ * the chip and Receive target stay correct without a client fetch; the live
+ * bell badge is a client query in AppHeader. Null (signed out) → no header.
+ */
+async function headerData() {
+  const user = await getSessionUser();
+  if (!user) return null;
+  const pantries = await db.pantry.findMany({
+    where: { householdId: user.householdId },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+  return {
+    householdName: user.household.name,
+    activeHouseholdId: user.householdId,
+    memberships: user.memberships.map((m) => ({
+      householdId: m.householdId,
+      householdName: m.household.name,
+    })),
+    canReceive: user.activeMembership.receiveStock,
+    pantries,
+  };
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const header = await headerData();
   return (
     <html
       lang="en"
@@ -55,6 +85,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <Providers>
           <PwaSetup />
+          <AppHeader data={header} />
           {children}
           <TabBar />
         </Providers>

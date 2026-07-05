@@ -217,6 +217,15 @@ export default async function PantriesPage() {
                   <li className="py-3 text-sm text-text-muted">No pantries yet</li>
                 )}
               </ul>
+              {!isYours && (
+                <Link
+                  href={`/households/${household.id}`}
+                  data-testid="people-contact-link"
+                  className="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-medium text-accent transition-colors hover:text-accent-strong"
+                >
+                  People &amp; contact →
+                </Link>
+              )}
               {isYours && user.activeMembership.manageHousehold && <AddPantry />}
             </section>
           );
