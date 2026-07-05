@@ -17,12 +17,30 @@ function requireInstanceAdmin(user: SessionUser) {
   }
 }
 
+/**
+ * Admin-required TOTP (Phase 3 N8): a meaningful admin action is gated behind
+ * TOTP enrollment. This never locks the admin OUT of enrolling — MFA setup
+ * (auth.mfa.*) is a plain protected surface — it only blocks admin operations
+ * until the required factor exists. The UI reads `auth.mfa.status.adminMustEnroll`
+ * to nudge; this is the server-side backstop. The error code lets the client
+ * route to the enrollment card.
+ */
+function requireAdminMfa(user: SessionUser) {
+  requireInstanceAdmin(user);
+  if (user.totpEnabledAt === null) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Enable TOTP on your admin account before making instance changes.',
+    });
+  }
+}
+
 export const adminRouter = router({
   /** The A1 growth toggle: who may mint new-household invites. */
   setAllowMemberHouseholdInvites: protectedProcedure
     .input(z.object({ allow: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      requireInstanceAdmin(ctx.user);
+      requireAdminMfa(ctx.user);
       await db.instanceSettings.update({
         where: { id: 'instance' },
         data: { allowMemberHouseholdInvites: input.allow },

@@ -6,6 +6,35 @@ npx prisma migrate deploy
 # Image volume layout (blueprint 04 §1); sh has no brace expansion.
 mkdir -p /data/images/receipts /data/images/units /data/images/items /data/images/shares /data/images/recipes /data/images/avatars
 
+# MFA secret-encryption key (Phase 3 Round B; docs/REWORK.md N8/N10). The value
+# below is a PUBLICLY KNOWN dev/e2e key — committed, so it must NEVER protect a
+# real deployment's TOTP secrets. Demo/e2e stacks (SEED_DEMO=1) get it injected
+# so the fixture accounts boot enrolled with zero setup; outside demo mode the
+# entrypoint refuses to start if it is carrying the dev key OR lacks a real
+# MFA_ENC_KEY (unlike VAPID, MFA has no "disabled" mode — the admin-required-TOTP
+# policy means MFA must work, so a real key is MANDATORY in production). Injected
+# + guarded BEFORE the seed so the fixture enrollment can encrypt its secrets.
+DEV_MFA_ENC_KEY="U0/0qjKE9eRehZQL3Oooz3MQ2676Ggxj8cDFOt90O2Q="
+if [ "$SEED_DEMO" = "1" ] && [ -z "${MFA_ENC_KEY:-}" ]; then
+  export MFA_ENC_KEY="$DEV_MFA_ENC_KEY"
+fi
+if [ "$SEED_DEMO" != "1" ]; then
+  if [ "${MFA_ENC_KEY:-}" = "$DEV_MFA_ENC_KEY" ]; then
+    echo "FATAL: the committed DEV MFA_ENC_KEY is configured on a non-demo stack." >&2
+    echo "       It is public — anyone could decrypt stored TOTP secrets. Generate" >&2
+    echo "       your own (openssl rand -base64 32) and set MFA_ENC_KEY. Refusing" >&2
+    echo "       to start." >&2
+    exit 1
+  fi
+  if [ -z "${MFA_ENC_KEY:-}" ]; then
+    echo "FATAL: MFA_ENC_KEY is not set. MFA (TOTP) requires a 32-byte base64 key" >&2
+    echo "       to encrypt secrets at rest, and the instance-admin account must" >&2
+    echo "       enroll TOTP. Generate one (openssl rand -base64 32) and set" >&2
+    echo "       MFA_ENC_KEY. Refusing to start." >&2
+    exit 1
+  fi
+fi
+
 if [ "$SEED_DEMO" = "1" ]; then
   npx tsx prisma/seed.ts
 fi

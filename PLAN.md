@@ -140,6 +140,60 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 3 Round B — auth flows: verification, reset, MFA (2026-07-05)
+
+**Done. Email verification + password reset + MFA on the Round-A mail substrate**
+(docs/REWORK.md N8/N10). Migration `20260705140000_auth` additive (User gains
+emailVerifiedAt/totpSecret/totpEnabledAt/totpLastStep/mfaEmailEnabled;
+EmailVerificationToken/PasswordResetToken/MfaBackupCode/EmailMfaCode). Built by a
+three-teammate team (auth-server / auth-ui / auth-e2e), coordinator-integrated. Zero
+money paths.
+
+- **Server (reviewed clean by the coordinator):** enumeration-safe verify + reset (DUMMY_HASH
+  on missing user; identical `{ok:true}` even when throttled; all token failures read
+  generic); single-use short-TTL tokens hashed at rest via `updateMany(usedAt:null)` claim
+  guards; **a TOTP-enrolled account's password reset must clear a code in the same call —
+  no TOTP bypass** — and revokes every session on success. **MFA:** TOTP (secret AES-256-GCM
+  encrypted at rest via `MFA_ENC_KEY`; enroll→confirm-live-code→one-time backup codes;
+  monotonic `totpLastStep` replay guard) + emailed codes (6-digit, single-use, request cap
+  3/15min + attempt cap `EMAIL_MFA_MAX_ATTEMPTS`=5); a login discriminated union
+  (`{mfaRequired,pendingToken,methods}` vs `{id,name}`) with an HMAC-signed 5-min pending
+  token (domain-separated, timing-safe, NOT a session); **admin-required TOTP** enforced on
+  the admin action + surfaced via `mfa.status.adminMustEnroll`; audited admin MFA-reset.
+  Entrypoint refuses a non-demo boot without a real `MFA_ENC_KEY` (dev key injected under
+  SEED_DEMO). **N10:** durable fixture TOTP — `aaron` boots enrolled with a fixed secret
+  (stable across reseed), `scripts/dump-demo-creds` emits 1Password-importable otpauth URIs.
+- **Gate — green.** typecheck + lint:tokens clean, unit **128/128** (18 new MFA-crypto/totp/
+  backup/email-code tests). Full both-engine e2e on a fresh `down -v` fixture stack:
+  **300 passed / 6 skipped / 0 failed (5.8m)**, no flakes — the both-scheme functional proof
+  incl. enroll→logout→challenge-login, reset-with-code, emailed-code cap, admin-required.
+- **The big lesson — a TOTP-enrolled account can't be a rapid-repeated-login test fixture.**
+  A TOTP code is single-use per 30s step (the anti-replay guard); the suite logs in as the
+  enrolled `aaron` ~230 times, far more than there are distinct windows, so a first pass had
+  **224 failures / 48 min** — every same-window aaron login replay-rejected. Fix (Option B,
+  Aaron-approved): a **SEED_DEMO-only `/api/dev/mfa-reset-step`** route clears `totpLastStep`;
+  `login()`/`apiLogin()` call it before aaron's SETUP challenge, and the 3 dedicated MFA
+  tests clear it before each must-succeed challenge but NEVER before the replay-rejection
+  assertion (which must stay guarded). Production is untouched — the route 404s off a demo
+  stack, and the guard is fully exercised by the ephemeral-account tests.
+- **Coordination note (freeze rule, again).** During the integration gate auth-server edited
+  `mfa.ts` + the `test:unit` line and created-then-deleted a stray root `scratch-proveit.ts`
+  (a root `.ts` breaks `next build`), which made my typecheck results fluctuate across runs.
+  Caught via file mtimes, locked it down, gated the stable state. Reinforces: **nothing edits
+  the tree during a gate.**
+- **FOLLOW-UPS (deferred, not blockers):** (1) the MFA router carries redundant per-factor
+  aliases (`beginTotp/confirmTotp/beginEmail/confirmEmail/disableEmail`) auth-server added
+  mid-gate to keep the build compiling — canonical `begin/confirm/disable({method})` is the
+  intended surface (the card's TOTP path + all e2e use it; the card's EMAIL section still
+  rides the aliases). Unify the card email + drop the aliases. (2) Round C's `/unsub` route
+  must require a real `MAIL_UNSUB_SECRET` in prod (Round-A follow-up).
+- **Live email still blocked (external, not code).** `no-reply@` — and now even the
+  previously-working `testuser1@` — return DreamHost `535` after the cooldown: cumulative
+  failed-auth attempts across the session left the sending IP/account under an active
+  brute-force throttle. Stopped all auth attempts to let it fully cool (untouched, hours).
+  Round B gates entirely in **MAIL_MODE=capture** (green); live verification/reset email
+  validation waits for the block to clear AND for `no-reply@`'s credential to be confirmed.
+
 ## Phase 3 Round A — mail infrastructure (2026-07-05)
 
 **Done. The mail substrate for the notifications phase** (design record: docs/REWORK.md

@@ -8,6 +8,7 @@ import { ConnectionsCard } from './connections-card';
 import { HouseholdContactCard } from './household-contact-card';
 import { HouseholdSwitcher } from './household-switcher';
 import { MemberVisibilityCard } from './member-visibility-card';
+import { MfaSetupCard } from './mfa-card';
 import { ProfileCard } from './profile-card';
 import { InstallCard, NotificationsCard } from './pwa-cards';
 
@@ -55,6 +56,8 @@ export default async function MorePage() {
         )}
 
         <ProfileCard />
+
+        <MfaSetupCard isAdmin={user.isInstanceAdmin} />
 
         <HouseholdContactCard
           householdName={user.household.name}

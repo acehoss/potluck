@@ -7,6 +7,7 @@ import { AppHeader } from "./app-header";
 import { Providers } from "./providers";
 import { PwaSetup } from "./pwa-setup";
 import { TabBar } from "./tab-bar";
+import { VerifyBanner } from "./verify-banner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -86,6 +87,7 @@ export default async function RootLayout({
         <Providers>
           <PwaSetup />
           <AppHeader data={header} />
+          <VerifyBanner />
           {children}
           <TabBar />
         </Providers>

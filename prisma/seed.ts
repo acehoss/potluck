@@ -25,6 +25,9 @@ import {
   type CapabilityFlags,
 } from '../src/server/capabilities';
 import { ensurePresetCircles } from '../src/server/circles';
+import { hashBackupCode } from '../src/server/mfa/backup';
+import { encryptSecret, mfaConfigured } from '../src/server/mfa/crypto';
+import { DEMO_BACKUP_CODES, FIXTURE_TOTP_SECRETS } from '../src/server/mfa/fixtures';
 import { PrismaClient } from '../src/generated/prisma/client';
 
 const url = process.env.DATABASE_URL;
@@ -181,9 +184,30 @@ async function main() {
     householdByName.set(fixture.household, household.id);
 
     for (const user of fixture.users) {
+      // Durable fixture MFA (N10). ONLY `aaron` (the instance admin) boots
+      // TOTP-enrolled — that satisfies the admin-required-TOTP path and lets
+      // e2e exercise the login challenge, WITHOUT forcing the ~230 existing
+      // login sites for the other demo users through a challenge (coordinator
+      // decision). aaron's secret is a COMMITTED base32 fixture (encrypted with
+      // the injected dev MFA key), so a down -v + reseed restores it identically
+      // and dump-demo-creds / e2e recompute valid codes. Enrollment is skipped
+      // if the stack has no MFA key (encryptSecret would throw) — the demo
+      // container always injects one. EVERY demo account is email-verified so
+      // the unverified-email banner never perturbs the rest of the suite.
+      const enroll =
+        mfaConfigured() &&
+        user.username === 'aaron' &&
+        FIXTURE_TOTP_SECRETS[user.username] !== undefined;
+      const totpFields = enroll
+        ? {
+            emailVerifiedAt: new Date(),
+            totpSecret: encryptSecret(FIXTURE_TOTP_SECRETS[user.username]),
+            totpEnabledAt: new Date(),
+          }
+        : { emailVerifiedAt: new Date() };
       const created = await db.user.upsert({
         where: { email: user.email },
-        update: { phone: user.phone ?? null, bio: user.bio ?? null },
+        update: { phone: user.phone ?? null, bio: user.bio ?? null, ...totpFields },
         create: {
           name: user.name,
           username: user.username,
@@ -192,9 +216,21 @@ async function main() {
           isInstanceAdmin: user.isInstanceAdmin,
           phone: user.phone ?? null,
           bio: user.bio ?? null,
+          ...totpFields,
         },
       });
       userByUsername.set(user.username, created.id);
+
+      // Fixed backup codes, re-hashed each reseed (argon2 salts differ; the
+      // PLAINTEXT — DEMO_BACKUP_CODES — is what stays durable). Replace so the
+      // set never accumulates across reseeds.
+      if (enroll) {
+        await db.mfaBackupCode.deleteMany({ where: { userId: created.id } });
+        const hashes = await Promise.all(DEMO_BACKUP_CODES.map((c) => hashBackupCode(c)));
+        await db.mfaBackupCode.createMany({
+          data: hashes.map((codeHash) => ({ userId: created.id, codeHash })),
+        });
+      }
       await db.membership.upsert({
         where: { userId_householdId: { userId: created.id, householdId: household.id } },
         update: {},

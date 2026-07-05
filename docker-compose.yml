@@ -25,6 +25,12 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:potluck@example.com}
+      # MFA secret-encryption key (Phase 3 Round B; docs/REWORK.md N8/N10). A
+      # base64 32-byte key that encrypts TOTP secrets at rest. Empty here: demo
+      # stacks (SEED_DEMO=1) get a committed dev key injected by the entrypoint,
+      # which REFUSES to start outside demo mode without a real key (or carrying
+      # the dev key). Generate your own for production: openssl rand -base64 32.
+      MFA_ENC_KEY: ${MFA_ENC_KEY:-}
       # Mail substrate (Phase 3 Round A; docs/REWORK.md N1–N11). MAIL_MODE
       # defaults to capture (record to CapturedEmail, never touch SMTP); the
       # entrypoint refuses a seeded stack that would send unfiltered to real

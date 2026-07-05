@@ -4,20 +4,50 @@ import {
   DUMMY_HASH,
   createSession,
   destroySession,
+  generateToken,
   hashPassword,
   hashToken,
   setActingHouseholdCookie,
   setSessionCookie,
   verifyPasswordLimited,
 } from '../auth';
-import type { Prisma } from '@/generated/prisma/client';
+import type { Prisma, User } from '@/generated/prisma/client';
+import { appUrl } from '../app-url';
 import { GRANT_PRESETS, type GrantSet } from '../authz';
 import { OWNER_PRESET } from '../capabilities';
 import { circleIdForGrants, ensurePresetCircles } from '../circles';
 import { db, dbTransaction } from '../db';
 import { USERNAME_PATTERN, firstAvailableHandle, slugBaseFromName } from '../identity';
+import { sendTransactional } from '../mail';
+import { verifyPendingToken, mintPendingToken } from '../mfa/crypto';
+import { hasMfa, issueEmailMfaCode, verifyLoginMfa } from '../mfa/service';
+import { mfaRouter } from './mfa';
 import { checkRateLimit, resetRateLimit } from '../rate-limit';
 import { protectedProcedure, publicProcedure, router } from '../trpc';
+
+// Verification/reset link tokens: short-TTL, single-use, hashed at rest (only
+// the raw value rides the emailed link). N8.
+const VERIFY_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const RESET_TTL_MS = 60 * 60 * 1000; // 1h
+
+/** Mint + email an email-verification link for a freshly-created account. */
+async function sendVerificationEmail(user: Pick<User, 'id' | 'email'>): Promise<void> {
+  const raw = generateToken();
+  await db.emailVerificationToken.create({
+    data: {
+      userId: user.id,
+      tokenHash: hashToken(raw),
+      expiresAt: new Date(Date.now() + VERIFY_TTL_MS),
+    },
+  });
+  const link = appUrl(`/verify?token=${raw}`);
+  await sendTransactional({
+    to: user.email,
+    kind: 'verify',
+    subject: 'Confirm your Potluck email',
+    text: `Welcome to Potluck! Confirm this email address by opening:\n\n${link}\n\nThe link expires in 24 hours. If you didn't create an account, you can ignore this email.`,
+  });
+}
 
 const credentialsSchema = z.object({
   // Username is the identity (REWORK A2); email still works — both are
@@ -66,16 +96,276 @@ export const authRouter = router({
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid username or password.' });
     }
 
-    // A successful login clears both budgets: only FAILED attempts should
+    // A correct password clears both budgets: only FAILED attempts should
     // accumulate toward the password-spraying limits. Legit users behind one
     // NAT IP (or the e2e suite re-run against a live stack) must not lock the
     // whole household out; an attacker can't reset without valid credentials.
     resetRateLimit(`login:id:${input.identifier}`);
     resetRateLimit(`login:user:${user.id}`);
     resetRateLimit(`login:ip:${ctx.ip}`);
+
+    // MFA hook (N8): a correct password is only the FIRST factor. If the account
+    // has any MFA factor, do NOT set the session — return a short-lived signed
+    // pending token instead; `mfaChallenge` completes sign-in. The pending token
+    // is not a session; it only authorizes a second-factor attempt.
+    if (hasMfa(user)) {
+      return {
+        mfaRequired: true as const,
+        pendingToken: mintPendingToken(user.id),
+        // Backup codes exist iff TOTP is enrolled (they are minted at confirm).
+        methods: {
+          totp: user.totpEnabledAt !== null,
+          email: user.mfaEmailEnabled,
+          backup: user.totpEnabledAt !== null,
+        },
+      };
+    }
+
     await setSessionCookie(await createSession(user.id), ctx.secure);
     return { id: user.id, name: user.name };
   }),
+
+  /**
+   * Second step of an MFA login (N8): exchange a valid `pendingToken` + second
+   * factor for a session. Tries every factor the account has (TOTP / emailed
+   * code / backup code); a used TOTP step is replay-rejected. Throttled per IP
+   * and per account — never a permanent lockout.
+   */
+  mfaChallenge: publicProcedure
+    .input(z.object({ pendingToken: z.string().min(1), code: z.string().trim().min(1).max(64) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkRateLimit(`mfachallenge:ip:${ctx.ip}`, 30)) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many attempts. Try again in a few minutes.',
+        });
+      }
+      const userId = verifyPendingToken(input.pendingToken);
+      if (!userId) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Your sign-in expired. Please start again.',
+        });
+      }
+      if (!checkRateLimit(`mfachallenge:user:${userId}`, 10)) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many attempts. Try again in a few minutes.',
+        });
+      }
+      const user = await db.user.findUnique({ where: { id: userId } });
+      if (!user || !hasMfa(user)) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'Your sign-in expired. Please start again.',
+        });
+      }
+      const factor = await verifyLoginMfa(user, input.code);
+      if (!factor) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'That code is not valid.' });
+      }
+      resetRateLimit(`mfachallenge:ip:${ctx.ip}`);
+      resetRateLimit(`mfachallenge:user:${userId}`);
+      await setSessionCookie(await createSession(user.id), ctx.secure);
+      return { id: user.id, name: user.name };
+    }),
+
+  /**
+   * During an MFA login, send an emailed code to the pending account (only when
+   * it has the emailed-code factor). The pending token already proves the
+   * password, so this is not an enumeration surface; still rate-limited.
+   */
+  requestMfaEmailCode: publicProcedure
+    .input(z.object({ pendingToken: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const userId = verifyPendingToken(input.pendingToken);
+      if (!userId) return { ok: true };
+      if (!checkRateLimit(`mfa:email:req:${userId}`, 3)) return { ok: true };
+      const user = await db.user.findUnique({ where: { id: userId } });
+      if (user?.mfaEmailEnabled) await issueEmailMfaCode(user);
+      return { ok: true };
+    }),
+
+  /**
+   * Consume an email-verification link (public, single-use). Returns a generic
+   * `{ status }` — an invalid/expired/used token all read as `'invalid'` without
+   * revealing which (or anything about accounts).
+   */
+  verifyEmail: publicProcedure
+    .input(z.object({ token: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const row = await db.emailVerificationToken.findUnique({
+        where: { tokenHash: hashToken(input.token) },
+      });
+      if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
+        return { status: 'invalid' as const };
+      }
+      const claimed = await db.emailVerificationToken.updateMany({
+        where: { id: row.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (claimed.count === 0) return { status: 'invalid' as const };
+      await db.user.update({
+        where: { id: row.userId },
+        data: { emailVerifiedAt: new Date() },
+      });
+      return { status: 'verified' as const };
+    }),
+
+  /** Whether the signed-in account's email is confirmed (drives the nudge banner). */
+  emailStatus: protectedProcedure.query(({ ctx }) => {
+    return { verified: ctx.user.emailVerifiedAt !== null };
+  }),
+
+  /** Resend the verification link to the signed-in user (rate-limited, no-op if verified). */
+  resendVerification: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!checkRateLimit(`verify:resend:${ctx.user.id}`, 5)) {
+      throw new TRPCError({
+        code: 'TOO_MANY_REQUESTS',
+        message: 'Too many requests. Try again in a few minutes.',
+      });
+    }
+    if (ctx.user.emailVerifiedAt) return { ok: true };
+    await sendVerificationEmail(ctx.user);
+    return { ok: true };
+  }),
+
+  /**
+   * Start a password reset (public, enumeration-safe). ALWAYS returns the same
+   * result whether or not the identifier matches an account; when it does, a
+   * single-use reset link is emailed. Rate-limited per IP and per identifier.
+   */
+  requestPasswordReset: publicProcedure
+    .input(z.object({ identifier: z.string().trim().toLowerCase().min(1).max(254) }))
+    .mutation(async ({ ctx, input }) => {
+      const generic = { ok: true as const };
+      if (
+        !checkRateLimit(`reset:ip:${ctx.ip}`, 30) ||
+        !checkRateLimit(`reset:id:${input.identifier}`, 5)
+      ) {
+        // Same shape as success — a throttled attacker learns nothing.
+        return generic;
+      }
+      const user = await db.user.findUnique({
+        where: input.identifier.includes('@')
+          ? { email: input.identifier }
+          : { username: input.identifier },
+      });
+      if (user) {
+        const raw = generateToken();
+        await db.passwordResetToken.create({
+          data: {
+            userId: user.id,
+            tokenHash: hashToken(raw),
+            expiresAt: new Date(Date.now() + RESET_TTL_MS),
+          },
+        });
+        const link = appUrl(`/reset?token=${raw}`);
+        await sendTransactional({
+          to: user.email,
+          kind: 'reset',
+          subject: 'Reset your Potluck password',
+          text: `Someone asked to reset the password for your Potluck account. Open this link to choose a new one:\n\n${link}\n\nThe link expires in 1 hour and can be used once. If this wasn't you, ignore this email — your password hasn't changed.`,
+        });
+      }
+      return generic;
+    }),
+
+  /**
+   * Whether a reset token is (still) valid and whether completing it will
+   * require an MFA code — lets the /reset form decide whether to show the code
+   * field. Does NOT consume the token. Token-gated, so revealing the account's
+   * TOTP status here is not a new enumeration surface.
+   */
+  resetPasswordInfo: publicProcedure
+    .input(z.object({ token: z.string().min(1) }))
+    .query(async ({ input }) => {
+      const row = await db.passwordResetToken.findUnique({
+        where: { tokenHash: hashToken(input.token) },
+      });
+      if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
+        return { valid: false, requiresMfa: false };
+      }
+      const user = await db.user.findUnique({ where: { id: row.userId } });
+      return { valid: true, requiresMfa: user?.totpEnabledAt != null };
+    }),
+
+  /**
+   * Complete a password reset (public). Single-use short-TTL token. If the
+   * account has TOTP enrolled the caller MUST also pass a valid TOTP/backup code
+   * — a reset is not a TOTP bypass (N8); the token is NOT consumed until the
+   * whole thing succeeds, so a bad/missing code can be retried. On success the
+   * password changes and every existing session is revoked.
+   */
+  resetPassword: publicProcedure
+    .input(
+      z.object({
+        token: z.string().min(1),
+        newPassword: z.string().min(10, 'Password must be at least 10 characters.').max(256),
+        // The TOTP/backup code for a TOTP-enrolled reset. Canonical field is
+        // `mfaCode` (coordinator lock); `code` is tolerated as an alias so an
+        // older client shape still works.
+        mfaCode: z.string().trim().max(64).optional(),
+        code: z.string().trim().max(64).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkRateLimit(`reset:submit:ip:${ctx.ip}`, 30)) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many attempts. Try again in a few minutes.',
+        });
+      }
+      const row = await db.passwordResetToken.findUnique({
+        where: { tokenHash: hashToken(input.token) },
+      });
+      if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This reset link is invalid or has expired. Request a new one.',
+        });
+      }
+      const user = await db.user.findUnique({ where: { id: row.userId } });
+      if (!user) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'This reset link is invalid.' });
+      }
+      // TOTP-enrolled accounts must clear the second factor in the same call —
+      // a reset must never be a TOTP bypass (N8). The token is untouched here,
+      // so a wrong/absent code just re-prompts.
+      const mfaCode = input.mfaCode ?? input.code;
+      if (user.totpEnabledAt) {
+        if (!mfaCode) {
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: 'Enter a code from your authenticator app (or a backup code) to reset.',
+          });
+        }
+        const factor = await verifyLoginMfa(user, mfaCode);
+        if (!factor) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'That code is not valid.' });
+        }
+      }
+      const passwordHash = await hashPassword(input.newPassword);
+      await dbTransaction(async (tx) => {
+        // Claim the token first (fail-closed against a concurrent double-use).
+        const claimed = await tx.passwordResetToken.updateMany({
+          where: { id: row.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+        if (claimed.count === 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'This reset link is invalid.' });
+        }
+        await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
+        // Revoke every session + any other outstanding reset token for the user.
+        await tx.session.deleteMany({ where: { userId: user.id } });
+        await tx.passwordResetToken.deleteMany({
+          where: { userId: user.id, id: { not: row.id } },
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  mfa: mfaRouter,
 
   /**
    * Sticky acting-household switch (REWORK A3b): validates the target against
@@ -152,6 +442,12 @@ export const authRouter = router({
       });
 
       await setSessionCookie(await createSession(user.id), ctx.secure);
+      // Email verification (N8): a new account is usable immediately but
+      // unverified until it consumes this link (the UI banners it). Best-effort
+      // — a mail hiccup never fails account creation.
+      await sendVerificationEmail(user).catch((e) =>
+        console.error('[auth] verification send failed:', e instanceof Error ? e.message : e),
+      );
       return { id: user.id, name: user.name };
     }),
 

@@ -62,6 +62,20 @@ model User {
   photoPath    String?
   phone        String?
   bio          String?
+  // Account security (Phase 3 Round B; docs/REWORK.md N8/N10). emailVerifiedAt
+  // is set when the emailed verification link is consumed (null = unverified;
+  // this round only banners it, never blocks login). totpSecret is the AES-256-
+  // GCM-encrypted TOTP secret (null = not enrolled); totpEnabledAt is set only
+  // after a live code confirms enrollment (a stored-but-not-enabled secret is a
+  // begun-but-unconfirmed enrollment). totpLastStep is the highest TOTP time-
+  // step already consumed at a login challenge — a code from that step or
+  // earlier is replay-rejected. mfaEmailEnabled opts the account into emailed
+  // 6-digit codes as a (convenience) second factor.
+  emailVerifiedAt DateTime?
+  totpSecret      String?
+  totpEnabledAt   DateTime?
+  totpLastStep    Int?
+  mfaEmailEnabled Boolean   @default(false)
   createdAt    DateTime @default(now())
 
   memberships       Membership[]
@@ -73,6 +87,10 @@ model User {
   loans             Loan[]
   pushSubscriptions PushSubscription[]
   ordersCreated     Order[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  mfaBackupCodes          MfaBackupCode[]
+  emailMfaCodes           EmailMfaCode[]
 }
 
 // ---- Potluck Round 1: network core (REWORK.md) -------------------------------
@@ -315,6 +333,75 @@ model Session {
   userId    String
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---- Phase 3 Round B: account-security tokens + MFA (docs/REWORK.md N8/N10) --
+
+// Emailed email-verification link (enumeration-safe). Only the sha256 hash of
+// the raw token is stored — the raw value lives solely in the emailed link, so
+// a DB read never yields a usable token. Single-use (usedAt) + short-TTL
+// (expiresAt); cascade with the user.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Emailed password-reset link. Same shape/discipline as the verification token
+// (hashed-at-rest, single-use, short-TTL). Consuming it revokes the user's
+// sessions; if the account has TOTP enrolled the reset ALSO requires a live
+// TOTP/backup code in the same call (a reset is not a TOTP bypass — N8).
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// One-time MFA recovery code (8–10 per enrolled user). Hashed with the password
+// hasher (argon2id) — the raw codes are shown once at enrollment and never
+// again. Single-use: verifying consumes the matching row (usedAt).
+model MfaBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// The emailed 6-digit MFA code (convenience second factor + enrollment proof).
+// Hashed at rest; short-TTL (expiresAt); attempt-capped (attempts → the code
+// dies) and single-use. At most one live row per user — issuing a fresh code
+// deletes the prior one.
+model EmailMfaCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
