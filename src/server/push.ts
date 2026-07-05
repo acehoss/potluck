@@ -1,5 +1,7 @@
 import webpush from 'web-push';
+import { appUrl } from './app-url';
 import { db } from './db';
+import { deepLinkPath, mintDeepLinkToken } from './deeplink';
 import { sendSubscription } from './mail';
 import { channelPrefsForUsers, type NotifyCategory } from './notifications';
 import { isAllowedPushEndpoint } from './push-endpoint';
@@ -103,6 +105,23 @@ export async function sendPushToUsers(userIds: string[], payload: PushPayload): 
 /** The `{household}` placeholder in a notify title/body → recipient's own name. */
 const HOUSEHOLD_TOKEN = '{household}';
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Minimal html body for a notification email: the generic line + an "Open
+ * Potluck" anchor to the nav-only `/go?t=` link. Body is app-authored but may
+ * carry a household name, so it is escaped; the link is our own base64url token.
+ */
+function ctaEmailHtml(body: string, link: string): string {
+  return `<p>${escapeHtml(body)}</p><p><a href="${escapeHtml(link)}">Open Potluck</a></p>`;
+}
+
 export type NotifyOptions = {
   /** Households whose members should be notified (deduped to one per user). */
   recipientHouseholdIds: string[];
@@ -110,7 +129,12 @@ export type NotifyOptions = {
   excludeUserId: string;
   /** Which opt-out bucket this belongs to; drives per-user push/email prefs. */
   category: NotifyCategory;
-  /** Where a notification tap deep-links (push url + implicit in-app context). */
+  /**
+   * The TARGET screen a notification tap lands on (e.g. `/orders/<id>`). notify()
+   * wraps it per-recipient in a nav-only `/go?t=…` deep link (Round D, N7) that
+   * also switches the recipient to their own household — so pass the bare app
+   * path, not a `/go` url.
+   */
   url: string;
   /**
    * Generic title (N4): a category-only message + the recipient's OWN household
@@ -176,13 +200,23 @@ export async function notify(opts: NotifyOptions): Promise<void> {
       users.map(async (user) => {
         const pref = prefs.get(user.id) ?? { push: false, email: false };
         if (!pref.push && !pref.email) return;
-        const householdName = nameByHousehold.get(householdByUser.get(user.id)!) ?? 'your household';
+        const recipientHousehold = householdByUser.get(user.id)!;
+        const householdName = nameByHousehold.get(recipientHousehold) ?? 'your household';
         const title = opts.title.split(HOUSEHOLD_TOKEN).join(householdName);
         let body = opts.body.split(HOUSEHOLD_TOKEN).join(householdName);
         if (user.showDetails && opts.detail) body = `${body} ${opts.detail}`;
 
+        // Per-recipient nav-only deep link (N7): tapping it switches THEM to
+        // their own recipient household and opens the target screen. Push takes
+        // the relative `/go?t=` (the SW resolves it against the origin); email —
+        // opened in a browser, logged-out — takes the absolute one.
+        const goPath = deepLinkPath(
+          mintDeepLinkToken({ path: opts.url, householdId: recipientHousehold }),
+        );
+        const link = appUrl(goPath);
+
         const jobs: Promise<unknown>[] = [];
-        if (pref.push) jobs.push(sendPushToUsers([user.id], { title, body, url: opts.url }));
+        if (pref.push) jobs.push(sendPushToUsers([user.id], { title, body, url: goPath }));
         if (pref.email) {
           jobs.push(
             sendSubscription({
@@ -191,7 +225,8 @@ export async function notify(opts: NotifyOptions): Promise<void> {
               category: opts.category,
               kind: opts.category,
               subject: title,
-              text: body,
+              text: `${body}\n\nOpen Potluck: ${link}`,
+              html: ctaEmailHtml(body, link),
             }),
           );
         }

@@ -17,9 +17,12 @@ type MfaChallenge = {
   methods: { totp: boolean; email: boolean; backup: boolean };
 };
 
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string | null }) {
   const trpc = useTRPC();
   const router = useRouter();
+  // The page has already validated `next` as a same-origin relative path, so we
+  // trust it and land the user there after sign-in; absent, we fall back to home.
+  const destination = next ?? '/';
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   // Once the password checks out but a second factor is owed, we hold the
@@ -33,7 +36,7 @@ export function LoginForm() {
           setChallenge({ pendingToken: data.pendingToken, methods: data.methods });
           return;
         }
-        router.push('/');
+        router.push(destination);
         router.refresh();
       },
     }),
@@ -44,7 +47,7 @@ export function LoginForm() {
       <MfaStep
         challenge={challenge}
         onDone={() => {
-          router.push('/');
+          router.push(destination);
           router.refresh();
         }}
       />

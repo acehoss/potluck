@@ -140,6 +140,41 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 3 Round D — deep-link routing (2026-07-05) — PHASE 3 COMPLETE
+
+**Done, and with it all four Phase-3 rounds.** Notification taps now land on the specific
+actionable screen AND switch to the right acting household (docs/REWORK.md N7). **No schema** —
+the deep-link token is stateless HMAC. Zero money paths. Three-teammate team.
+
+- **Navigation-only deep-link token** (`src/server/deeplink.ts`): `mintDeepLinkToken({path,
+  householdId})`/`verifyDeepLinkToken` — base64url `{p,h,e}` + HMAC keyed by a **domain-separated**
+  derivation of `MAIL_UNSUB_SECRET` (`update('deeplink-v1')`), 24h inline TTL, stateless. A hard
+  **open-redirect safe-path guard** (`isSafePath`: single leading `/`, rejects `//`, `/\`, any
+  backslash/`@`/control/space) at mint (throws) AND verify (→null); proven fail-closed by 6 unit
+  tests (`//evil`, `https://evil`, `\\evil`, `/x@y`, `javascript:`, unrooted, empty). It is
+  **navigation-only** — never accepted as auth, grants nothing but a redirect + own-household switch.
+- **`/go` route** (`src/app/go/route.ts`, GET): verify → invalid/expired/tampered/unsafe →
+  `redirect('/')`; **logged-out → `redirect('/login?next=' + enc('/go?t='+token))`** (so the
+  household-switch survives login — you re-hit /go authed after signing in); **logged-in →
+  `setActingHouseholdCookie` ONLY if the token's householdId is one of the viewer's memberships**
+  (re-checked server-side — the token is a hint, not authz), then `redirect(path)`. Never
+  authenticates, never mutates.
+- **Email deep-links are new** — Round C's notify() email branch + digest carried NO link;
+  now notify() mints a per-recipient `/go?t` token (householdId = recipient's OWN household) used
+  for the push url AND a new `Open Potluck: <link>` email CTA (text + escaped html anchor); the
+  digest CTA targets `/activity`. Order targets upgraded `/orders` → `/orders/[id]`.
+- **Login `next=` continuation** (was greenfield — every login hardcoded `/`): `login/page.tsx`
+  validates the `next` searchParam (safe-relative only; unsafe → `/`) and passes it to
+  `login-form.tsx`, which `router.push`es it on login success AND after the MFA challenge.
+  An already-authed hit on `/login?next=` honors the safe next.
+- **Gate — green.** typecheck + lint:tokens clean, unit **146/146** (+6 deeplink), full
+  both-engine e2e on a fresh `down -v` stack: **326 passed / 6 skipped / 0 failed**, no flakes.
+  The household-switch e2e is self-proving: `/orders/[id]` 404s for a non-involved household, so
+  the page is only reachable if the switch fired. Open-redirect e2e: `?next=https://evil.com`
+  after login lands `/`, never the external host.
+- **Follow-up (deferred, cosmetic):** the Round-B per-factor MFA router aliases — unify to
+  canonical begin/confirm/disable({method}) + migrate the card email, then drop the aliases.
+
 ## Phase 3 Round C — notification preferences + push matrix + digest (2026-07-05)
 
 **Done. The notification system** (docs/REWORK.md N4/N5/N6). Migration

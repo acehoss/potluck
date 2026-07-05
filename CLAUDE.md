@@ -2,7 +2,30 @@
 
 Potluck (formerly "Private Coop"): a self-hosted web app (PWA) for mutual aid between households — nodes in a network of pairwise connections sharing pantry goods and equipment at cost, with a netted per-household-pair ledger.
 
-## Current state (2026-07-04)
+## Current state (2026-07-05)
+
+**Phase 3 (email · notifications · auth flows · deep-linking) is COMPLETE — four
+rounds, 2026-07-05.** Commits 4fe63d9 (A), d216f25 (B), c7868fe (C), + D.
+**Round A** — a swappable nodemailer transport (DreamHost; `MAIL_MODE=capture` default)
+behind two pipelines (`sendTransactional` never carries unsubscribe / ignores prefs;
+`sendSubscription` = RFC-8058 one-click) + a fail-closed dev mail-capture filter +
+`CapturedEmail` audit table. **Round B** — email verification + password reset
+(enumeration-safe, no-TOTP-bypass, session-revoking) + MFA (TOTP with an AES-256-GCM
+secret + backup codes; rate-limited emailed codes; login returns a discriminated
+`mfaRequired` union) + admin-required TOTP + durable fixture TOTP (`scripts/dump-demo-creds`
+→ 1Password otpauth). **Round C** — a per-user notification preference matrix (categories
+pickups/circle/ledger × push+email + weekly-digest opt-out + show-details toggle), a
+generalized `notify()` layer wired into 5 events with the N4 category-only content rule
+(own-household stamp, never a counterparty name/$/address), a weekly digest, and the
+RFC-8058 `/unsub` route (+ `MAIL_UNSUB_SECRET` prod guard). **Round D** — navigation-only
+HMAC deep-link tokens + the `/go` route (a notification tap lands on the actionable screen
+AND switches the acting household; email links route-then-login-to-act, never authenticate)
++ login `next=` continuation. All capture-mode-gated on both engines; the live DreamHost
+send is proven (delivered), IMAP receipt-verify awaits an auth-throttle cooldown. Decision
+record: REWORK.md "Phase 3" (N1–N11); per-round records in PLAN.md. Migrations
+`20260705100000_mail`, `20260705140000_auth`, `20260705180000_notifications` (Round D adds
+none — stateless token). Deferred cosmetic follow-up: unify the MFA router's per-factor
+aliases. Money invariants + append-only ledger untouched throughout.
 
 **v1 shipped, the four-round mutual-aid rework is COMPLETE, and Phase 2 (workflow
 IA + circles + contact layer) is COMPLETE — five more rounds, 2026-07-04/05.** The

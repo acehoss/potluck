@@ -16,7 +16,9 @@
  */
 
 import { formatCents } from '@/lib/money';
+import { appUrl } from './app-url';
 import { db } from './db';
+import { deepLinkPath, mintDeepLinkToken } from './deeplink';
 import { netByCounterparty } from './ledger';
 import { sendSubscription } from './mail';
 import { openLoopsFor } from './routers/activity';
@@ -136,7 +138,7 @@ function renderSubject(sections: HouseholdSection[]): string {
   return `Your Potluck week: ${parts.join(', ')}`;
 }
 
-function renderBody(userName: string, sections: HouseholdSection[]): string {
+function renderBody(userName: string, sections: HouseholdSection[], openLink: string | null): string {
   const lines: string[] = [`Hi ${userName}, here's your Potluck week.`, ''];
   for (const sec of sections) {
     lines.push(`— ${sec.householdName} —`);
@@ -160,7 +162,9 @@ function renderBody(userName: string, sections: HouseholdSection[]): string {
     );
     lines.push('');
   }
-  lines.push('Open Potluck to act on anything above.');
+  lines.push(
+    openLink ? `Open Potluck to act on anything above: ${openLink}` : 'Open Potluck to act on anything above.',
+  );
   return lines.join('\n');
 }
 
@@ -213,13 +217,20 @@ export async function digestFor(
     sections.push(await sectionFor(m.householdId, m.household.name, m, now));
   }
 
+  // Nav-only CTA (N7): opens /activity switched to the recipient's default
+  // (first) household. The subject/body stay generic (N4) — the /go link is
+  // opaque.
+  const openLink = appUrl(
+    deepLinkPath(mintDeepLinkToken({ path: '/activity', householdId: user.memberships[0].householdId })),
+  );
+
   const res = await sendSubscription({
     to: user.email,
     userId,
     category: 'digest',
     kind: 'digest',
     subject: renderSubject(sections),
-    text: renderBody(user.name, sections),
+    text: renderBody(user.name, sections, openLink),
   });
 
   // A send that the subscription gate skipped (suppressed/opted-out) leaves the

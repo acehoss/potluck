@@ -1,10 +1,21 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/server/auth';
+import { isSafePath } from '@/server/deeplink';
 import { BrandMark } from '../brand-mark';
 import { LoginForm } from './login-form';
 
-export default async function LoginPage() {
-  if (await getSessionUser()) redirect('/');
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  const { next } = await searchParams;
+  // Open-redirect guard (Round D, N7): a `next` continuation is honored only when
+  // it is a same-origin relative path; anything else falls back to `/`.
+  const safeNext = isSafePath(next) ? next : '/';
+
+  // Already signed in → skip the form and continue to where they were headed.
+  if (await getSessionUser()) redirect(safeNext);
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
@@ -16,7 +27,7 @@ export default async function LoginPage() {
         </p>
       </div>
       <div className="w-full max-w-sm rounded-xl border border-border bg-surface-raised p-6 shadow-sm">
-        <LoginForm />
+        <LoginForm next={safeNext} />
       </div>
     </main>
   );
