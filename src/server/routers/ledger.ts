@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { getConnection, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
-import { adjustmentPushBody, notifyLedgerEvent, settlementPushBody } from '../push';
+import { notifyLedgerEvent } from '../push';
 import { protectedProcedure, router } from '../trpc';
 
 /** Upper bound for money inputs: keeps values inside Prisma's Int range. */
@@ -111,11 +111,12 @@ export const ledgerRouter = router({
       // Fire-and-forget — never awaited, never fails the mutation — and only
       // for a genuinely new entry (a clientKey replay must not re-notify).
       if (result.created) {
+        // Generic content (N4): no counterparty, amount, or note leaves the app.
         void notifyLedgerEvent({
           creatorId: ctx.user.id,
           householdIds: [input.payerHouseholdId, input.payeeHouseholdId],
-          title: 'Settlement recorded',
-          body: settlementPushBody(ctx.user.name, input.amountCents, input.note),
+          title: 'Money update in {household}',
+          body: 'A settlement was recorded. Open Potluck to see the details.',
         });
       }
       return { id: result.id };
@@ -167,11 +168,12 @@ export const ledgerRouter = router({
       // The second (and last) v1 push event — same post-commit, non-blocking,
       // no-replay rules as settle.
       if (result.created) {
+        // Generic content (N4): no counterparty, amount, or note leaves the app.
         void notifyLedgerEvent({
           creatorId: ctx.user.id,
           householdIds: [input.creditorHouseholdId, input.debtorHouseholdId],
-          title: 'Ledger adjustment posted',
-          body: adjustmentPushBody(ctx.user.name, input.amountCents, input.note),
+          title: 'Money update in {household}',
+          body: 'A ledger adjustment was posted. Open Potluck to see the details.',
         });
       }
       return { id: result.id };

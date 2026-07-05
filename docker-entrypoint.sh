@@ -82,4 +82,25 @@ if [ "$SEED_DEMO" != "1" ] && [ "$MAIL_MODE" = "capture" ]; then
   echo "         actually deliver." >&2
 fi
 
+# RFC-8058 one-click unsubscribe secret (Phase 3 Round C; docs/REWORK.md N5).
+# The value below is the PUBLICLY KNOWN dev/e2e fallback baked into
+# src/server/mail/unsub.ts — committed, so it must NEVER sign a real
+# deployment's unsubscribe tokens (a public secret makes the HMAC forgeable, so
+# anyone could unsubscribe anyone). Demo/e2e stacks (SEED_DEMO=1) get it injected
+# so tokens are stable + verifiable with zero setup; a real production stack
+# (MAIL_PRODUCTION=1) refuses to boot without its own secret.
+DEV_MAIL_UNSUB_SECRET="dev-unsub-secret-not-for-production"
+if [ "$SEED_DEMO" = "1" ] && [ -z "${MAIL_UNSUB_SECRET:-}" ]; then
+  export MAIL_UNSUB_SECRET="$DEV_MAIL_UNSUB_SECRET"
+fi
+if [ "$MAIL_PRODUCTION" = "1" ]; then
+  if [ -z "${MAIL_UNSUB_SECRET:-}" ] || [ "${MAIL_UNSUB_SECRET:-}" = "$DEV_MAIL_UNSUB_SECRET" ]; then
+    echo "FATAL: MAIL_PRODUCTION=1 without a real MAIL_UNSUB_SECRET. The committed" >&2
+    echo "       dev fallback is public — anyone could forge a one-click unsubscribe" >&2
+    echo "       token for any user. Generate one (openssl rand -base64 32) and set" >&2
+    echo "       MAIL_UNSUB_SECRET. Refusing to start." >&2
+    exit 1
+  fi
+fi
+
 exec npm run start

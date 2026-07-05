@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { login, openNeighbors, PASSWORD } from './helpers';
+import { autoDismissFirstRun, login, openNeighbors, PASSWORD } from './helpers';
 
 /**
  * Phase-2 Round E — the IA flip. The root became the NEIGHBORS dashboard
@@ -247,8 +247,11 @@ test('a newly founded household lands on a Neighbors dashboard led by its invite
     const link = (await page.getByTestId('household-invite-url').textContent())!.trim();
     expect(link).toContain('/invite/');
 
-    // A stranger founds their own household off it and lands signed in.
+    // A stranger founds their own household off it and lands signed in — a
+    // brand-new un-onboarded account, so arm the first-run-consent auto-dismiss
+    // before it drives the dashboard (it doesn't go through `login`).
     const guest = await guestContext.newPage();
+    await autoDismissFirstRun(guest);
     await guest.goto(link);
     await guest.getByTestId('invite-household-name').fill(casa);
     await guest.getByLabel('Your name').fill('Nova');

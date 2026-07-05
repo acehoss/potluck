@@ -16,15 +16,60 @@
  * a stable, verifiable token without configuration.
  */
 
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
-/** Preference bucket a subscription message belongs to (Round C wires prefs). */
-export type SubscriptionCategory = 'digest' | 'share' | 'activity';
+function unsubSecret(): string {
+  return process.env.MAIL_UNSUB_SECRET || 'dev-unsub-secret-not-for-production';
+}
+
+const CATEGORIES: readonly SubscriptionCategory[] = ['digest', 'pickups', 'circle', 'ledger'];
+
+function signature(userId: string, category: SubscriptionCategory): string {
+  return createHmac('sha256', unsubSecret())
+    .update(`${userId}:${category}`)
+    .digest('hex')
+    .slice(0, 32);
+}
+
+/**
+ * Preference bucket a subscription message belongs to. The weekly `digest` plus
+ * the three opt-out notification categories (Round C, N5) — each an unsubscribe
+ * target for the RFC-8058 one-click token. (`account` transactional mail is
+ * never a subscription and never appears here.)
+ */
+export type SubscriptionCategory = 'digest' | 'pickups' | 'circle' | 'ledger';
 
 export function unsubToken(userId: string, category: SubscriptionCategory): string {
-  const secret = process.env.MAIL_UNSUB_SECRET || 'dev-unsub-secret-not-for-production';
-  const sig = createHmac('sha256', secret).update(`${userId}:${category}`).digest('hex').slice(0, 32);
+  const sig = signature(userId, category);
   return Buffer.from(`${userId}.${category}.${sig}`, 'utf8').toString('base64url');
+}
+
+/**
+ * Verify a one-click unsubscribe token and return its (userId, category), or
+ * null when it is malformed, names an unknown category, or its HMAC doesn't
+ * match (recomputed from the decoded fields, constant-time compared). PURE
+ * (crypto + env only) so the /unsub route and a unit test share one verifier.
+ * A cuid userId and a word category contain no dots, so the 3-field split is
+ * unambiguous.
+ */
+export function verifyUnsubToken(
+  token: string,
+): { userId: string; category: SubscriptionCategory } | null {
+  let decoded: string;
+  try {
+    decoded = Buffer.from(token, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  const parts = decoded.split('.');
+  if (parts.length !== 3) return null;
+  const [userId, category, sig] = parts;
+  if (!userId || !CATEGORIES.includes(category as SubscriptionCategory)) return null;
+  const expected = signature(userId, category as SubscriptionCategory);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  return { userId, category: category as SubscriptionCategory };
 }
 
 function publicBaseUrl(): string {

@@ -76,6 +76,20 @@ model User {
   totpEnabledAt   DateTime?
   totpLastStep    Int?
   mfaEmailEnabled Boolean   @default(false)
+  // Notification prefs (Phase 3 Round C; docs/REWORK.md N4/N5/N6). timezone is
+  // an IANA zone (null → instance default/UTC) driving the weekly-digest send
+  // window; digestOptOut suppresses the digest entirely; showDetails (default
+  // off) opts this user into seeing the counterparty household NAME in a
+  // notification body (still never dollars/addresses — N4); lastDigestAt is the
+  // per-user digest idempotency watermark; notifyOnboardedAt marks the
+  // first-run "how should Potluck reach you?" consent as seen. Per-CATEGORY
+  // channel choices live in NotificationPreference (absent row = the default
+  // matrix), NOT here.
+  timezone          String?
+  digestOptOut      Boolean   @default(false)
+  showDetails       Boolean   @default(false)
+  lastDigestAt      DateTime?
+  notifyOnboardedAt DateTime?
   createdAt    DateTime @default(now())
 
   memberships       Membership[]
@@ -91,6 +105,25 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   mfaBackupCodes          MfaBackupCode[]
   emailMfaCodes           EmailMfaCode[]
+  notificationPreferences NotificationPreference[]
+}
+
+// Per-(user, category) notification channel choice (Phase 3 Round C; N5). One
+// row per category the user has TUNED — an ABSENT row means the conservative
+// category default (pickups push+email ON; circle OFF/OFF; ledger OFF/OFF), so
+// a fresh account carries zero rows and still behaves correctly. category ∈
+// "pickups" | "circle" | "ledger" (the three opt-out buckets; "account"/
+// transactional mail is never stored here and never unsubscribable). The
+// digest + showDetails + timezone are single-valued and live on User instead.
+model NotificationPreference {
+  userId   String
+  category String
+  push     Boolean
+  email    Boolean
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, category])
 }
 
 // ---- Potluck Round 1: network core (REWORK.md) -------------------------------

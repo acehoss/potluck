@@ -198,13 +198,16 @@ async function main() {
         mfaConfigured() &&
         user.username === 'aaron' &&
         FIXTURE_TOTP_SECRETS[user.username] !== undefined;
+      // notifyOnboardedAt set so the first-run consent modal (a full-screen
+      // overlay) never blocks the suite; the first-run flow is tested separately.
       const totpFields = enroll
         ? {
             emailVerifiedAt: new Date(),
+            notifyOnboardedAt: new Date(),
             totpSecret: encryptSecret(FIXTURE_TOTP_SECRETS[user.username]),
             totpEnabledAt: new Date(),
           }
-        : { emailVerifiedAt: new Date() };
+        : { emailVerifiedAt: new Date(), notifyOnboardedAt: new Date() };
       const created = await db.user.upsert({
         where: { email: user.email },
         update: { phone: user.phone ?? null, bio: user.bio ?? null, ...totpFields },

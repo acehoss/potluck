@@ -11,6 +11,7 @@ import { inviteRouter } from './invite';
 import { itemRouter, loanRouter } from './item';
 import { ledgerRouter } from './ledger';
 import { membershipRouter } from './membership';
+import { notificationRouter } from './notification';
 import { orderRouter } from './order';
 import { pantryRouter } from './pantry';
 import { planRouter } from './plan';
@@ -37,6 +38,7 @@ export const appRouter = router({
   ledger: ledgerRouter,
   loan: loanRouter,
   membership: membershipRouter,
+  notification: notificationRouter,
   order: orderRouter,
   pantry: pantryRouter,
   plan: planRouter,

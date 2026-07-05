@@ -68,6 +68,31 @@ export async function login(page: Page, identifier: string) {
   // login footer ("…a member of your household…") before the session lands.
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId('tab-bar')).toBeVisible();
+  // Arm the first-run-consent auto-dismiss for the rest of this page's life
+  // (no-op for seeded/onboarded accounts — the modal never renders for them).
+  await autoDismissFirstRun(page);
+}
+
+/**
+ * Round C (Phase 3) added a global first-run consent modal (FirstRunConsent,
+ * mounted in layout.tsx): a `fixed inset-0 z-30` overlay that renders for any
+ * signed-in account whose `notifyOnboardedAt` is null. The demo seed onboards
+ * every seeded account, so it never shows for them — but accounts CREATED mid
+ * test (acceptInvite, DB-inserted fixtures like Ferris) boot un-onboarded, and
+ * the overlay then intercepts every pointer event, so the first UI click times
+ * out (30s) and the test's `finally` teardown can't complete → shared-state
+ * leaks and a cascade of downstream failures.
+ *
+ * This installs a Playwright locator handler that dismisses the modal (the
+ * conservative "close without enabling", which marks the account onboarded)
+ * whenever it appears, so a fresh-account page can drive the app UI. It is a
+ * no-op for onboarded accounts (the locator never becomes visible), so it is
+ * safe to arm on every browser login and on any page acting as a new account.
+ */
+export async function autoDismissFirstRun(page: Page) {
+  await page.addLocatorHandler(page.getByTestId('notif-firstrun'), async () => {
+    await page.getByTestId('notif-firstrun-dismiss').click();
+  });
 }
 
 /**

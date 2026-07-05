@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   expect,
   request as playwrightRequest,
@@ -83,6 +84,35 @@ async function householdIds(s: Page | APIRequestContext) {
   const mine = data.yourHouseholdId;
   const other = data.households.find((h) => h.id !== mine)!.id;
   return { mine, other };
+}
+
+/**
+ * Round C (N5) flipped ledger settle/adjust to default push OFF — money events
+ * are in-app + digest by default now. The settle/adjust push tests below opt the
+ * RECIPIENTS back into ledger push first (proving "push works WHEN ENABLED"),
+ * then drop the pref rows in a finally so the seeded topology is byte-identical.
+ */
+async function enableLedgerPush(s: Page | APIRequestContext) {
+  const res = await api(s).post('/api/trpc/notification.setChannel', {
+    data: { category: 'ledger', channel: 'push', enabled: true },
+  });
+  expect(res.ok(), `enable ledger push → ${res.status()}`).toBe(true);
+}
+function clearNotifyPrefs(usernames: string[]) {
+  const list = usernames.map((u) => `'${u}'`).join(',');
+  execFileSync(
+    'docker',
+    [
+      'compose',
+      'exec',
+      '-T',
+      'app',
+      'node',
+      '-e',
+      `const Database=require('better-sqlite3');const db=new Database(process.env.DATABASE_URL.replace(/^file:/,''));db.prepare("DELETE FROM NotificationPreference WHERE userId IN (SELECT id FROM User WHERE username IN (${list}))").run();`,
+    ],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
 }
 
 // ---- installability ---------------------------------------------------------
@@ -254,7 +284,9 @@ test('notifications card offers the toggle (or explains itself) — never auto-p
   await page.goto('/more');
   const card = page.getByTestId('notifications-card');
   await expect(card).toBeVisible();
-  await expect(card).toContainText('settlement');
+  // Round C rewrote this card: the old "settlement… nothing else" copy is gone;
+  // it now points at the per-category matrix on the Notifications settings screen.
+  await expect(card).toContainText('Notifications settings');
   // Supported browsers see the opt-in button; unsupported ones the
   // explanation. Either way nothing subscribes or prompts without a tap.
   await expect(
@@ -374,6 +406,12 @@ test('settlement pushes to both households except the creator; adjustment pushes
   await subscribe(marie, sinkEndpoint(marieSink));
   await subscribe(dana, sinkEndpoint(danaSink));
 
+  // N5: ledger push defaults OFF now — opt every recipient of these two events
+  // (settle → marie+dana; adjust → aaron+marie) back in so the deliveries fire.
+  await enableLedgerPush(page);
+  await enableLedgerPush(marie);
+  await enableLedgerPush(dana);
+
   const { mine, other } = await householdIds(page);
 
   // Event 1: Aaron records a settlement.
@@ -433,6 +471,7 @@ test('settlement pushes to both households except the creator; adjustment pushes
   expect((await sinkHits(page, aaronSink)).length).toBe(1);
   expect((await sinkHits(dana, danaSink)).length).toBe(1);
 
+  clearNotifyPrefs(['aaron', 'marie', 'dana']); // restore the default-off topology
   await marie.dispose();
   await dana.dispose();
 });
@@ -446,6 +485,7 @@ test('a 410 from the push service prunes the subscription', async ({ page }, tes
   const goneEndpoint = sinkEndpoint(goneSink, 410);
   await subscribe(dana, goneEndpoint);
   expect(await subscriptionStatus(dana, goneEndpoint)).toBe(true);
+  await enableLedgerPush(dana); // N5: ledger push is opt-in now
 
   const settle = await page.request.post('/api/trpc/ledger.settle', {
     data: {
@@ -462,6 +502,7 @@ test('a 410 from the push service prunes the subscription', async ({ page }, tes
   await expect.poll(async () => (await sinkHits(dana, goneSink)).length).toBe(1);
   await expect.poll(async () => subscriptionStatus(dana, goneEndpoint)).toBe(false);
 
+  clearNotifyPrefs(['dana']); // restore the default-off topology
   await dana.dispose();
 });
 

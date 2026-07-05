@@ -4,6 +4,7 @@ import { getSessionUser } from "@/server/auth";
 import { db } from "@/server/db";
 import "./globals.css";
 import { AppHeader } from "./app-header";
+import { FirstRunConsent } from "./first-run-consent";
 import { Providers } from "./providers";
 import { PwaSetup } from "./pwa-setup";
 import { TabBar } from "./tab-bar";
@@ -90,6 +91,7 @@ export default async function RootLayout({
           <VerifyBanner />
           {children}
           <TabBar />
+          <FirstRunConsent />
         </Providers>
       </body>
     </html>

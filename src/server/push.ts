@@ -1,6 +1,7 @@
 import webpush from 'web-push';
-import { formatCents } from '@/lib/money';
 import { db } from './db';
+import { sendSubscription } from './mail';
+import { channelPrefsForUsers, type NotifyCategory } from './notifications';
 import { isAllowedPushEndpoint } from './push-endpoint';
 
 /**
@@ -99,10 +100,115 @@ export async function sendPushToUsers(userIds: string[], payload: PushPayload): 
   );
 }
 
+/** The `{household}` placeholder in a notify title/body → recipient's own name. */
+const HOUSEHOLD_TOKEN = '{household}';
+
+export type NotifyOptions = {
+  /** Households whose members should be notified (deduped to one per user). */
+  recipientHouseholdIds: string[];
+  /** The actor USER — excluded so you're never notified of your own action. */
+  excludeUserId: string;
+  /** Which opt-out bucket this belongs to; drives per-user push/email prefs. */
+  category: NotifyCategory;
+  /** Where a notification tap deep-links (push url + implicit in-app context). */
+  url: string;
+  /**
+   * Generic title (N4): a category-only message + the recipient's OWN household
+   * name via the `{household}` token. NEVER a counterparty name/$/address/item.
+   */
+  title: string;
+  /** Generic body, same `{household}` substitution + same no-PII rule as title. */
+  body: string;
+  /**
+   * The counterparty household NAME, appended to the body ONLY for recipients
+   * whose `showDetails` is on (N4 opt-in). Still no dollars/addresses. Omit for
+   * two-sided events (a ledger settle/adjust) where "the counterparty" differs
+   * per recipient household.
+   */
+  detail?: string;
+};
+
 /**
- * Notify both households of a pair about a ledger event, except the creator.
+ * The generalized post-commit notifier (Phase 3 Round C, N4/N5). Resolves the
+ * recipient households' members (excluding the actor), and per user fans the
+ * message out to whichever channels their NotificationPreference (or the
+ * category default) has ON: push via the encrypted web-push sender, email via
+ * the RFC-8058 subscription pipeline (which re-checks the same email pref +
+ * suppression before sending). Content is generic and stamped with each
+ * recipient's OWN household name (N4) — a member of two recipient households is
+ * notified once, under the first.
+ *
  * Call AFTER the transaction commits, without awaiting:
- *   void notifyLedgerEvent(...) — it never throws.
+ *   void notify(...) — it never throws.
+ */
+export async function notify(opts: NotifyOptions): Promise<void> {
+  try {
+    const householdIds = [...new Set(opts.recipientHouseholdIds)];
+    if (householdIds.length === 0) return;
+
+    const [households, memberships] = await Promise.all([
+      db.household.findMany({ where: { id: { in: householdIds } }, select: { id: true, name: true } }),
+      db.membership.findMany({
+        where: { householdId: { in: householdIds }, userId: { not: opts.excludeUserId } },
+        select: { userId: true, householdId: true },
+      }),
+    ]);
+    const nameByHousehold = new Map(households.map((h) => [h.id, h.name]));
+
+    // One notification per USER, stamped with the first recipient household they
+    // belong to (a two-household member isn't double-notified).
+    const householdByUser = new Map<string, string>();
+    for (const m of memberships) {
+      if (!householdByUser.has(m.userId)) householdByUser.set(m.userId, m.householdId);
+    }
+    const userIds = [...householdByUser.keys()];
+    if (userIds.length === 0) return;
+
+    const [users, prefs] = await Promise.all([
+      db.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, email: true, showDetails: true },
+      }),
+      channelPrefsForUsers(userIds, opts.category),
+    ]);
+
+    await Promise.all(
+      users.map(async (user) => {
+        const pref = prefs.get(user.id) ?? { push: false, email: false };
+        if (!pref.push && !pref.email) return;
+        const householdName = nameByHousehold.get(householdByUser.get(user.id)!) ?? 'your household';
+        const title = opts.title.split(HOUSEHOLD_TOKEN).join(householdName);
+        let body = opts.body.split(HOUSEHOLD_TOKEN).join(householdName);
+        if (user.showDetails && opts.detail) body = `${body} ${opts.detail}`;
+
+        const jobs: Promise<unknown>[] = [];
+        if (pref.push) jobs.push(sendPushToUsers([user.id], { title, body, url: opts.url }));
+        if (pref.email) {
+          jobs.push(
+            sendSubscription({
+              to: user.email,
+              userId: user.id,
+              category: opts.category,
+              kind: opts.category,
+              subject: title,
+              text: body,
+            }),
+          );
+        }
+        await Promise.all(jobs);
+      }),
+    );
+  } catch (e) {
+    console.error('[notify] failed:', e instanceof Error ? e.message : e);
+  }
+}
+
+/**
+ * Ledger settle/adjust notifier, now riding the generalized matrix (category
+ * `ledger`, which per N5 defaults to push+email OFF — money noise is opt-in;
+ * ledger events still surface in-app + the digest). Content is generic (N4): no
+ * counterparty name, amount, or note in the push/subject. A two-sided event, so
+ * no `detail` — the "other household" differs for each recipient side.
  */
 export async function notifyLedgerEvent(opts: {
   creatorId: string;
@@ -110,28 +216,12 @@ export async function notifyLedgerEvent(opts: {
   title: string;
   body: string;
 }): Promise<void> {
-  try {
-    if (!vapidConfig()) return;
-    // Membership fan-out: one push per USER (a member of both households of
-    // the pair still gets exactly one), creator excluded per-user.
-    const memberships = await db.membership.findMany({
-      where: { householdId: { in: opts.householdIds }, userId: { not: opts.creatorId } },
-      select: { userId: true },
-    });
-    await sendPushToUsers(
-      [...new Set(memberships.map((m) => m.userId))],
-      { title: opts.title, body: opts.body, url: '/ledger' },
-    );
-  } catch (e) {
-    console.error('[push] notifyLedgerEvent failed:', e instanceof Error ? e.message : e);
-  }
-}
-
-/** Copy helpers so the two call sites and the tests agree on wording. */
-export function settlementPushBody(creatorName: string, amountCents: number, note: string) {
-  return `${creatorName} recorded ${formatCents(amountCents)} — ${note}`;
-}
-
-export function adjustmentPushBody(creatorName: string, amountCents: number, note: string) {
-  return `${creatorName} posted ${formatCents(amountCents)} — ${note}`;
+  await notify({
+    recipientHouseholdIds: opts.householdIds,
+    excludeUserId: opts.creatorId,
+    category: 'ledger',
+    url: '/ledger',
+    title: opts.title,
+    body: opts.body,
+  });
 }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { circleToGrantSet, getConnection, grantsFrom, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
+import { notify } from '../push';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -131,7 +132,7 @@ export const connectionRouter = router({
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'manageConnections');
       const me = ctx.user.householdId;
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         await requireOwnCircle(tx, me, input.circleId);
         const target = await tx.household.findUnique({ where: { slug: input.slug } });
         if (!target) {
@@ -165,8 +166,21 @@ export const connectionRouter = router({
         const connection = existing
           ? await tx.connection.update({ where: { id: existing.id }, data })
           : await tx.connection.create({ data: { householdAId, householdBId, ...data } });
-        return { id: connection.id, counterpartyName: target.name };
+        return { id: connection.id, counterpartyName: target.name, targetHouseholdId: target.id };
       });
+      // Post-commit: notify the ADDRESSEE household that a connection request is
+      // waiting on them to accept/decline. category pickups (needs your hands);
+      // generic content (N4). url /more (the Connections card lives there).
+      void notify({
+        recipientHouseholdIds: [result.targetHouseholdId],
+        excludeUserId: ctx.user.id,
+        category: 'pickups',
+        url: '/more',
+        title: 'New connection request for {household}',
+        body: 'A household asked to connect with you.',
+        detail: `From ${ctx.user.household.name}.`,
+      });
+      return { id: result.id, counterpartyName: result.counterpartyName };
     }),
 
   /**

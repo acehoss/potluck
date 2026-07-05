@@ -183,6 +183,20 @@ use — the domain reputation you built carries over. When you do, the one DNS g
 SPF record **replaces** DreamHost's auto one, so **merge** the provider's `include:` into a
 single SPF record rather than adding a second.
 
+**Notifications (Round C):** members set per-category preferences (pickups / neighborhood
+activity / money) across push + email, plus a weekly digest, on the More → Notifications
+screen. Two operational requirements:
+
+- **`MAIL_UNSUB_SECRET`** — an HMAC secret for the one-click `/unsub` links on subscription
+  mail (digests). A demo stack injects a dev value; the entrypoint **refuses to start a
+  `MAIL_PRODUCTION=1` stack without a real one** (set it to a long random string in the host
+  env). Rotating it invalidates outstanding unsubscribe links (they re-issue on the next send).
+- **Weekly digest** — there is no in-process scheduler. Run `runDigest(now)` from an
+  **external cron** (e.g. the DO droplet's crontab) hitting an authenticated trigger, say
+  hourly; it sends each user at their local Sunday-morning window (`User.timezone`, UTC
+  fallback) and is idempotent per weekly window (`lastDigestAt`), so an hourly cron never
+  double-sends. The `SEED_DEMO`-gated `/api/dev/digest-run` is the test/on-demand hook only.
+
 ## Receipt extraction (VLM)
 
 The receiving wizard can prefill receipt lines from the photos via Claude.

@@ -4,6 +4,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from '../auth';
 import { hasActiveGrant, reachesResource, requireCapability } from '../authz';
 import { dbTransaction } from '../db';
+import { notify } from '../push';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -221,7 +222,7 @@ export const orderRouter = router({
     .input(z.object({ orderId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'placeOrders');
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         const order = await tx.order.findUnique({
           where: { id: input.orderId },
           include: { lines: true, pantry: { select: { householdId: true } } },
@@ -244,15 +245,31 @@ export const orderRouter = router({
           data: { status: 'REQUESTED', requestedAt: new Date() },
         });
         if (moved.count === 0) {
-          // Already requested (idempotent replay) — no re-reserve.
-          return { orderId: order.id, status: 'REQUESTED' as const };
+          // Already requested (idempotent replay) — no re-reserve, no re-notify.
+          return { orderId: order.id, submitted: false, ownerHouseholdId: order.pantry.householdId };
         }
         for (const line of order.lines) {
           await loadOrderableLot(tx, ctx.user, line.lotId, order.pantryId);
           await reserve(tx, line.lotId, line.quantity);
         }
-        return { orderId: order.id, status: 'REQUESTED' as const };
+        return { orderId: order.id, submitted: true, ownerHouseholdId: order.pantry.householdId };
       });
+      // Post-commit (blueprint 04 §4 shape): notify the pantry-OWNER household a
+      // request landed — but not for an own-pantry order (owner == requester).
+      // Fired only on a genuine DRAFT→REQUESTED move (idempotent replay stays
+      // quiet). category pickups (needs-your-hands); generic content (N4).
+      if (result.submitted && result.ownerHouseholdId !== ctx.user.householdId) {
+        void notify({
+          recipientHouseholdIds: [result.ownerHouseholdId],
+          excludeUserId: ctx.user.id,
+          category: 'pickups',
+          url: '/orders',
+          title: 'New request in {household}',
+          body: 'A household wants goods from your pantry.',
+          detail: `From ${ctx.user.household.name}.`,
+        });
+      }
+      return { orderId: result.orderId, status: 'REQUESTED' as const };
     }),
 
   /** Owner starts picking a REQUESTED order → PICKING. Locks the requester's edits. */
@@ -282,7 +299,7 @@ export const orderRouter = router({
   markReady: protectedProcedure
     .input(z.object({ orderId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         const order = await tx.order.findUnique({
           where: { id: input.orderId },
           include: { pantry: { select: { householdId: true } } },
@@ -297,8 +314,22 @@ export const orderRouter = router({
           data: { status: 'READY', readyAt: new Date() },
         });
         if (moved.count === 0) throw new TRPCError({ code: 'CONFLICT', message: 'Order is not being picked.' });
-        return { ok: true };
+        return { requesterHouseholdId: order.householdId, ownerHouseholdId: order.pantry.householdId };
       });
+      // Post-commit: tell the REQUESTING household their order is ready to pick
+      // up (skip an own-pantry order — requester == owner). pickups; generic.
+      if (result.requesterHouseholdId !== result.ownerHouseholdId) {
+        void notify({
+          recipientHouseholdIds: [result.requesterHouseholdId],
+          excludeUserId: ctx.user.id,
+          category: 'pickups',
+          url: '/orders',
+          title: 'Ready to pick up in {household}',
+          body: 'An order you placed is ready.',
+          detail: `From ${ctx.user.household.name}.`,
+        });
+      }
+      return { ok: true };
     }),
 
   /**

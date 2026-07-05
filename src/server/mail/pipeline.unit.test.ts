@@ -66,7 +66,7 @@ test('unsubToken: deterministic, base64url, and decodes to userId.category.sig',
 });
 
 test('unsubToken: different category yields a different token', () => {
-  assert.notEqual(unsubToken('user-1', 'digest'), unsubToken('user-1', 'share'));
+  assert.notEqual(unsubToken('user-1', 'digest'), unsubToken('user-1', 'circle'));
 });
 
 test('unsubToken: signature actually depends on the secret (HMAC, not a hash of public data)', () => {

@@ -90,6 +90,20 @@ export default async function MorePage() {
           </Link>
         )}
 
+        <Link
+          href="/more/notifications"
+          data-testid="notif-prefs"
+          className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised p-4 shadow-sm"
+        >
+          <div>
+            <h2 className="text-lg font-semibold">Notifications</h2>
+            <p className="text-sm text-text-muted">
+              Choose what reaches you by phone or email, and your weekly summary.
+            </p>
+          </div>
+          <span className="text-text-muted">→</span>
+        </Link>
+
         <h2 className="mt-2 text-xs font-medium uppercase tracking-wide text-text-muted">
           This device
         </h2>

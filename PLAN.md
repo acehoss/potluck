@@ -140,6 +140,53 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Phase 3 Round C — notification preferences + push matrix + digest (2026-07-05)
+
+**Done. The notification system** (docs/REWORK.md N4/N5/N6). Migration
+`20260705180000_notifications` additive (`NotificationPreference` per (user,category) +
+User `timezone/digestOptOut/showDetails/lastDigestAt/notifyOnboardedAt`). Three-teammate
+team, coordinator-integrated. Zero money paths.
+
+- **Per-user preference matrix** — three categories with per-channel push/email toggles:
+  **pickups** (order requested/ready, share claimed, connection request — default push+email
+  ON), **circle** (new share posted — default OFF, digest instead), **ledger** (settlement/
+  adjustment — default OFF, in-app + digest). `account` (verify/reset/mfa) stays transactional,
+  never in prefs. Absent pref row = the category default; `setChannel`/`/unsub` initialize
+  BOTH channels to the category default on first write so flipping one never zeroes the other.
+  A per-user weekly-digest opt-out + a `showDetails` privacy toggle (default off) + optional
+  timezone. First-run consent modal (once per account, `notifyOnboardedAt`).
+- **Generalized push** — `notifyLedgerEvent` became a `notify({recipientHouseholdIds,
+  excludeUserId, category, url, title, body, detail?})` layer that resolves recipient members,
+  checks each user's prefs, and sends push (Web-Push-encrypted) + email (Round-A subscription
+  pipeline) per channel. Wired into the 5 real events (order.submit/markReady, share.claim/
+  create, connection.request). **N4 content rule:** title/body carry a `{household}` stamp of
+  the RECIPIENT'S OWN household name only — never a counterparty name, dollar, or address;
+  `showDetails` opt-in appends the counterparty household name to the body.
+- **Weekly digest** — `runDigest`/`digestFor` assemble balances (`netByCounterparty`), open
+  loops (factored `openLoopsFor` out of activity.list, byte-identical), and new-shares-this-week;
+  sent via the subscription pipeline with a List-Unsubscribe header, idempotent per weekly
+  window. `/unsub` RFC-8058 one-click route (HMAC verify, no session); `MAIL_UNSUB_SECRET` prod
+  entrypoint guard (Round-A follow-up **closed**). Production digest = external cron (README).
+- **DELIBERATE N5 change:** settlement/adjustment no longer push by default (money = in-app +
+  digest); opt-in restores push. slice7 reconciled to enable the pref then assert.
+- **Gate — green.** typecheck + lint:tokens clean, unit **140/140** (+ defaults + unsub-token
+  suites); notify-server's in-container proof **36/36**; notify-ui browser-verified light+dark
+  (prefs matrix + first-run consent persist). Full both-engine e2e on a fresh `down -v` stack:
+  **318 passed / 6 skipped / 0 failed**.
+- **The gate lesson — a global blocking modal breaks the whole suite in two waves.** The
+  first-run consent modal is a `fixed inset-0` overlay; it intercepts every pointer event for
+  any un-onboarded account. Wave 1: seeded accounts booted un-onboarded → fixed by seeding
+  `notifyOnboardedAt` (same shape as Round B's verified-banner seed). Wave 2 (only the re-gate
+  exposed it): accounts CREATED mid-test via browser invite-acceptance boot un-onboarded too →
+  timed out → incomplete `finally` → a leaked `Ferris (e2e)` household + stray connection →
+  **cascade** of "unrelated" order/settle/lending failures (all read ledger net through the
+  broken topology). Fixed with Playwright `page.addLocatorHandler` (`autoDismissFirstRun`)
+  armed in `login()` + the two register-form guests — auto-dismisses the modal wherever it
+  appears, no-op when onboarded. Takeaway: a new app-wide blocking overlay must be handled in
+  the shared test harness, and a mid-test timeout that skips teardown cascades across the
+  workers:1 shared DB.
+- **Follow-up (still deferred):** unify the MFA router's per-factor aliases (Round-B cosmetic).
+
 ## Phase 3 Round B — auth flows: verification, reset, MFA (2026-07-05)
 
 **Done. Email verification + password reset + MFA on the Round-A mail substrate**

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { login, openHome, PASSWORD } from './helpers';
+import { autoDismissFirstRun, login, openHome, PASSWORD } from './helpers';
 
 /**
  * Round 1 slice 4 acceptance — onboarding + instance admin (REWORK A1/A3/A4/D2):
@@ -107,6 +107,10 @@ test('a household invite founds a new connected household (anonymous acceptance)
 
     // A stranger accepts: names their household, registers, lands signed in.
     const guest = await guestContext.newPage();
+    // This guest registers a BRAND-NEW account (un-onboarded) and then drives
+    // the app UI — arm the first-run-consent auto-dismiss so the modal can't
+    // intercept its pantry/tab clicks (it doesn't go through `login`).
+    await autoDismissFirstRun(guest);
     await guest.goto(link);
     await expect(guest.getByText('invited you to start your own household')).toBeVisible();
     await guest.getByTestId('invite-household-name').fill(casa);

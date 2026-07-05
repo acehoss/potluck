@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
@@ -268,10 +269,14 @@ export function NotificationsCard() {
 
   return (
     <section data-testid="notifications-card" className={card}>
-      <h2 className="text-lg font-semibold">Notifications</h2>
+      <h2 className="text-lg font-semibold">Notifications on this device</h2>
       <p className="text-sm text-text-muted">
-        A heads-up when someone records a settlement or posts a manual ledger adjustment —
-        nothing else.
+        Turn on phone notifications for this browser or device. What you get a notification about —
+        pickups, neighborhood activity, settling up — is up to you in{' '}
+        <Link href="/more/notifications" className="font-medium text-accent hover:underline">
+          Notifications settings
+        </Link>
+        .
       </p>
       {supported === false ? (
         <p className="text-sm text-text" data-testid="push-unsupported">

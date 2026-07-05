@@ -5,6 +5,7 @@ import type { SessionUser } from '../auth';
 import { getConnection, grantsFrom, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
 import { imageFileExists, isStoredImagePath } from '../images';
+import { notify } from '../push';
 import { apportionFifo, defaultExpiresAt, MAX_EXPIRY_MS } from '../shares';
 import { protectedProcedure, router } from '../trpc';
 
@@ -40,7 +41,7 @@ function feedLive(post: { status: string; expiresAt: Date }, now: Date): boolean
  * grant the poster `shareFrom` (show me their posts)? Both must be on.
  * Own-household is a separate branch the callers handle first.
  */
-async function shareVisible(dbc: Dbc, posterHouseholdId: string, viewerHouseholdId: string) {
+export async function shareVisible(dbc: Dbc, posterHouseholdId: string, viewerHouseholdId: string) {
   const conn = await getConnection(dbc, posterHouseholdId, viewerHouseholdId);
   if (!conn || conn.status !== 'ACTIVE') return false;
   return (
@@ -388,10 +389,10 @@ export const shareRouter = router({
         expiresAt = defaultExpiresAt(input.type, now);
       }
 
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         if (input.clientKey) {
           const prior = await tx.sharePost.findUnique({ where: { clientKey: input.clientKey } });
-          if (prior) return { id: prior.id };
+          if (prior) return { id: prior.id, created: false };
         }
         if (input.photoPath) await assertFreshShareImage(tx, input.photoPath);
         const lotIds = input.type === 'SURPLUS' ? input.lotIds ?? [] : [];
@@ -417,8 +418,35 @@ export const shareRouter = router({
         for (const lotId of lotIds) {
           await tx.sharePostLot.create({ data: { postId: post.id, lotId } });
         }
-        return { id: post.id };
+        return { id: post.id, created: true };
       });
+      // Post-commit: notify every connected household that can SEE this new post
+      // (poster's ACTIVE connections filtered by shareVisible — both directions).
+      // category circle (ambient neighborhood activity, default push/email OFF —
+      // it's the digest's home); generic content (N4). Skipped on clientKey replay.
+      if (result.created) {
+        const poster = ctx.user.householdId;
+        const conns = await db.connection.findMany({
+          where: { status: 'ACTIVE', OR: [{ householdAId: poster }, { householdBId: poster }] },
+        });
+        const audience: string[] = [];
+        for (const c of conns) {
+          const other = c.householdAId === poster ? c.householdBId : c.householdAId;
+          if (await shareVisible(db, poster, other)) audience.push(other);
+        }
+        if (audience.length > 0) {
+          void notify({
+            recipientHouseholdIds: audience,
+            excludeUserId: ctx.user.id,
+            category: 'circle',
+            url: '/shares',
+            title: 'New neighborhood activity for {household}',
+            body: 'A connected household posted a new share.',
+            detail: `From ${ctx.user.household.name}.`,
+          });
+        }
+      }
+      return { id: result.id };
     }),
 
   /**
@@ -476,10 +504,10 @@ export const shareRouter = router({
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'postShares');
       const H = ctx.user.householdId;
-      return dbTransaction(async (tx) => {
+      const result = await dbTransaction(async (tx) => {
         if (input.clientKey) {
           const prior = await tx.shareClaim.findUnique({ where: { clientKey: input.clientKey } });
-          if (prior) return { id: prior.id, status: prior.status };
+          if (prior) return { id: prior.id, status: prior.status, created: false, postHouseholdId: null };
         }
         const { post, origin, mine, live } = await loadVisiblePost(tx, ctx.user, input.postId);
         if (mine) throw new TRPCError({ code: 'BAD_REQUEST', message: "You can't claim your own post." });
@@ -525,8 +553,28 @@ export const shareRouter = router({
             status: 'PENDING',
           },
         });
-        return { id: claim.id, status: 'PENDING' as const };
+        return {
+          id: claim.id,
+          status: 'PENDING' as const,
+          created: true,
+          postHouseholdId: post.householdId,
+        };
       });
+      // Post-commit: notify the household that OWNS the claimed post (the origin
+      // poster, or the resharer for a copy) that someone wants what they shared.
+      // category pickups (a handoff waiting on them); generic content (N4).
+      if (result.created && result.postHouseholdId) {
+        void notify({
+          recipientHouseholdIds: [result.postHouseholdId],
+          excludeUserId: ctx.user.id,
+          category: 'pickups',
+          url: '/shares',
+          title: 'Someone claimed your share in {household}',
+          body: 'A household wants something you posted.',
+          detail: `From ${ctx.user.household.name}.`,
+        });
+      }
+      return { id: result.id, status: result.status };
     }),
 
   /** Retract your own PENDING claim; an uncounted post returns CLAIMED→OPEN. */

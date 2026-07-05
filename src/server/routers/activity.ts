@@ -75,16 +75,26 @@ export type ActivityItem =
       unit: string | null;
     };
 
-export const activityRouter = router({
-  /**
-   * The attention list for the acting household, newest-attention first, capped
-   * at 50 (a mutual-aid instance never has a real backlog; pagination is a
-   * door). Returns `actionableCount` for the bell badge.
-   */
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const H = ctx.user.householdId;
-    const m = ctx.user.activeMembership;
-    const now = new Date();
+/** The membership capability flags the attention feed consults. */
+type LoopMembership = {
+  receiveStock: boolean;
+  fulfill: boolean;
+  spend: boolean;
+  manageConnections: boolean;
+};
+
+/**
+ * The acting household's open attention loops (newest first, capped at 50) — a
+ * DERIVED read over existing state, shared by the /activity bell (`list`) and
+ * the weekly digest (Round C). `actionable` = "THIS membership can advance it";
+ * `actionableCount` is the bell badge. Factored out so the digest reports the
+ * same loops the in-app feed does, from one source of truth.
+ */
+export async function openLoopsFor(
+  H: string,
+  m: LoopMembership,
+): Promise<{ items: ActivityItem[]; actionableCount: number }> {
+  const now = new Date();
 
     const [drafts, incoming, outgoing, pending, claims] = await Promise.all([
       // 1. Own DRAFT restocks — receiving that was started and left open.
@@ -242,9 +252,19 @@ export const activityRouter = router({
       });
     }
 
-    items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    const capped = items.slice(0, 50);
-    const actionableCount = capped.filter((i) => i.actionable).length;
-    return { items: capped, actionableCount };
+  items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const capped = items.slice(0, 50);
+  const actionableCount = capped.filter((i) => i.actionable).length;
+  return { items: capped, actionableCount };
+}
+
+export const activityRouter = router({
+  /**
+   * The attention list for the acting household, newest-attention first, capped
+   * at 50 (a mutual-aid instance never has a real backlog; pagination is a
+   * door). Returns `actionableCount` for the bell badge.
+   */
+  list: protectedProcedure.query(async ({ ctx }) => {
+    return openLoopsFor(ctx.user.householdId, ctx.user.activeMembership);
   }),
 });
