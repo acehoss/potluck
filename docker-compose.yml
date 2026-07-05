@@ -5,7 +5,10 @@ services:
     # healthcheck only marks the container unhealthy; this is what acts on it.
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Overridable host bind + port. APP_BIND pins the published port to one
+      # interface (e.g. a Tailscale IP, so :3000 never reaches the LAN/public);
+      # APP_PORT moves the host port. The container always listens on 3000.
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
     environment:
       DATABASE_URL: file:/data/coop.db
       IMAGES_DIR: /data/images
@@ -53,7 +56,12 @@ services:
       EMAIL_IMAP_SERVER: ${EMAIL_IMAP_SERVER:-}
       EMAIL_IMAP_PORT: ${EMAIL_IMAP_PORT:-993}
     volumes:
-      - coop-data:/data
+      # Data (SQLite DB + images) uses the `coop-data` named volume by default
+      # — safe for macOS dev/e2e (no bind-mount SQLite WAL flakiness). On a
+      # Linux production host set COOP_DATA=./data for a host-visible bind mount
+      # (easier backups/inspection; the container runs as root so writes just
+      # work). /data/ is already gitignored.
+      - "${COOP_DATA:-coop-data}:/data"
     healthcheck:
       test:
         - CMD
