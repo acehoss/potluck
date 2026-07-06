@@ -191,11 +191,18 @@ screen. Two operational requirements:
   mail (digests). A demo stack injects a dev value; the entrypoint **refuses to start a
   `MAIL_PRODUCTION=1` stack without a real one** (set it to a long random string in the host
   env). Rotating it invalidates outstanding unsubscribe links (they re-issue on the next send).
-- **Weekly digest** — there is no in-process scheduler. Run `runDigest(now)` from an
-  **external cron** (e.g. the DO droplet's crontab) hitting an authenticated trigger, say
-  hourly; it sends each user at their local Sunday-morning window (`User.timezone`, UTC
-  fallback) and is idempotent per weekly window (`lastDigestAt`), so an hourly cron never
-  double-sends. The `SEED_DEMO`-gated `/api/dev/digest-run` is the test/on-demand hook only.
+- **Weekly digest** — there is no in-process scheduler; drive it from an **external cron**
+  on the Docker host, **hourly**:
+  ```bash
+  0 * * * *  cd /path/to/coop && docker compose exec -T app npx tsx scripts/run-digest.ts
+  ```
+  `scripts/run-digest.ts` (no args) calls `runDigest(now)`, which sends each user only at
+  their local Sunday-morning window (`User.timezone`, UTC fallback) and is idempotent per
+  weekly window (`lastDigestAt`) — so the hourly cron sweeps every timezone across Sunday,
+  never double-sends, and is a cheap no-op the rest of the week. To **smoke-test** the mail
+  path on a fresh deploy without waiting for Sunday, force one user's digest now (opt-out
+  still honored): `docker compose exec -T app npx tsx scripts/run-digest.ts you@example.com`.
+  (The `SEED_DEMO`-gated `/api/dev/digest-run` route is the e2e/on-demand hook only.)
 
 ## Receipt extraction (VLM)
 
