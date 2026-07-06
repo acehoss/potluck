@@ -158,9 +158,11 @@ progress below, newest first.
 - **"Save contact" → "Save contact to device"** (the vCard button pulls data out of the
   app; the label now says so).
 - **Gate — green**: unit 202/202, full both-engine e2e **364 passed / 0 failed** on a
-  fresh stack. Ops note: t-e2e landed its specs then stalled without reporting (orphaned
-  `-p` stack torn down); the coordinator gated the landed tree directly — the
-  verify-state-directly rule again.
+  fresh stack. Ops note (corrected): t-e2e looked stalled (idle pings, hour-old `-p`
+  stack) so the coordinator gated the landed tree directly — but it was actually mid
+  long-running full-suite verify, which ALSO came back 364/0 green on its own stack.
+  Two independent green full runs; the verify-state-directly rule still applied
+  correctly (the tree was gate-ready), just with a wrong stall diagnosis.
 
 ## Round S — plan/shopping: Add from Plan, added-to-list tracking (2026-07-06)
 
