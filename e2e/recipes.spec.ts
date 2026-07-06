@@ -442,26 +442,35 @@ test('importUrl SSRF surface (G4): every unsafe URL degrades to { status: "unava
   }
 });
 
-// UI smoke — LAST. Needs the rebuilt stack serving /recipes. The row's fields
-// have no per-field testids (contract stops at recipe-ingredient-row), but each
-// carries a stable aria-label — Amount/Unit/Ingredient/Note on an item row,
-// "Section heading" on a heading row — so address them by accessible name
-// (robust to the optional 4th Note input and any future field reorder).
-test('UI smoke: compose a recipe, save it, then fork it from the connected household', async ({
+// UI — LAST. Needs the rebuilt stack serving /recipes + the Round-R view/cook/
+// edit routes. Item-row fields have no per-field testids (contract stops at
+// recipe-ingredient-row) but each carries a stable aria-label
+// (Amount/Unit/Ingredient/Note, "Section heading"), so address them by name.
+
+/**
+ * Round R view surface (R1): an OWN recipe row opens the READ view — Cook + Edit
+ * beside the numbered steps, NOT the editor (which moved to /recipes/[id]/edit).
+ * Edit reaches the populated editor and a save still round-trips. The SHARED
+ * row keeps its fork on the same unified view (guards the pre-Round-R assertion
+ * that recipes.spec has always made: a connected household opens a shared recipe
+ * and forks it with attribution).
+ */
+test('UI (R1): own row opens the read view (Cook+Edit), the editor still saves; a shared row keeps Fork', async ({
   page,
   browser,
 }, testInfo) => {
   const P = testInfo.project.name;
   const title = uniq('UI Frittata', P);
+  const descMark = uniq('weeknight staple', P);
 
   await login(page, 'aaron');
-  // The recipe book moved to a Home-tab strip in the Round-E IA flip.
-  await page.goto('/home');
-  await page.getByTestId('home-recipes').click();
-  await expect(page).toHaveURL(/\/recipes$/);
-
+  await page.goto('/recipes');
   await page.getByTestId('recipe-new').click();
   await page.getByTestId('recipe-title').fill(title);
+  // Multi-line directions so the view renders numbered steps (splitSteps).
+  await page
+    .getByTestId('recipe-directions')
+    .fill('Whisk the eggs.\nPour into the pan.\nBake until set.');
 
   // One item line: fill amount/unit/text by accessible name.
   await page.getByTestId('recipe-add-line').click();
@@ -480,12 +489,34 @@ test('UI smoke: compose a recipe, save it, then fork it from the connected house
 
   await page.getByTestId('recipe-save').click();
 
-  // Back in the book, the new recipe row appears.
+  // Book → the own row opens the READ VIEW, not the editor.
   const aaronRow = page.getByTestId('recipe-row').filter({ hasText: title });
   await expect(aaronRow).toBeVisible();
+  await aaronRow.click();
+  await expect(page).toHaveURL(/\/recipes\/[^/]+$/); // view, NOT /edit
+  const viewUrl = page.url();
+  await expect(page.getByTestId('recipe-cook')).toBeVisible();
+  await expect(page.getByTestId('recipe-edit')).toBeVisible();
+  await expect(page.getByText('Pour into the pan.')).toBeVisible(); // a numbered step
 
-  // Dana (full edge) sees it in her shared section, opens it, and forks it into
-  // her own book — attribution to Heise is visible on the fork.
+  // Edit → the editor is populated → editing a field still saves.
+  await page.getByTestId('recipe-edit').click();
+  await expect(page).toHaveURL(/\/recipes\/[^/]+\/edit$/);
+  await expect(page.getByTestId('recipe-title')).toHaveValue(title);
+  await page.getByTestId('recipe-description').fill(descMark);
+  await page.getByTestId('recipe-save').click();
+  await expect(page).toHaveURL(/\/recipes$/); // save returns to the book
+
+  // A fresh load of the view shows the saved edit. (recipe.update invalidates
+  // recipe.list but not the per-id recipe.get, and the client holds a 30s
+  // staleTime — so a soft nav back would read stale cache; a hard load asserts
+  // the save round-tripped deterministically.)
+  await page.goto(viewUrl);
+  await expect(page.getByText(descMark)).toBeVisible();
+  await expect(page.getByTestId('recipe-cook')).toBeVisible();
+
+  // Dana (full edge) opens the SHARED row and forks it — the fork stays on the
+  // unified view, carrying the source household's name (own-fork attribution).
   const danaCtx = await browser.newContext({
     baseURL: process.env.BASE_URL ?? 'http://localhost:3000',
   });
@@ -497,13 +528,11 @@ test('UI smoke: compose a recipe, save it, then fork it from the connected house
     await expect(danaRow).toBeVisible();
     await danaRow.click();
     await dana.getByTestId('recipe-fork').click();
-    // The fork lands in Dana's book carrying the source household's name.
     await expect(dana.getByText('Heise')).toBeVisible();
     await expect(dana.getByText(title).first()).toBeVisible();
   } finally {
     await danaCtx.close();
-    // Sweep every copy this run created (original + any fork), by title, so a
-    // partial-failure run can't accumulate rows across reruns.
+    // Sweep every copy this run created (original + any fork), by title.
     for (const who of [page.request, await apiLogin('dana')]) {
       const list = (await okGet(who, 'recipe.list')) as RecipeList;
       for (const r of list.mine) {
@@ -511,6 +540,117 @@ test('UI smoke: compose a recipe, save it, then fork it from the connected house
           await rpc(who, 'recipe.delete', { recipeId: r.id });
         }
       }
+    }
+  }
+});
+
+/**
+ * Round R Cook view (R2): the hands-free stepper. A fixture recipe (RPC — fast,
+ * deterministic) with 4 newline steps and a scalable "2 cup" ingredient drives:
+ * step navigation (cook-next + the counter), servings rescale (the amount text
+ * follows the stepper), tap-to-check (aria-pressed), keyboard advance (chromium),
+ * and step persistence across a reload (sessionStorage potluck-cook:<id>).
+ */
+test('UI (R2): Cook view steps advance, ingredient checks off, servings rescale, step persists on reload', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  const title = uniq('UI Cook', P);
+  await login(page, 'aaron');
+
+  const created = await ok(page.request, 'recipe.create', {
+    title,
+    servings: 2,
+    directions: 'Warm the pan.\nStir in the flour.\nBake it now.\nLet it rest.',
+    ingredients: [{ kind: 'item', amount: '2', unit: 'cup', text: 'flour' }],
+  });
+  const id = created.id as string;
+
+  try {
+    await page.goto(`/recipes/${id}/cook`);
+    await expect(page.getByTestId('cook-step-counter')).toContainText('Step 1 of 4');
+    await expect(page.getByTestId('cook-step')).toContainText('Warm the pan');
+
+    // Servings rescale: base = 2 (factor 1) → the amount reads "2"; +1 serving
+    // → factor 1.5 → "3". Target the amount span (first span in the button) so
+    // the assertion is exact and ingredient-name-agnostic.
+    const amount = page.getByTestId('cook-ingredient').first().locator('span').first();
+    await expect(amount).toHaveText('2');
+    await page.getByTestId('cook-servings-plus').click();
+    await expect(page.getByTestId('cook-servings-value')).toContainText('3');
+    await expect(amount).toHaveText('3');
+
+    // Tap-to-check toggles aria-pressed (strike + dim styling rides along).
+    const ingredient = page.getByTestId('cook-ingredient').first();
+    await expect(ingredient).toHaveAttribute('aria-pressed', 'false');
+    await ingredient.click();
+    await expect(ingredient).toHaveAttribute('aria-pressed', 'true');
+
+    // Next advances the step body + counter.
+    await page.getByTestId('cook-next').click();
+    await expect(page.getByTestId('cook-step-counter')).toContainText('Step 2 of 4');
+    await expect(page.getByTestId('cook-step')).toContainText('Stir in the flour');
+
+    // Keyboard advance (window keydown; chromium at least — webkit stays at 2).
+    let expectedStep = 2;
+    if (P === 'chromium') {
+      await page.keyboard.press('ArrowRight');
+      await expect(page.getByTestId('cook-step-counter')).toContainText('Step 3 of 4');
+      await expect(page.getByTestId('cook-step')).toContainText('Bake it now');
+      expectedStep = 3;
+    }
+
+    // Persistence: a reload keeps the current step (only the step persists —
+    // servings + check state reset, which is the intended contract).
+    await page.reload();
+    await expect(page.getByTestId('cook-step-counter')).toContainText(`Step ${expectedStep} of 4`);
+  } finally {
+    await deleteQuietly(page.request, id);
+  }
+});
+
+/**
+ * Round R image import (R3): the editor wiring, driven end-to-end through the
+ * SEED_DEMO import fixture (the SSRF guard blocks a self-served page, so the
+ * server exposes two sentinel URLs under fixture.potluck.test — the download +
+ * extraction correctness is proven separately in recipe-import.unit.test.ts).
+ *   with-photo → a REAL jpeg is written + returned as photoPath → the editor
+ *     shows it as the /api/images preview and a Save (real fresh file) succeeds.
+ *   photo-note → photoUrl set but photoPath null → the "add one?" note shows.
+ */
+test('UI (R3): a fixture import lands the downloaded photo as a saveable preview; a fetch-failed photo shows the note', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  const savedTitle = uniq('Imported Cornbread', P);
+  await login(page, 'aaron');
+
+  try {
+    // with-photo: the preview <img> points at the really-written file, the
+    // fixture recipe fills the form, and a Save (renamed for a clean sweep)
+    // passes the fresh-photo validation.
+    await page.goto('/recipes/new');
+    await page.getByTestId('recipe-import-url').fill('https://fixture.potluck.test/import/with-photo');
+    await page.getByTestId('recipe-import-fetch').click();
+    await expect(page.locator('img[src^="/api/images/recipes/"]')).toBeVisible();
+    await expect(page.getByTestId('recipe-title')).toHaveValue('Fixture Skillet Cornbread');
+    await expect(page.getByTestId('recipe-import-photo-note')).toHaveCount(0);
+
+    await page.getByTestId('recipe-title').fill(savedTitle);
+    await page.getByTestId('recipe-save').click();
+    await expect(page).toHaveURL(/\/recipes$/);
+    await expect(page.getByTestId('recipe-row').filter({ hasText: savedTitle })).toBeVisible();
+
+    // photo-note: same recipe, photoUrl but no fetchable jpeg → the gentle note.
+    await page.goto('/recipes/new');
+    await page.getByTestId('recipe-import-url').fill('https://fixture.potluck.test/import/photo-note');
+    await page.getByTestId('recipe-import-fetch').click();
+    await expect(page.getByTestId('recipe-import-photo-note')).toBeVisible();
+    await expect(page.locator('img[src^="/api/images/recipes/"]')).toHaveCount(0);
+  } finally {
+    const list = (await okGet(page.request, 'recipe.list')) as RecipeList;
+    for (const r of list.mine) {
+      if (r.title === savedTitle) await rpc(page.request, 'recipe.delete', { recipeId: r.id });
     }
   }
 });

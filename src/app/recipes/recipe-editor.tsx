@@ -1,9 +1,9 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
+import { BackLink } from '@/app/nav-history';
 import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { useTRPC } from '@/lib/trpc';
@@ -54,7 +54,13 @@ function intField(s: string): number | undefined {
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
-export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
+export function RecipeEditor({
+  initial,
+  backFallback = '/recipes',
+}: {
+  initial?: RecipeDto;
+  backFallback?: string;
+}) {
   const trpc = useTRPC();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -80,6 +86,8 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
   const [newPhoto, setNewPhoto] = useState<{ path: string; preview: string } | null>(null);
   const [removed, setRemoved] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Set when a URL import found a photo but couldn't download it as a JPEG.
+  const [importPhotoNote, setImportPhotoNote] = useState<string | null>(null);
 
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
@@ -87,7 +95,13 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const invalidate = () => queryClient.invalidateQueries(trpc.recipe.list.pathFilter());
+  // Invalidate the list AND every per-id read view — Round R's read page holds
+  // recipe.get with a staleTime, so a soft-nav back after editing would show
+  // stale content for up to 30s otherwise.
+  const invalidate = () => {
+    void queryClient.invalidateQueries(trpc.recipe.list.pathFilter());
+    void queryClient.invalidateQueries(trpc.recipe.get.pathFilter());
+  };
   const onError = (e: { message: string }) => setError(e.message);
 
   const create = useMutation(
@@ -156,6 +170,17 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
         if (d.prepMinutes != null) setPrep(String(d.prepMinutes));
         if (d.cookMinutes != null) setCook(String(d.cookMinutes));
         setSourceUrl(d.sourceUrl);
+        // Photo: the server downloaded + stored it (photoPath) when the site's
+        // image came back as a JPEG; if it found one it couldn't fetch
+        // (photoUrl set, photoPath null) we nudge the cook to add their own.
+        if (d.photoPath) {
+          if (newPhoto) URL.revokeObjectURL(newPhoto.preview);
+          setNewPhoto({ path: d.photoPath, preview: `/api/images/${d.photoPath}` });
+          setRemoved(false);
+          setImportPhotoNote(null);
+        } else {
+          setImportPhotoNote(d.photoUrl ? "Couldn't fetch the site's photo — add one?" : null);
+        }
         setRows(
           d.ingredients.length
             ? d.ingredients.map((pi) => ({
@@ -204,6 +229,7 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
       if (newPhoto) URL.revokeObjectURL(newPhoto.preview);
       setNewPhoto({ path, preview: URL.createObjectURL(jpeg) });
       setRemoved(false);
+      setImportPhotoNote(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed.');
     } finally {
@@ -259,9 +285,7 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-5 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex items-center gap-3">
-        <Link href="/recipes" aria-label="Back to book" className="shrink-0 text-lg text-text-muted">
-          ←
-        </Link>
+        <BackLink fallback={backFallback} label="Back" />
         <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">
           {initial ? 'Edit recipe' : 'New recipe'}
         </h1>
@@ -431,6 +455,7 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
             <img
               src={photoSrc}
               alt=""
+              data-testid="recipe-photo-preview"
               className="size-16 shrink-0 rounded-lg border border-border object-cover"
             />
           ) : (
@@ -461,6 +486,7 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
                 if (newPhoto) URL.revokeObjectURL(newPhoto.preview);
                 setNewPhoto(null);
                 setRemoved(true);
+                setImportPhotoNote(null);
               }}
               className="min-h-11 rounded-lg px-2 py-2 text-sm font-medium text-text-muted hover:text-danger"
             >
@@ -468,6 +494,12 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
             </button>
           )}
         </div>
+
+        {importPhotoNote && (
+          <p data-testid="recipe-import-photo-note" className="-mt-3 text-sm text-text-muted">
+            {importPhotoNote}
+          </p>
+        )}
 
         {/* Ingredients */}
         <section className="flex flex-col gap-2">

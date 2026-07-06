@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -38,6 +39,20 @@ export async function readImageFile(rel: string): Promise<Buffer | null> {
   const abs = resolveImagePath(rel);
   if (!abs) return null;
   return fs.readFile(abs).catch(() => null);
+}
+
+/**
+ * Write server-owned bytes as a new stored file of `kind`, mirroring the upload
+ * route's naming (16 random bytes in hex + ".jpg") so the result satisfies
+ * `isStoredImagePath`. The caller is responsible for having validated the bytes
+ * (JPEG magic) — this just names and persists them. Returns the DB-shaped
+ * relative path ("recipes/<hex>.jpg").
+ */
+export async function writeImageFile(kind: ImageKind, buf: Buffer): Promise<string> {
+  const name = `${randomBytes(16).toString('hex')}.jpg`;
+  await fs.mkdir(path.join(IMAGES_DIR, kind), { recursive: true });
+  await fs.writeFile(path.join(IMAGES_DIR, kind, name), buf);
+  return `${kind}/${name}`;
 }
 
 /** Best-effort delete of a stored image file (draft abandon / photo removal). */

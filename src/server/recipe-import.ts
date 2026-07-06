@@ -11,11 +11,20 @@
  * push-endpoint.ts: https only, no credentials, no IP literals, no
  * localhost/.local/.internal/.home.arpa/dotless hosts, port 443 only — enforced
  * on the initial URL AND re-validated on every redirect hop. Plus: 5s timeout,
- * ≤3 redirects, ≤2MB read, text/html or application/ld+json only. Remote images
- * are never downloaded — photoUrl is returned for display, nothing more.
+ * ≤3 redirects, ≤2MB read, text/html or application/ld+json only.
+ *
+ * The recipe's photo IS fetched (REWORK R3), through the SAME SSRF guard: the
+ * ordered image candidates (JSON-LD `image`, then og:image, then twitter:image)
+ * are tried in turn by `guardedImageFetch` — image/* content-type, ≤4MB, and a
+ * hard JPEG magic-byte (FF D8) check on the downloaded bytes. There are no server
+ * image libraries (deliberate), so the download is JPEG-only: a non-JPEG source
+ * image simply yields no stored photo (photoUrl is still returned so the editor
+ * can note it). The first candidate that validates is written under the "recipes"
+ * kind and surfaced as `photoPath`.
  */
 
 import { parseIngredientLine, parseRecipeText, type ParsedIngredient } from './recipe-parse';
+import { writeImageFile } from './images';
 
 export interface ImportedRecipe {
   title?: string;
@@ -26,8 +35,14 @@ export interface ImportedRecipe {
   yieldText?: string;
   prepMinutes?: number;
   cookMinutes?: number;
-  /** Returned for display only — the server never downloads remote images. */
+  /** The source image URL (first usable candidate) — display/reference only. */
   photoUrl?: string;
+  /**
+   * A stored "recipes/<hex>.jpg" path when the source photo was downloaded and
+   * validated as JPEG, else null. Only set on the network path
+   * (`importRecipeFromUrl`); `extractRecipe` alone leaves it undefined.
+   */
+  photoPath?: string | null;
   sourceUrl: string;
 }
 
@@ -36,6 +51,8 @@ export type ImportResult =
   | { status: 'unavailable'; reason: string };
 
 const MAX_BYTES = 2 * 1024 * 1024;
+/** Photos run bigger than pages; still bounded so one import can't fill the volume. */
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 const TIMEOUT_MS = 5000;
 const MAX_REDIRECTS = 3;
 
@@ -159,6 +176,91 @@ async function guardedFetch(start: URL): Promise<FetchOk | { error: string }> {
   }
 }
 
+/** Read a response body as raw bytes, capped at `cap` (never throws). */
+async function readCappedBytes(res: Response, cap: number): Promise<Buffer> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.subarray(0, cap);
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < cap) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      total += value.length;
+    }
+  }
+  reader.cancel().catch(() => {});
+  return Buffer.concat(chunks).subarray(0, cap);
+}
+
+/**
+ * Download one candidate image through the SAME SSRF guard as guardedFetch
+ * (safe-URL + hop re-validation + timeout), but for images: image/* only,
+ * ≤4MB, and a hard JPEG magic-byte (FF D8) check on the bytes. Returns the JPEG
+ * buffer, or null for anything that fails the guard / isn't a fetchable JPEG.
+ * Never throws — a bad candidate just yields null and the caller tries the next.
+ */
+export async function guardedImageFetch(rawUrl: string): Promise<Buffer | null> {
+  const start = safeImportUrl(rawUrl);
+  if (!start) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    let url = start;
+    for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+      const res = await fetch(url, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { accept: 'image/*', 'user-agent': 'PotluckRecipeImport/1.0' },
+      });
+
+      if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+        if (redirects === MAX_REDIRECTS) return null;
+        const loc = res.headers.get('location');
+        if (!loc) return null;
+        let next: URL;
+        try {
+          next = new URL(loc, url);
+        } catch {
+          return null;
+        }
+        const safe = safeImportUrl(next.href);
+        if (!safe) return null;
+        url = safe;
+        continue;
+      }
+
+      if (!res.ok) return null;
+      const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+      if (!contentType.includes('image/')) return null;
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > IMAGE_MAX_BYTES) return null;
+      const buf = await readCappedBytes(res, IMAGE_MAX_BYTES);
+      // JPEG-only: the server has no image libraries to re-encode anything else.
+      if (buf.length < 2 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+      return buf;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Try image candidates in order; return the first that downloads as a JPEG. */
+export async function downloadFirstJpeg(candidates: string[]): Promise<Buffer | null> {
+  for (const c of candidates) {
+    const buf = await guardedImageFetch(c);
+    if (buf) return buf;
+  }
+  return null;
+}
+
 // ---- HTML / schema.org helpers (pure) ---------------------------------------
 
 const ENTITIES: Record<string, string> = {
@@ -256,6 +358,88 @@ function firstImageUrl(v: unknown): string | undefined {
   };
   const u = pick(v);
   return u && /^https:\/\//i.test(u) ? u : undefined;
+}
+
+/** Every image URL reachable through a JSON-LD `image` value (strings + {url}). */
+function allImageUrls(v: unknown): string[] {
+  const out: string[] = [];
+  const visit = (x: unknown) => {
+    if (typeof x === 'string') {
+      if (x.trim()) out.push(x.trim());
+      return;
+    }
+    if (Array.isArray(x)) return x.forEach(visit);
+    if (x && typeof x === 'object') {
+      const u = (x as Record<string, unknown>).url;
+      if (typeof u === 'string' && u.trim()) out.push(u.trim());
+    }
+  };
+  visit(v);
+  return out;
+}
+
+/** `<meta property|name="…" content="…">` values for the given keys, doc order. */
+function metaContents(html: string, keys: string[]): string[] {
+  const out: string[] = [];
+  const re = /<meta\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const tag = m[0];
+    const key = /\b(?:property|name)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase();
+    if (!key || !keys.includes(key)) continue;
+    const content = /\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1]?.trim();
+    if (content) out.push(content);
+  }
+  return out;
+}
+
+/** Resolve a possibly-relative image URL against the page and keep https only. */
+function resolveHttps(raw: string, base: string): string | undefined {
+  try {
+    const u = new URL(raw, base);
+    return u.protocol === 'https:' ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Ordered, de-duplicated, https-resolved photo candidates for a page: the
+ * JSON-LD recipe node's `image` first (all of them), then og:image, then
+ * twitter:image. Relative URLs resolve against `sourceUrl`. Pure (no network) —
+ * both `extractRecipe` (photoUrl = first) and the download loop use it.
+ */
+export function recipeImageCandidates(
+  body: string,
+  contentType: string,
+  sourceUrl: string,
+): string[] {
+  const blocks = contentType.includes('application/ld+json')
+    ? (() => {
+        try {
+          return [JSON.parse(body)];
+        } catch {
+          return [];
+        }
+      })()
+    : jsonLdBlocks(body);
+
+  const raw: string[] = [];
+  const node = recipeFromJsonLd(blocks);
+  if (node?.image != null) raw.push(...allImageUrls(node.image));
+  raw.push(...metaContents(body, ['og:image', 'og:image:url', 'og:image:secure_url']));
+  raw.push(...metaContents(body, ['twitter:image', 'twitter:image:src']));
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of raw) {
+    const resolved = resolveHttps(r, sourceUrl);
+    if (resolved && !seen.has(resolved)) {
+      seen.add(resolved);
+      out.push(resolved);
+    }
+  }
+  return out;
 }
 
 function isRecipeType(t: unknown): boolean {
@@ -387,9 +571,14 @@ export function extractRecipe(
       })()
     : jsonLdBlocks(body);
 
+  // The photo candidate is independent of which extraction path wins: JSON-LD
+  // node image, else og:image, else twitter:image (og fallback, R3).
+  const photoUrl = recipeImageCandidates(body, contentType, sourceUrl)[0];
+
   const node = recipeFromJsonLd(blocks);
   if (node) {
     const recipe = fromRecipeNode(node, sourceUrl);
+    recipe.photoUrl = photoUrl;
     if (recipe.title || recipe.ingredients.length) return recipe;
   }
 
@@ -401,7 +590,7 @@ export function extractRecipe(
       title: firstString(microdataValues(body, 'name')[0]) ?? htmlTitle(body),
       ingredients: microIngredients.map(parseIngredientLine),
       directions: microInstr.length ? microInstr.join('\n') : undefined,
-      photoUrl: undefined,
+      photoUrl,
       sourceUrl,
     };
   }
@@ -413,6 +602,7 @@ export function extractRecipe(
       title: htmlTitle(body),
       ingredients: parsed.ingredients,
       directions: parsed.directions,
+      photoUrl,
       sourceUrl,
     };
   }
@@ -439,5 +629,17 @@ export async function importRecipeFromUrl(rawUrl: string): Promise<ImportResult>
   if (!recipe) {
     return { status: 'unavailable', reason: "Couldn't find a recipe on that page — enter it manually." };
   }
+
+  // Best-effort photo: try each candidate as a JPEG, store the first that
+  // passes. Never fail the import over a photo — photoUrl still lets the editor
+  // note that a source image existed but couldn't be fetched.
+  recipe.photoPath = null;
+  try {
+    const buf = await downloadFirstJpeg(recipeImageCandidates(fetched.body, fetched.contentType, url.href));
+    if (buf) recipe.photoPath = await writeImageFile('recipes', buf);
+  } catch (err) {
+    console.error(`[recipe-import] photo download failed for ${url.href}: ${String(err)}`);
+  }
+
   return { status: 'ok', data: recipe };
 }

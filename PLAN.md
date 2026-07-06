@@ -140,6 +140,41 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round R — recipes: view page, Cook view, URL image import (2026-07-06)
+
+**Done** (Aaron's asks, modeled on Plan to Eat — research summary in the 2026-07-06
+session). No schema, no deps.
+
+- **Read view**: `/recipes/[id]` was a router that dropped OWN recipes straight into the
+  edit form (no read view existed). Now a unified `RecipeView` for own+shared (photo,
+  meta, servings stepper + live-scaled ingredients, directions as NUMBERED steps via the
+  shared `steps.ts` splitter, source link) with **Cook** (always), **Edit** (own →
+  NEW `/recipes/[id]/edit`), fork (shared — testid/behavior preserved for the existing
+  spec). shared-recipe-view.tsx folded in. Plan's entry sheet gained "View recipe →".
+- **Cook view** (`/recipes/[id]/cook`, the PTE-informed centerpiece): split pane —
+  current step in large type + counter on top, independently scrollable tap-to-check
+  ingredient list below; swipe (pointer events) + big prev/next + Space/arrow keys;
+  servings stepper (scale.ts reuse); **screen wake-lock** (feature-detected,
+  visibilitychange reacquire); sessionStorage step persistence per recipe; aria-live
+  step region. Steps = newline/paragraph split, numbering-prefix stripped. Works for
+  shared recipes.
+- **Import image**: the JSON-LD `image` URL was already extracted and DROPPED — now
+  `recipe.importUrl` downloads it server-side (`guardedImageFetch`: same SSRF guard,
+  image/*, 4MB cap, **JPEG-magic required** — deliberate v1, no server image codecs) with
+  **og:image/twitter:image fallback** + relative-URL resolution, stores via a new
+  `writeImageFile` (32hex.jpg — passes the fresh-photo save validation), returns
+  `photoPath` which the editor drops into the photo control (replace/remove = the PTE
+  review insurance); a found-but-unfetchable photo shows `recipe-import-photo-note`.
+  A SEED_DEMO-gated sentinel fixture (`fixture.potluck.test/import/*`) is the e2e seam
+  (extraction-fixture precedent); the boot orphan sweep covers abandoned imports.
+- **Integrator fix** (r-e2e's find): recipe.update never invalidated the per-id
+  `recipe.get`, so editing then soft-navigating back to the NEW read view showed stale
+  content ≤30s — invalidate now clears both.
+- **Gate — green first try**: unit **196/196**, full both-engine e2e **354 passed / 0
+  failed** on a fresh stack; own-eyes Cook pass (light 390px + dark desktop, ArrowRight+
+  Space advanced the step, check-off strike verified). r-e2e self-verified 34/34 on an
+  isolated `-p potluck-e2e` :3200 compose (the APP_PORT override earning its keep).
+
 ## Round Q — quick fixes + navigation review (2026-07-06, Aaron's device feedback)
 
 **Done.** Six fixes from real-device testing. No schema, no deps.

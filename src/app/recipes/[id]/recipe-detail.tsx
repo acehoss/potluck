@@ -3,14 +3,14 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useTRPC } from '@/lib/trpc';
-import { RecipeEditor } from '../recipe-editor';
-import { SharedRecipeView } from '../shared-recipe-view';
+import { RecipeView } from '../recipe-view';
 import type { RecipeDto } from '../types';
 
 /**
- * Recipe detail router: an own recipe opens the editor (populated + delete);
- * a shared recipe opens the read-only view (scaler + fork). Visibility is the
- * server's call — a 404 renders a gentle not-found.
+ * Recipe detail (Round R): the read view for both own and shared recipes.
+ * Ownership only changes which actions the view offers (Edit vs. fork) — the
+ * editor now lives at /recipes/[id]/edit. Visibility is the server's call: a
+ * 404 renders a gentle not-found.
  */
 export function RecipeDetail({ id }: { id: string }) {
   const trpc = useTRPC();
@@ -33,10 +33,5 @@ export function RecipeDetail({ id }: { id: string }) {
     );
   }
 
-  const recipe = query.data as RecipeDto;
-  return recipe.mine ? (
-    <RecipeEditor initial={recipe} />
-  ) : (
-    <SharedRecipeView recipe={recipe} />
-  );
+  return <RecipeView recipe={query.data as RecipeDto} />;
 }

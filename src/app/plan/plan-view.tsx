@@ -646,6 +646,16 @@ function EditSheet({
       >
         <h2 className="truncate text-lg font-semibold">{title}</h2>
 
+        {isRecipe && entry.recipeId && (
+          <Link
+            href={`/recipes/${entry.recipeId}`}
+            data-testid="plan-entry-view-recipe"
+            className="text-sm font-medium text-accent underline"
+          >
+            View recipe →
+          </Link>
+        )}
+
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
           Meal
           <select

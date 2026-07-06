@@ -3,10 +3,10 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { activeConnectionsOf, hasActiveGrant, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
-import { deleteImageFile, imageFileExists, isStoredImagePath } from '../images';
+import { deleteImageFile, imageFileExists, isStoredImagePath, writeImageFile } from '../images';
 import { checkRateLimit } from '../rate-limit';
-import { importRecipeFromUrl } from '../recipe-import';
-import { normalizeIngredientName, parseRecipeText } from '../recipe-parse';
+import { importRecipeFromUrl, type ImportResult } from '../recipe-import';
+import { normalizeIngredientName, parseIngredientLine, parseRecipeText } from '../recipe-parse';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -167,6 +167,64 @@ function slimDto(
     forkedFromHouseholdName: r.forkedFromHouseholdName,
     ...(householdName !== undefined ? { householdName } : {}),
   };
+}
+
+/**
+ * SEED_DEMO-only import fixture. The SSRF guard blocks localhost, so e2e can't
+ * have the app fetch a page it serves itself, and CI has no outbound network —
+ * so import's EDITOR wiring is exercised deterministically through this branch
+ * (mail-test-style). Never reachable in prod: SEED_DEMO is unset there.
+ *   - fixture.potluck.test/import/with-photo  → ok + a really-written photoPath
+ *   - fixture.potluck.test/import/photo-note  → ok, photoUrl set, photoPath null
+ */
+const FIXTURE_IMPORT_HOST = 'fixture.potluck.test';
+// A valid 1×1 baseline JPEG (FF D8 … FF D9) — a real file for the editor preview.
+const FIXTURE_IMPORT_JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+    'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIy' +
+    'MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIA' +
+    'AhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQA' +
+    'AAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3' +
+    'ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWm' +
+    'p6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEA' +
+    'AwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSEx' +
+    'BhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElK' +
+    'U1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3' +
+    'uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iii' +
+    'gD//2Q==',
+  'base64',
+);
+
+async function fixtureImportResult(pathname: string): Promise<ImportResult> {
+  const data = {
+    title: 'Fixture Skillet Cornbread',
+    description: 'A deterministic recipe used only by e2e import tests.',
+    ingredients: [
+      '1 cup cornmeal',
+      '1 cup all-purpose flour',
+      '1 tablespoon baking powder',
+      '1 teaspoon salt',
+      '1 cup buttermilk',
+      '1 large egg',
+      '4 tablespoons butter, melted',
+    ].map(parseIngredientLine),
+    directions: [
+      'Preheat the oven to 425°F with a cast-iron skillet inside to heat.',
+      'Whisk the cornmeal, flour, baking powder, and salt together.',
+      'Beat in the buttermilk, egg, and melted butter until just combined.',
+      'Carefully pour the batter into the hot skillet.',
+      'Bake for 20 to 25 minutes, until golden and springy.',
+      'Cool 5 minutes, then turn out and slice.',
+    ].join('\n'),
+    servings: 8,
+    sourceUrl: `https://${FIXTURE_IMPORT_HOST}${pathname}`,
+    photoUrl: `https://${FIXTURE_IMPORT_HOST}/photo.jpg`,
+    photoPath: null as string | null,
+  };
+  if (pathname === '/import/with-photo') {
+    data.photoPath = await writeImageFile('recipes', FIXTURE_IMPORT_JPEG);
+  }
+  return { status: 'ok' as const, data };
 }
 
 export const recipeRouter = router({
@@ -467,6 +525,14 @@ export const recipeRouter = router({
     .input(z.object({ url: z.string().trim().min(1).max(2000) }))
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'editRecipes');
+      if (process.env.SEED_DEMO === '1') {
+        try {
+          const u = new URL(input.url);
+          if (u.hostname === FIXTURE_IMPORT_HOST) return fixtureImportResult(u.pathname);
+        } catch {
+          // Not a parseable URL — fall through to the real (guarded) import.
+        }
+      }
       if (!checkRateLimit(`recipe-import:${ctx.user.id}`, 10)) {
         return {
           status: 'unavailable' as const,
