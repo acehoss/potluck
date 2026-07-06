@@ -108,8 +108,11 @@ export function AppHeader({ data }: { data: HeaderData }) {
   return (
     <header
       data-testid="app-header"
-      className="sticky top-0 z-20 flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface-raised px-3"
+      className="sticky top-0 z-20 border-b border-border bg-surface-raised px-3"
     >
+      {/* The bar's chrome (border/background) runs edge to edge; its CONTENTS
+          align with the pages' mx-auto max-w-2xl column on wide screens. */}
+      <div className="mx-auto flex min-h-12 w-full max-w-2xl items-center justify-between gap-2">
       {/* Left: acting-household chip (multi-membership) or the brand mark. */}
       {multi ? (
         <button
@@ -207,6 +210,7 @@ export function AppHeader({ data }: { data: HeaderData }) {
             </>
           )}
         </div>
+      </div>
       </div>
 
       {/* Household switcher sheet (reuses the More card's component). */}

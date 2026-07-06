@@ -60,8 +60,10 @@ export function TabBar() {
   return (
     <nav
       data-testid="tab-bar"
-      className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)]"
     >
+      {/* Chrome runs edge to edge; the tabs align with the pages' max-w-2xl column. */}
+      <div className="mx-auto flex w-full max-w-2xl">
       {TABS.map((tab) => {
         const active = tab.href === '/' ? pathname === '/' : pathname.startsWith(tab.href);
         const showDot = tab.href === '/' && hasNew.data?.hasNew === true;
@@ -86,6 +88,7 @@ export function TabBar() {
           </Link>
         );
       })}
+      </div>
     </nav>
   );
 }
