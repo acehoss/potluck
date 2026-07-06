@@ -10,7 +10,8 @@
  *
  * Run it against the live container, e.g.:
  *   docker compose exec app npx tsx scripts/bootstrap.ts \
- *     "Heise" "Aaron" "aaron@example.com" "a-strong-password" "Basement Pantry"
+ *     "Heise" "Aaron" "aaron@example.com" "a-strong-password" "Basement Pantry" hoss
+ * The trailing [username] is the login handle (defaults to the email local-part).
  *
  * Idempotent on the household NAME (reuses an existing one so a second
  * household's first member can be added the same way); refuses to clobber an
@@ -22,18 +23,20 @@ import { hashSync } from '@node-rs/argon2';
 import { OWNER_PRESET } from '../src/server/capabilities';
 import { ensurePresetCircles } from '../src/server/circles';
 import {
+  USERNAME_PATTERN,
   firstAvailableHandle,
   slugBaseFromName,
   usernameBaseFromEmail,
 } from '../src/server/identity';
 import { PrismaClient } from '../src/generated/prisma/client';
 
-const [householdName, userName, email, password, pantryName = 'Pantry'] = process.argv.slice(2);
+const [householdName, userName, email, password, pantryName = 'Pantry', usernameArg] =
+  process.argv.slice(2);
 
 function fail(msg: string): never {
   console.error(`error: ${msg}`);
   console.error(
-    'usage: npx tsx scripts/bootstrap.ts <household> <userName> <email> <password> [pantryName]',
+    'usage: npx tsx scripts/bootstrap.ts <household> <userName> <email> <password> [pantryName] [username]',
   );
   process.exit(1);
 }
@@ -42,6 +45,13 @@ if (!householdName?.trim()) fail('household name is required');
 if (!userName?.trim()) fail('user name is required');
 if (!email?.trim() || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail('a valid email is required');
 if (!password || password.length < 10) fail('password must be at least 10 characters');
+// Optional explicit login handle; defaults to the email local-part. An explicit
+// choice that's malformed or taken FAILS (never silently suffixed — you asked
+// for that exact handle).
+const explicitUsername = usernameArg?.trim().toLowerCase();
+if (explicitUsername !== undefined && !USERNAME_PATTERN.test(explicitUsername)) {
+  fail('username must be 3–30 characters: lowercase letters, digits, - or _');
+}
 
 const url = process.env.DATABASE_URL;
 if (!url) fail('DATABASE_URL is not set');
@@ -82,14 +92,20 @@ async function main() {
   // User + membership in ONE transaction — a half-created (membership-less)
   // user can log in but reads as signed out on every page, and the unique
   // email then blocks the re-run that would repair it.
+  if (explicitUsername && (await db.user.findUnique({ where: { username: explicitUsername } }))) {
+    fail(`username "${explicitUsername}" is already taken`);
+  }
+
   const user = await db.$transaction(async (tx) => {
     const created = await tx.user.create({
       data: {
         name: userName.trim(),
-        username: await firstAvailableHandle(
-          usernameBaseFromEmail(normalizedEmail),
-          async (c) => (await tx.user.findUnique({ where: { username: c } })) !== null,
-        ),
+        username:
+          explicitUsername ??
+          (await firstAvailableHandle(
+            usernameBaseFromEmail(normalizedEmail),
+            async (c) => (await tx.user.findUnique({ where: { username: c } })) !== null,
+          )),
         email: normalizedEmail,
         passwordHash,
         isInstanceAdmin: isFirstUser,

@@ -55,12 +55,13 @@ Create the first household/owner directly against the running container:
 ```bash
 docker compose up -d --wait      # empty DB, no SEED_DEMO
 docker compose exec app npx tsx scripts/bootstrap.ts \
-  "Heise" "Aaron" "aaron@example.com" "a-strong-password" "Basement Pantry"
+  "Heise" "Aaron" "aaron@example.com" "a-strong-password" "Basement Pantry" hoss
 ```
 
 Bootstrap creates the instance settings, the household (with its `@handle`
-slug), a pantry, and the owner — whose username derives from the email
-local-part, and who becomes the **instance admin** (the More tab gains an
+slug), a pantry, and the owner — whose login username is the optional trailing
+argument (defaults to the email local-part; an explicit choice that's taken or
+malformed fails loudly), and who becomes the **instance admin** (the More tab gains an
 admin card: per-household usage, plus the toggle for who may invite new
 households). From there everything grows in-app:
 
