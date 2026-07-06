@@ -57,6 +57,20 @@ test('back-link falls back to /home on a cold deep link to /items', async ({ bro
   }
 });
 
+test('the app body sizes to the dynamic viewport (min-h-dvh) so the tab bar rides the visual viewport', async ({
+  page,
+}) => {
+  // Round T1: the body height chain moved from percentage (min-h-full, which
+  // resolves against the stale toolbar-expanded layout viewport and stranded the
+  // fixed bottom tab bar ~40px up on short pages) to min-h-dvh. Assert the class
+  // is present on <body> — reverting to min-h-full (or any percentage height)
+  // reintroduces the iOS-Safari tab-bar drift and fails here.
+  await login(page, 'aaron');
+  const bodyClass = await page.evaluate(() => document.body.className);
+  expect(bodyClass.split(/\s+/)).toContain('min-h-dvh');
+  expect(bodyClass.split(/\s+/)).not.toContain('min-h-full');
+});
+
 test('Plan is a top-level tab and shows no back control', async ({ page }) => {
   await login(page, 'aaron');
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();

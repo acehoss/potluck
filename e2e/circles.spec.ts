@@ -441,6 +441,75 @@ test('an accepted household invite seeds preset circles and assigns both sides p
   }
 });
 
+test('a circleId household invite snapshots the picked circle; the accepter lands in its tuple', async ({}, testInfo) => {
+  const P = testInfo.project.name.slice(0, 4);
+  const casa = `Ccirc2-${P}-${RUN}`;
+  // Round T2: the invite UI picks one of the inviter's CIRCLES (not per-grant
+  // checkboxes); the server resolves that circle's CURRENT grants tuple at mint
+  // time into grantsJson (no schema change — same storage as the legacy {grants}
+  // path above). This proves the circleId mint end to end. Own ccirc2 namespace
+  // so it never sweeps the {grants} test's ccirc rows; FK-safe, circle-aware.
+  const SWEEP = `
+    const D = require('better-sqlite3');
+    const db = new D(process.env.DATABASE_URL.replace(/^file:/, ''));
+    const users = db.prepare("SELECT id FROM User WHERE email LIKE '%@ccirc2.test'").all().map(r => r.id);
+    const hhs = db.prepare("SELECT id FROM Household WHERE slug LIKE 'ccirc2%'").all().map(r => r.id);
+    for (const uid of users) db.prepare("DELETE FROM Invite WHERE createdById = ? OR usedById = ?").run(uid, uid);
+    for (const id of hhs) {
+      db.prepare("DELETE FROM Connection WHERE householdAId = ? OR householdBId = ?").run(id, id);
+      db.prepare("DELETE FROM PantryCircle WHERE circleId IN (SELECT id FROM Circle WHERE householdId = ?)").run(id);
+      db.prepare("DELETE FROM ItemCircle WHERE circleId IN (SELECT id FROM Circle WHERE householdId = ?)").run(id);
+      db.prepare("DELETE FROM MembershipCircle WHERE circleId IN (SELECT id FROM Circle WHERE householdId = ?)").run(id);
+      db.prepare("DELETE FROM Circle WHERE householdId = ?").run(id);
+      db.prepare("DELETE FROM Pantry WHERE householdId = ?").run(id);
+      db.prepare("DELETE FROM Membership WHERE householdId = ?").run(id);
+      db.prepare("DELETE FROM Household WHERE id = ?").run(id);
+    }
+    for (const uid of users) {
+      db.prepare("DELETE FROM Session WHERE userId = ?").run(uid);
+      db.prepare("DELETE FROM Membership WHERE userId = ?").run(uid);
+      db.prepare("DELETE FROM User WHERE id = ?").run(uid);
+    }
+  `;
+  execInApp(SWEEP);
+  const aaron = await apiLogin('aaron'); // instance admin → may mint household invites
+  const guest = await playwrightRequest.newContext({ baseURL: BASE });
+  try {
+    // Aaron mints picking his NON-DEFAULT Family circle (the one-click UI mint
+    // defaults to Friends — this proves a picked circle other than the default
+    // flows through). The server snapshots Family's CURRENT grants (FAMILY) into
+    // the invite, exactly as the legacy {grants: FAMILY} path would have stored.
+    const familyId = (await circle(aaron, 'Family')).id;
+    const minted = await ok(aaron, 'invite.createHousehold', { circleId: familyId });
+    const token = (minted.path as string).split('/invite/')[1];
+    const accepted = await rpc(guest, 'auth.acceptInvite', {
+      token,
+      name: 'Dee',
+      username: `dee-${P}-${RUN}`,
+      email: `dee-${P}-${RUN}@ccirc2.test`,
+      password: PASSWORD,
+      householdName: casa,
+    });
+    expect(accepted.status).toBe(200);
+
+    // The picked Family tuple (NOT the Friends default) lands on BOTH sides: the
+    // accepter's edge to Heise carries FAMILY and maps to their own 'Family'
+    // preset (same grants→circle remap the {grants} path uses)...
+    const guestEdge = await connWith(guest, 'Heise');
+    expect(guestEdge.status).toBe('ACTIVE');
+    expect(guestEdge.myCircle?.name).toBe('Family');
+    expect(guestEdge.myCircle?.grants).toEqual(FAMILY);
+    expect(guestEdge.theyGrant).toEqual(FAMILY);
+
+    // ...and Heise placed the newcomer in Heise's own 'Family' circle (the picked
+    // circle), not the Friends the legacy default would have produced.
+    expect((await connWith(aaron, casa)).myCircle?.name).toBe('Family');
+  } finally {
+    await guest.dispose();
+    execInApp(SWEEP);
+  }
+});
+
 test('PENDING semantics: request sets only the requester side; accept sets the addressee side', async () => {
   // In-Laws ↔ Neighbors are seeded UNCONNECTED. Drive one PENDING→ACTIVE edge
   // between them, then SQL-delete the row so the pair returns to no-row

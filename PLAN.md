@@ -140,6 +140,28 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round T — dvh tab bar, circle-picker household invite, vCard copy (2026-07-06)
+
+**Done** (Aaron's trickle-ins). No schema change.
+
+- **Tab bar riding up on short pages** (iOS Safari in-browser only; the installed PWA was
+  never affected): the height chain was percentage-based, which resolves against the
+  toolbar-expanded viewport and never grows when Safari's toolbar collapses — `fixed
+  bottom-0` anchored to that stale layout viewport. Fix: body `min-h-full` → **`min-h-dvh`**.
+- **"Invite a NEW household" now picks a CIRCLE** (was six per-grant checkboxes — the
+  deferred "per-invite grant presets" closed): the same CirclePicker as connect/accept/
+  move, **Friends preselected** (one-click mint preserved). `invite.createHousehold`
+  accepts `{circleId}` (inviter-owned, the circle's CURRENT grants snapshotted into
+  grantsJson at mint) alongside legacy `{grants}` — old invite links + RPC callers keep
+  working; `joinViaInvite` untouched. Snapshot-at-mint semantics recorded as deliberate
+  (live-circle semantics would need an Invite.circleId column — deferred).
+- **"Save contact" → "Save contact to device"** (the vCard button pulls data out of the
+  app; the label now says so).
+- **Gate — green**: unit 202/202, full both-engine e2e **364 passed / 0 failed** on a
+  fresh stack. Ops note: t-e2e landed its specs then stalled without reporting (orphaned
+  `-p` stack torn down); the coordinator gated the landed tree directly — the
+  verify-state-directly rule again.
+
 ## Round S — plan/shopping: Add from Plan, added-to-list tracking (2026-07-06)
 
 **Done** (the last of Aaron's 2026-07-06 batch). One additive migration

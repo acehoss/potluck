@@ -347,7 +347,7 @@ export function ConnectionsCard() {
           Connect a household…
         </button>
       )}
-      {canManage && <InviteHousehold />}
+      {canManage && <InviteHousehold circles={circles} circlesError={circlesQuery.error?.message} />}
       {canManage && connectOpen && (
         <form
           className="flex flex-col gap-3 rounded-lg border border-border p-3"
@@ -410,23 +410,23 @@ export function ConnectionsCard() {
 }
 
 /**
- * Mint a NEW-household invite (REWORK A1): the accepted link founds a household
- * whose first connection edge is ours, carrying this grant set on both sides.
- * This bootstrap path still takes a raw grant bundle (there is no circle to
- * pick on the far side yet); the server maps it to a circle. The instance-admin
- * growth toggle is enforced server-side.
+ * Mint a NEW-household invite (REWORK A1, Phase-2 P4 circles): the accepted link
+ * founds a household whose first connection edge is ours. The inviter picks one
+ * of ITS circles; the server snapshots that circle's CURRENT grants into the
+ * invite at mint time (grantsJson — no schema change) and maps it back to the
+ * matching circle on both sides at accept. Friends is preselected so the mint
+ * stays one-click. The instance-admin growth toggle is enforced server-side.
  */
-function InviteHousehold() {
+function InviteHousehold({
+  circles,
+  circlesError,
+}: {
+  circles: Circle[];
+  circlesError?: string;
+}) {
   const trpc = useTRPC();
   const [open, setOpen] = useState(false);
-  const [grants, setGrants] = useState<GrantSet>({
-    pantry: true,
-    lending: true,
-    recipes: true,
-    shareTo: true,
-    shareFrom: true,
-    reshare: false,
-  });
+  const [circleId, setCircleId] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -445,7 +445,11 @@ function InviteHousehold() {
       <button
         type="button"
         data-testid="invite-household-open"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setOpen(true);
+          setCircleId(defaultCircleId(circles));
+          setError(null);
+        }}
         className={secondaryBtn}
       >
         Invite a NEW household…
@@ -458,23 +462,15 @@ function InviteHousehold() {
         For a family that isn&apos;t on this server yet: the link lets them start their own
         household, connected to yours from day one. Works once, expires in 7 days.
       </p>
-      <p className="text-sm font-medium text-text">What you&apos;ll grant each other to start:</p>
-      <ul className="flex flex-col gap-1">
-        {GRANT_LABELS.map(({ key, label }) => (
-          <li key={key}>
-            <label className="flex min-h-11 items-center gap-3 text-sm text-text">
-              <input
-                type="checkbox"
-                data-testid={`invite-grant-${key}`}
-                checked={grants[key]}
-                onChange={(e) => setGrants({ ...grants, [key]: e.target.checked })}
-                className="size-5 accent-[var(--color-accent)]"
-              />
-              {label}
-            </label>
-          </li>
-        ))}
-      </ul>
+      <p className="text-sm font-medium text-text">They&apos;ll start in this circle:</p>
+      {circlesError ? (
+        <p role="alert" className="text-sm text-danger">
+          {circlesError}
+        </p>
+      ) : (
+        <CirclePicker circles={circles} value={circleId} onChange={setCircleId} />
+      )}
+      <p className="text-xs text-text-muted">They&apos;ll start with the same access toward you.</p>
       {link ? (
         <p
           data-testid="household-invite-url"
@@ -487,8 +483,8 @@ function InviteHousehold() {
           <button
             type="button"
             data-testid="invite-household-submit"
-            disabled={mint.isPending}
-            onClick={() => mint.mutate({ grants })}
+            disabled={mint.isPending || !circleId}
+            onClick={() => circleId && mint.mutate({ circleId })}
             className={primaryBtn}
           >
             Create invite link

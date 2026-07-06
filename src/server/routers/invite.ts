@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { generateToken, hashToken } from '../auth';
-import { GRANTS, requireCapability } from '../authz';
+import { circleToGrantSet, GRANTS, requireCapability } from '../authz';
 import { db } from '../db';
 import { protectedProcedure, publicProcedure, router } from '../trpc';
 
@@ -46,7 +46,20 @@ export const inviteRouter = router({
    * instance.
    */
   createHousehold: protectedProcedure
-    .input(z.object({ grants: grantSetSchema }))
+    // The invite still stores a grant tuple snapshot (grantsJson, no schema
+    // change). The UI now picks one of the inviter's circles; we resolve that
+    // circle's CURRENT grants at mint time. A raw {grants} bundle is still
+    // accepted for legacy/RPC callers — exactly one of the two is required.
+    .input(
+      z
+        .object({
+          circleId: z.string().min(1).optional(),
+          grants: grantSetSchema.optional(),
+        })
+        .refine((v) => (v.circleId == null) !== (v.grants == null), {
+          message: 'Provide exactly one of circleId or grants.',
+        }),
+    )
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'manageConnections');
       const settings = await db.instanceSettings.findUnique({ where: { id: 'instance' } });
@@ -56,6 +69,16 @@ export const inviteRouter = router({
           message: 'Only the instance admin can invite new households right now.',
         });
       }
+      let grants = input.grants;
+      if (input.circleId) {
+        // Validate inviter-owned (a foreign/absent circle never resolves), then
+        // snapshot its current tuple into grantsJson exactly as before.
+        const circle = await db.circle.findUnique({ where: { id: input.circleId } });
+        if (!circle || circle.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'No such circle.' });
+        }
+        grants = circleToGrantSet(circle);
+      }
       const token = generateToken();
       const invite = await db.invite.create({
         data: {
@@ -63,7 +86,7 @@ export const inviteRouter = router({
           kind: 'household',
           householdId: ctx.user.householdId,
           createdById: ctx.user.id,
-          grantsJson: JSON.stringify(input.grants),
+          grantsJson: JSON.stringify(grants),
           expiresAt: new Date(Date.now() + INVITE_TTL_MS),
         },
       });

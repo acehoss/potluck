@@ -493,8 +493,8 @@ test('UI smoke: profile edit, In-Laws contact card + detail sheet, and READY-ord
 
     // (2) In-Laws contact page (read-only): pickup logistics FIRST — the contact
     //     card with address, map link, and pickup notes — then dana's member card
-    //     → detail sheet with the big tel:/sms:/email rows and the "Save contact"
-    //     vCard link. (The same testids appear on /more as the OWN-household
+    //     → detail sheet with the big tel:/sms:/email rows and the "Save contact
+    //     to device" vCard link. (The same testids appear on /more as the OWN-household
     //     EDITOR; these live on a different page, so no strict-mode collision.)
     const inlawsId = (await householdIds(api)).get('In-Laws')!;
     await page.goto(`/households/${inlawsId}`);

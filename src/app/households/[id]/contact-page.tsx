@@ -254,7 +254,7 @@ function MemberDetailSheet({
           download
           className="min-h-11 rounded-lg bg-accent px-4 py-2.5 text-center font-medium text-accent-contrast transition-colors hover:bg-accent-strong"
         >
-          Save contact
+          Save contact to device
         </a>
       </div>
     </div>
