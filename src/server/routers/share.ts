@@ -4,6 +4,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from '../auth';
 import { getConnection, grantsFrom, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
+import { shareVisible, type Dbc } from '../share-reach';
 import { imageFileExists, isStoredImagePath } from '../images';
 import { notify } from '../push';
 import { apportionFifo, defaultExpiresAt, MAX_EXPIRY_MS } from '../shares';
@@ -25,7 +26,6 @@ import { protectedProcedure, router } from '../trpc';
  * of truth); a copy's DTO carries NO origin/parent household identity (F4).
  */
 
-type Dbc = Prisma.TransactionClient | typeof db;
 type PostRow = Prisma.SharePostGetPayload<Record<string, never>>;
 
 const HOP_MAX = 3;
@@ -33,20 +33,6 @@ const HOP_MAX = 3;
 /** OPEN/CLAIMED and not past expiry — the base "still on the board" test. */
 function feedLive(post: { status: string; expiresAt: Date }, now: Date): boolean {
   return (post.status === 'OPEN' || post.status === 'CLAIMED') && post.expiresAt > now;
-}
-
-/**
- * Share-visibility primitive (F2/B2): over an ACTIVE connection, does the
- * poster grant the viewer `shareTo` (my posts reach you) AND does the viewer
- * grant the poster `shareFrom` (show me their posts)? Both must be on.
- * Own-household is a separate branch the callers handle first.
- */
-export async function shareVisible(dbc: Dbc, posterHouseholdId: string, viewerHouseholdId: string) {
-  const conn = await getConnection(dbc, posterHouseholdId, viewerHouseholdId);
-  if (!conn || conn.status !== 'ACTIVE') return false;
-  return (
-    grantsFrom(conn, posterHouseholdId).shareTo && grantsFrom(conn, viewerHouseholdId).shareFrom
-  );
 }
 
 /** The origin (root) post for any post: itself when it IS the origin. */

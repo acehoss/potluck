@@ -10,7 +10,7 @@
  *   GET  — the human landing when someone clicks the link; performs the same
  *     idempotent unsubscribe and renders a plain confirmation page.
  *
- * Effect per category: 'digest' → User.digestOptOut = true; 'pickups'|'circle'|
+ * Effect per category: 'digest' → User.digestCadence = 'off'; 'pickups'|'circle'|
  * 'ledger' → NotificationPreference.email = false (push untouched). Idempotent.
  * `account` transactional mail is never a subscription and has no token here.
  */
@@ -31,7 +31,7 @@ async function applyUnsub(userId: string, category: SubscriptionCategory): Promi
   const user = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!user) return false;
   if (category === 'digest') {
-    await db.user.update({ where: { id: userId }, data: { digestOptOut: true } });
+    await db.user.update({ where: { id: userId }, data: { digestCadence: 'off' } });
     return true;
   }
   if (isNotifyCategory(category)) {

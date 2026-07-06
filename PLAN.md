@@ -140,6 +140,43 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Digest cadence + in-process scheduler (2026-07-05, post-Phase-3)
+
+**Done.** Aaron's asks: a daily digest option (weekly kept but demoted), per-user send
+time, an app-thread scheduler instead of cron — plus a mid-round product-direction call:
+**nothing defaults to weekly, and shares reach people immediately.** Migration
+`20260705200000_digest_cadence` (adds `digestCadence`/`digestHour`/`digestWeekday`,
+drops `digestOptOut` via the table-rebuild dance, data-preserving; opted-out → 'off',
+everyone else → the new 'daily' default).
+
+- **Per-user cadence** off/daily/**daily-default**/weekly + send hour (0–23) + weekday
+  (weekly only), on the Notifications screen (cadence/hour/weekday selects; timezone
+  gated on cadence ≠ off). `runDigest` generalizes to per-user windows (daily = local-day
+  idempotency, weekly = chosen-weekday window); the digest's "new shares" span follows the
+  cadence (24h/"today" vs 7d/"this week"). `/unsub` digest → cadence 'off'.
+- **Default flips (Aaron):** `digestCadence` defaults **daily** — a weekly default would
+  surface perishable shares 6 days late, gutting the point; and the **circle category now
+  defaults `{push:true, email:false}`** — a new share pushes to visible connections
+  IMMEDIATELY (the app's goal is regular IRL interaction; leftovers are best tonight),
+  while per-share email stays off (the daily digest is the email channel — an email per
+  zucchini would bury the email-native users). Reverses Round-C's digest-only share
+  default deliberately.
+- **In-process scheduler** (`src/instrumentation.ts`): a ~10-min `setInterval` armed at
+  boot (`DIGEST_SCHEDULER` default on; `off` → the `scripts/run-digest.ts` cron fallback),
+  try/catch-wrapped (never blocks boot), in-flight guard, `unref()`ed, no boot-tick.
+  Structural fix en route: the scheduler's import of digest.ts dragged the tRPC/argon2
+  layer into Next's edge instrumentation bundle (build break) — the pure helpers digest
+  needs were extracted to trpc-free `src/server/open-loops.ts` + `share-reach.ts`
+  (routers re-export; external API unchanged).
+- **Gate — green.** typecheck + lint:tokens clean, unit **159/159** (13 new `digestDue`
+  cases incl. TZ), full both-engine e2e on a fresh `down -v` stack: **336 passed / 6
+  skipped / 0 failed**; scheduler-armed boot log verified. Two integrator fixes at the
+  gate: the Round-C `defaults.unit.test.ts` still asserted circle off/off (updated to the
+  new matrix), and Round-A's `mail.spec` subscription test used a synthetic
+  `userId:'e2e-mailtest'` that the now-**fail-closed** `subscriptionAllowed` (unknown user
+  → no send — the right production semantics, kept) correctly skips — the test now
+  resolves a real seeded user id.
+
 ## Phase 3 Round D — deep-link routing (2026-07-05) — PHASE 3 COMPLETE
 
 **Done, and with it all four Phase-3 rounds.** Notification taps now land on the specific

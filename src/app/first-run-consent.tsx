@@ -40,7 +40,7 @@ const CONSENT_COPY: Record<Category, { title: string; blurb: string }> = {
 // The conservative N5 defaults, pre-selected but never applied without a tap.
 const DEFAULTS: Record<Category, { push: boolean; email: boolean }> = {
   pickups: { push: true, email: true },
-  circle: { push: false, email: false },
+  circle: { push: true, email: false },
   ledger: { push: false, email: false },
 };
 
@@ -90,7 +90,7 @@ export function FirstRunConsent() {
         enabled: choices[cat].email,
       });
     }
-    await setPrefs.mutateAsync({ digestOptOut: !digest });
+    await setPrefs.mutateAsync({ digestCadence: digest ? 'daily' : 'off' });
     await markOnboarded.mutateAsync();
     finish();
   };

@@ -58,9 +58,9 @@ const EMAIL = {
  * ratified at the gate). One edit here if the landed names differ.
  */
 const NAMES = {
-  prefsGet: 'notification.get', // query → { categories, digestOptOut, showDetails, timezone, onboarded }
+  prefsGet: 'notification.get', // query → { categories, digestCadence, digestHour, digestWeekday, showDetails, timezone, onboarded }
   setChannel: 'notification.setChannel', // { category, channel:'push'|'email', enabled }
-  setPrefs: 'notification.setPrefs', // { digestOptOut?, showDetails?, timezone? } — any subset
+  setPrefs: 'notification.setPrefs', // { digestCadence?, digestHour?, digestWeekday?, showDetails?, timezone? } — any subset
 } as const;
 const DEV = {
   digestRun: '/api/dev/digest-run', // POST { identifier? } → { ok, capturedId, skipped? }
@@ -181,10 +181,16 @@ function readPref(username: string, category: string): { push: boolean; email: b
   );
   return JSON.parse(out.trim() || 'null');
 }
-/** Set one single-valued notify column on User (showDetails/digestOptOut). */
-function setUserFlag(username: string, column: 'showDetails' | 'digestOptOut', on: boolean) {
+/** Set one boolean notify column on User (currently just showDetails). */
+function setUserFlag(username: string, column: 'showDetails', on: boolean) {
   execInApp(
     `${DB_PREAMBLE}db.prepare('UPDATE User SET ${column} = ? WHERE username = ?').run(${on ? 1 : 0}, ${JSON.stringify(username)});`,
+  );
+}
+/** Set a user's digest cadence directly (bypasses the router). */
+function setCadence(username: string, cadence: 'off' | 'daily' | 'weekly') {
+  execInApp(
+    `${DB_PREAMBLE}db.prepare('UPDATE User SET digestCadence = ? WHERE username = ?').run(${JSON.stringify(cadence)}, ${JSON.stringify(username)});`,
   );
 }
 /** Full reset of a user's notify state → the seeded default (byte-identical topology). */
@@ -192,7 +198,7 @@ function resetUserNotify(username: string) {
   execInApp(
     `${DB_PREAMBLE}const u=db.prepare('SELECT id FROM User WHERE username = ?').get(${JSON.stringify(username)});` +
       `if(u){db.prepare('DELETE FROM NotificationPreference WHERE userId = ?').run(u.id);` +
-      `db.prepare('UPDATE User SET digestOptOut=0, showDetails=0, lastDigestAt=NULL, timezone=NULL WHERE id = ?').run(u.id);}`,
+      `db.prepare("UPDATE User SET digestCadence='daily', digestHour=9, digestWeekday=0, showDetails=0, lastDigestAt=NULL, timezone=NULL WHERE id = ?").run(u.id);}`,
   );
 }
 function userIdOf(username: string): string {
@@ -263,7 +269,9 @@ async function getPrefs(api: Api) {
   expect(res.ok(), `${NAMES.prefsGet} → ${res.status()}`).toBe(true);
   return (await res.json()).result.data as {
     categories: Record<'pickups' | 'circle' | 'ledger', { push: boolean; email: boolean }>;
-    digestOptOut: boolean;
+    digestCadence: string;
+    digestHour: number;
+    digestWeekday: number;
     showDetails: boolean;
     timezone: string | null;
   };
@@ -275,22 +283,23 @@ test('preference defaults + CRUD through the notification router', async () => {
     // A fresh account carries ZERO pref rows and still reads the N5 defaults.
     const before = await getPrefs(aaron);
     expect(before.categories.pickups).toEqual({ push: true, email: true });
-    expect(before.categories.circle).toEqual({ push: false, email: false });
+    expect(before.categories.circle).toEqual({ push: true, email: false }); // immediate push, email via digest
     expect(before.categories.ledger).toEqual({ push: false, email: false });
-    expect(before.digestOptOut).toBe(false);
+    expect(before.digestCadence).toBe('daily'); // seeded default (cadence matrix: digest-cadence.spec)
     expect(before.showDetails).toBe(false);
 
-    // Toggle one channel, the digest, and showDetails; read them all back.
-    await ok(aaron, NAMES.setChannel, { category: 'circle', channel: 'push', enabled: true });
+    // Toggle one channel, the digest cadence, and showDetails; read them all back.
+    // Flip circle EMAIL on (default off → on); circle push is left untouched.
+    await ok(aaron, NAMES.setChannel, { category: 'circle', channel: 'email', enabled: true });
     await ok(aaron, NAMES.setChannel, { category: 'pickups', channel: 'email', enabled: false });
-    await ok(aaron, NAMES.setPrefs, { digestOptOut: true, showDetails: true });
+    await ok(aaron, NAMES.setPrefs, { digestCadence: 'off', showDetails: true });
 
     const after = await getPrefs(aaron);
-    expect(after.categories.circle.push).toBe(true); // opted in
-    expect(after.categories.circle.email).toBe(false); // untouched → still default off
+    expect(after.categories.circle.email).toBe(true); // opted in
+    expect(after.categories.circle.push).toBe(true); // untouched → still default on
     expect(after.categories.pickups.email).toBe(false); // opted out
     expect(after.categories.pickups.push).toBe(true); // untouched → still default on
-    expect(after.digestOptOut).toBe(true);
+    expect(after.digestCadence).toBe('off');
     expect(after.showDetails).toBe(true);
   } finally {
     resetUserNotify('aaron');
@@ -429,7 +438,7 @@ test('share.claim notifies the posting household on pickups', async ({}, testInf
   }
 });
 
-test('share.create is silent by default (circle off), and delivers once circle is opted in', async ({}, testInfo) => {
+test('share.create pushes by default (circle push on, email off), and adds email once opted in', async ({}, testInfo) => {
   const P = testInfo.project.name;
   const aaron = await apiLogin('aaron'); // Heise — poster (the actor)
   const dana = await apiLogin('dana'); // In-Laws — a visible connection
@@ -439,21 +448,23 @@ test('share.create is silent by default (circle off), and delivers once circle i
   try {
     await subscribePush(dana, sinkEndpoint(danaSink));
 
-    // Post #1 — circle defaults push+email OFF, so a visible connection is NOT
-    // interrupted (in-app + digest only per N5).
+    // Post #1 — circle DEFAULT is push ON, email OFF: a visible connection gets
+    // an immediate push, but email is digest-only (not an interrupting send).
     postIds.push(
-      (await ok(aaron, 'share.create', { type: 'SURPLUS', title: uniq('Silent Share', P) })).id,
+      (await ok(aaron, 'share.create', { type: 'SURPLUS', title: uniq('Default Share', P) })).id,
     );
-    await countStaysAt(dana, danaSink, 0); // no push
+    await expect.poll(() => sinkCount(dana, danaSink)).toBe(1); // push fired by default
+    // Email is opt-in → none lands, even after the async post-commit settle.
+    await new Promise((r) => setTimeout(r, 1500));
     expect(capturedSince(startRowid, EMAIL.dana).filter((r) => r.kind === 'circle')).toHaveLength(0);
 
-    // dana opts IN to circle on both channels → the next post reaches them.
+    // dana opts IN to circle EMAIL too (push stays on) → the next post also emails.
     setPref('dana', 'circle', true, true);
     const mid = maxCapturedRowid();
     postIds.push(
-      (await ok(aaron, 'share.create', { type: 'SURPLUS', title: uniq('Loud Share', P) })).id,
+      (await ok(aaron, 'share.create', { type: 'SURPLUS', title: uniq('Emailed Share', P) })).id,
     );
-    await expect.poll(() => sinkCount(dana, danaSink)).toBe(1); // push fired
+    await expect.poll(() => sinkCount(dana, danaSink)).toBe(2); // pushed again
     await expect.poll(() => capturedSince(mid, EMAIL.dana).filter((r) => r.kind === 'circle').length).toBe(1);
     const email = capturedSince(mid, EMAIL.dana).find((r) => r.kind === 'circle')!;
     expect(email.pipeline).toBe('subscription');
@@ -591,7 +602,7 @@ test('ledger settlement is silent by default (N5 push-off), and delivers once le
   }
 });
 
-test('weekly digest assembles balances/loops/new-shares and honors digestOptOut', async ({}, testInfo) => {
+test('weekly digest assembles balances/loops/new-shares and honors cadence=off', async ({}, testInfo) => {
   const P = testInfo.project.name;
   const aaron = await apiLogin('aaron'); // Heise — digest subject
   const dana = await apiLogin('dana'); // In-Laws — posts a share aaron can see
@@ -600,16 +611,16 @@ test('weekly digest assembles balances/loops/new-shares and honors digestOptOut'
   let postId = '';
   let digestId: string | null = null;
   try {
-    // digestOptOut FIRST (before any lastDigestAt is stamped): the run is skipped.
-    setUserFlag('aaron', 'digestOptOut', true);
+    // cadence=off FIRST (before any lastDigestAt is stamped): the run is skipped.
+    setCadence('aaron', 'off');
     const optedOut = await aaron.post(DEV.digestRun, { data: { identifier: 'aaron' } });
     expect(optedOut.ok(), `digest-run route enabled (got ${optedOut.status()})`).toBe(true);
     const optedOutBody = await optedOut.json();
-    expect(optedOutBody.capturedId, 'digestOptOut suppresses the digest send').toBeFalsy();
+    expect(optedOutBody.capturedId, 'cadence=off suppresses the digest send').toBeFalsy();
 
     // Opt back in; a fresh, visible share this week bumps the new-shares count.
-    setUserFlag('aaron', 'digestOptOut', false);
-    resetUserNotify('aaron'); // also clears any lastDigestAt so the forced run sends
+    resetUserNotify('aaron'); // clears any opt-out + lastDigestAt so the forced run sends
+    setCadence('aaron', 'weekly'); // pin weekly LAST so the body reads "this week"
     postId = (await ok(dana, 'share.create', { type: 'SURPLUS', title: shareTitle })).id;
 
     // force:true bypasses the lastDigestAt idempotency guard so both engines send.
@@ -638,7 +649,7 @@ test('weekly digest assembles balances/loops/new-shares and honors digestOptOut'
     );
   } finally {
     if (postId) await rpc(dana, 'share.withdraw', { postId });
-    resetUserNotify('aaron'); // clears digestOptOut + lastDigestAt for the next engine
+    resetUserNotify('aaron'); // restores cadence=weekly + clears lastDigestAt for the next engine
     sweepCapturedAbove(startRowid);
     await aaron.dispose();
     await dana.dispose();

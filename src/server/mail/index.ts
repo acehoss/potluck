@@ -117,11 +117,12 @@ export async function isSuppressed(email: string): Promise<boolean> {
 
 /**
  * Whether a user still wants a given subscription category (Round C — the hook
- * Round A stubbed). `digest` consults `User.digestOptOut`; the three
- * notification categories consult the per-(user,category) email flag, falling
- * back to the default matrix when no row exists (an un-tuned account still gets
- * pickups email but not circle/ledger). One-click /unsub flips the underlying
- * value, so a later send here returns false and `sendSubscription` skips it.
+ * Round A stubbed). `digest` consults `User.digestCadence` (allowed unless
+ * 'off'); the three notification categories consult the per-(user,category)
+ * email flag, falling back to the default matrix when no row exists (an un-tuned
+ * account still gets pickups email but not circle/ledger). One-click /unsub sets
+ * the digest cadence to 'off', so a later send here returns false and
+ * `sendSubscription` skips it.
  */
 export async function subscriptionAllowed(
   userId: string,
@@ -130,9 +131,9 @@ export async function subscriptionAllowed(
   if (category === 'digest') {
     const user = await db.user.findUnique({
       where: { id: userId },
-      select: { digestOptOut: true },
+      select: { digestCadence: true },
     });
-    return !user?.digestOptOut;
+    return user ? user.digestCadence !== 'off' : false;
   }
   return emailAllowed(userId, category);
 }

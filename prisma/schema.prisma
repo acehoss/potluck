@@ -76,17 +76,22 @@ model User {
   totpEnabledAt   DateTime?
   totpLastStep    Int?
   mfaEmailEnabled Boolean   @default(false)
-  // Notification prefs (Phase 3 Round C; docs/REWORK.md N4/N5/N6). timezone is
-  // an IANA zone (null → instance default/UTC) driving the weekly-digest send
-  // window; digestOptOut suppresses the digest entirely; showDetails (default
-  // off) opts this user into seeing the counterparty household NAME in a
-  // notification body (still never dollars/addresses — N4); lastDigestAt is the
-  // per-user digest idempotency watermark; notifyOnboardedAt marks the
-  // first-run "how should Potluck reach you?" consent as seen. Per-CATEGORY
-  // channel choices live in NotificationPreference (absent row = the default
-  // matrix), NOT here.
+  // Notification prefs (Phase 3 Round C; docs/REWORK.md N4/N5/N6 + the digest-
+  // cadence round). timezone is an IANA zone (null → instance default/UTC)
+  // driving the digest send window; digestCadence ('off'|'daily'|'weekly',
+  // default DAILY — timely beats batched for perishable shares) is how often
+  // the digest goes out; digestHour (0–23) is the
+  // local send hour; digestWeekday (0=Sun..6=Sat) is the local send day used
+  // only for the weekly cadence. showDetails (default off) opts this user into
+  // seeing the counterparty household NAME in a notification body (still never
+  // dollars/addresses — N4); lastDigestAt is the per-user digest idempotency
+  // watermark; notifyOnboardedAt marks the first-run "how should Potluck reach
+  // you?" consent as seen. Per-CATEGORY channel choices live in
+  // NotificationPreference (absent row = the default matrix), NOT here.
   timezone          String?
-  digestOptOut      Boolean   @default(false)
+  digestCadence     String    @default("daily")
+  digestHour        Int       @default(9)
+  digestWeekday     Int       @default(0)
   showDetails       Boolean   @default(false)
   lastDigestAt      DateTime?
   notifyOnboardedAt DateTime?

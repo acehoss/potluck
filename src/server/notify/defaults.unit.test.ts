@@ -1,7 +1,9 @@
 /**
- * Category-default resolution (Phase 3 Round C, N5 / C3). An ABSENT
- * NotificationPreference row means the category's default channel matrix:
- *   pickups → push+email ON;  circle → OFF/OFF;  ledger → OFF/OFF.
+ * Category-default resolution (Phase 3 Round C, N5 / C3; circle default flipped
+ * in the digest-cadence round). An ABSENT NotificationPreference row means the
+ * category's default channel matrix:
+ *   pickups → push+email ON;  circle → push ON / email OFF (shares reach
+ *   neighbors immediately; the daily digest is the email path);  ledger → OFF/OFF.
  * A present row (always carries BOTH channels — the model has non-null push +
  * email columns) overrides the default outright. This is the pure spine the
  * notify fan-out (push.ts) and the mail subscription gate (mail/index.ts) share,
@@ -26,9 +28,9 @@ import {
   resolveChannelPrefs,
 } from './defaults';
 
-test('the default table is the N5 matrix: pickups on/on, circle + ledger off/off', () => {
+test('the default table: pickups on/on, circle push-only (immediate shares), ledger off/off', () => {
   assert.deepEqual(CATEGORY_DEFAULTS.pickups, { push: true, email: true });
-  assert.deepEqual(CATEGORY_DEFAULTS.circle, { push: false, email: false });
+  assert.deepEqual(CATEGORY_DEFAULTS.circle, { push: true, email: false });
   assert.deepEqual(CATEGORY_DEFAULTS.ledger, { push: false, email: false });
 });
 
@@ -46,7 +48,7 @@ test('isNotifyCategory accepts the three stored categories and rejects everythin
 
 test('resolveChannelPrefs: an absent row resolves to the category default', () => {
   assert.deepEqual(resolveChannelPrefs('pickups', null), { push: true, email: true });
-  assert.deepEqual(resolveChannelPrefs('circle', null), { push: false, email: false });
+  assert.deepEqual(resolveChannelPrefs('circle', null), { push: true, email: false });
   assert.deepEqual(resolveChannelPrefs('ledger', null), { push: false, email: false });
 });
 
@@ -56,10 +58,10 @@ test('resolveChannelPrefs: a present row overrides the default outright', () => 
     push: false,
     email: false,
   });
-  // circle default off/off → a stored on/on wins (the user opted in).
-  assert.deepEqual(resolveChannelPrefs('circle', { push: true, email: true }), {
-    push: true,
-    email: true,
+  // circle default push-on/email-off → a stored off/off wins (the user muted it).
+  assert.deepEqual(resolveChannelPrefs('circle', { push: false, email: false }), {
+    push: false,
+    email: false,
   });
 });
 

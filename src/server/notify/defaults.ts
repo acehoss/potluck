@@ -8,10 +8,14 @@
  *
  * Three stored, opt-out categories. An ABSENT NotificationPreference row means
  * the category default below; a present row (always both channels — the model
- * columns are non-null) overrides it outright. The deliberate N5 change: ledger
- * (settlement/adjustment) defaults push+email OFF — money noise is opt-in.
- * (`account` transactional mail is never stored here; `digest` is a single
- * User-level opt-out, not a channel matrix.)
+ * columns are non-null) overrides it outright. Deliberate defaults: ledger
+ * (settlement/adjustment) is push+email OFF — money noise is opt-in; circle
+ * (neighborhood activity, e.g. a new share) is push ON / email OFF, so a share
+ * reaches visible connections IMMEDIATELY while the leftovers are still good,
+ * but the per-share EMAIL stays off (the daily digest is the email path — a
+ * per-share email would spam the digest-only "Walt" users). (`account`
+ * transactional mail is never stored here; `digest` is the User-level cadence,
+ * not a channel matrix.)
  */
 
 export type NotifyCategory = 'pickups' | 'circle' | 'ledger';
@@ -22,7 +26,7 @@ export type ChannelPrefs = { push: boolean; email: boolean };
 
 export const CATEGORY_DEFAULTS: Record<NotifyCategory, ChannelPrefs> = {
   pickups: { push: true, email: true },
-  circle: { push: false, email: false },
+  circle: { push: true, email: false },
   ledger: { push: false, email: false },
 };
 

@@ -21,14 +21,38 @@ import { Switch } from './switch';
 
 type Category = 'pickups' | 'circle' | 'ledger';
 type Channel = 'push' | 'email';
+type Cadence = 'off' | 'daily' | 'weekly';
 
 type Prefs = {
   categories: Record<Category, { push: boolean; email: boolean }>;
-  digestOptOut: boolean;
+  digestCadence: Cadence;
+  digestHour: number;
+  digestWeekday: number;
   showDetails: boolean;
   timezone: string | null;
   onboarded: boolean;
 };
+
+const WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+/** 0–23 → a plain-language clock label ("9:00 AM", "12:00 AM", "11:00 PM"). */
+function hourLabel(h: number): string {
+  const period = h < 12 ? 'AM' : 'PM';
+  const twelve = h % 12 === 0 ? 12 : h % 12;
+  return `${twelve}:00 ${period}`;
+}
+
+const selectClass =
+  'min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
 
 const CATEGORY_COPY: Record<Category, { title: string; blurb: string }> = {
   pickups: {
@@ -93,13 +117,21 @@ export function NotificationPrefs() {
     }),
   );
 
-  // One mutation for the three scalar prefs; pass only the field that changed.
+  // One mutation for the scalar prefs; pass only the field(s) that changed.
   const setPrefs = useMutation(
     trpc.notification.setPrefs.mutationOptions({
-      onMutate: (vars: { digestOptOut?: boolean; showDetails?: boolean; timezone?: string | null }) => {
+      onMutate: (vars: {
+        digestCadence?: Cadence;
+        digestHour?: number;
+        digestWeekday?: number;
+        showDetails?: boolean;
+        timezone?: string | null;
+      }) => {
         const prev = patch((p) => ({
           ...p,
-          ...(vars.digestOptOut !== undefined && { digestOptOut: vars.digestOptOut }),
+          ...(vars.digestCadence !== undefined && { digestCadence: vars.digestCadence }),
+          ...(vars.digestHour !== undefined && { digestHour: vars.digestHour }),
+          ...(vars.digestWeekday !== undefined && { digestWeekday: vars.digestWeekday }),
           ...(vars.showDetails !== undefined && { showDetails: vars.showDetails }),
           ...(vars.timezone !== undefined && { timezone: vars.timezone }),
         }));
@@ -184,22 +216,66 @@ export function NotificationPrefs() {
       </section>
 
       <section className={card}>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-text">Weekly summary email</h2>
-            <p className="text-sm text-text-muted">
-              A once-a-week recap: who you owe or are owed, anything still waiting on you, and new
-              shares from your neighbors. No amounts or addresses leave the app any other way.
-            </p>
-          </div>
-          {/* Stored as an opt-OUT, so the switch is ON when NOT opted out. */}
-          <Switch
-            checked={!prefs.digestOptOut}
-            disabled={setPrefs.isPending}
-            label="Weekly summary email"
-            testid="notif-digest"
-            onChange={(on) => setPrefs.mutate({ digestOptOut: !on })}
-          />
+        <div>
+          <h2 className="text-lg font-semibold text-text">Summary email</h2>
+          <p className="text-sm text-text-muted">
+            A recap: who you owe or are owed, anything still waiting on you, and new shares from your
+            neighbors. No amounts or addresses leave the app any other way.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1 text-sm text-text">
+            <span className="font-medium">How often</span>
+            <select
+              data-testid="notif-digest-cadence"
+              value={prefs.digestCadence}
+              disabled={setPrefs.isPending}
+              onChange={(e) => setPrefs.mutate({ digestCadence: e.target.value as Cadence })}
+              className={selectClass}
+            >
+              <option value="off">Off</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Once a week</option>
+            </select>
+          </label>
+
+          {prefs.digestCadence !== 'off' && (
+            <label className="flex flex-col gap-1 text-sm text-text">
+              <span className="font-medium">Send at</span>
+              <select
+                data-testid="notif-digest-hour"
+                value={prefs.digestHour}
+                disabled={setPrefs.isPending}
+                onChange={(e) => setPrefs.mutate({ digestHour: Number(e.target.value) })}
+                className={selectClass}
+              >
+                {HOURS.map((h) => (
+                  <option key={h} value={h}>
+                    {hourLabel(h)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {prefs.digestCadence === 'weekly' && (
+            <label className="flex flex-col gap-1 text-sm text-text">
+              <span className="font-medium">On</span>
+              <select
+                data-testid="notif-digest-weekday"
+                value={prefs.digestWeekday}
+                disabled={setPrefs.isPending}
+                onChange={(e) => setPrefs.mutate({ digestWeekday: Number(e.target.value) })}
+                className={selectClass}
+              >
+                {WEEKDAYS.map((w, i) => (
+                  <option key={w} value={i}>
+                    {w}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
       </section>
 
@@ -223,12 +299,13 @@ export function NotificationPrefs() {
         </div>
       </section>
 
-      {zones.length > 0 && (
+      {zones.length > 0 && prefs.digestCadence !== 'off' && (
         <section className={card}>
           <div>
             <h2 className="text-lg font-semibold text-text">Time zone</h2>
             <p className="text-sm text-text-muted">
-              When your weekly summary goes out. Leave on the server default if you’re not sure.
+              Which clock the send time above follows. Leave on the server default if you’re not
+              sure.
             </p>
           </div>
           <select
@@ -236,7 +313,7 @@ export function NotificationPrefs() {
             value={prefs.timezone ?? ''}
             disabled={setPrefs.isPending}
             onChange={(e) => setPrefs.mutate({ timezone: e.target.value || null })}
-            className="min-h-11 rounded-lg border border-border-strong bg-surface-raised px-3 py-2 text-base text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
+            className={selectClass}
           >
             <option value="">Server default</option>
             {zones.map((z) => (

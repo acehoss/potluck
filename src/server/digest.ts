@@ -1,18 +1,23 @@
 /**
- * The weekly digest (Phase 3 Round C; docs/REWORK.md N6). The home for all
- * ambient/nice-to-know mail — the ONE place a Walt (email-native, never installs
- * the PWA, tunes out past ~5–6 mails/week) still hears about the neighborhood.
- * Scannable + subject front-loads the point ("you're owed $12, 1 pickup
- * waiting"). Assembled from existing state only — balances, open loops, new
- * shares — and sent through the RFC-8058 subscription pipeline (one-click
- * unsubscribe + suppression + the digest opt-out honored before send).
+ * The digest (Phase 3 Round C + the digest-cadence round; docs/REWORK.md N6).
+ * The home for all ambient/nice-to-know mail — the ONE place a Walt (email-
+ * native, never installs the PWA, tunes out past ~5–6 mails/week) still hears
+ * about the neighborhood. Scannable + subject front-loads the point ("you're
+ * owed $12, 1 pickup waiting"). Assembled from existing state only — balances,
+ * open loops, new shares — and sent through the RFC-8058 subscription pipeline
+ * (one-click unsubscribe + suppression + the cadence honored before send).
  *
- * Idempotent per user per weekly window via `User.lastDigestAt` (a restart or a
- * double-run in the same week never double-sends). TZ handling is deliberately
- * pragmatic: `runDigest` sends to users whose LOCAL Sunday send-hour matches
- * now (falling back to UTC when a user has no timezone); the assemble-and-send
- * core (`digestFor`) is the load-bearing part and is exercised directly by the
- * SEED_DEMO dev route, window-bypassed.
+ * Per-user CADENCE ('off'|'daily'|'weekly') with a per-user local send hour, and
+ * (weekly only) a send weekday. `runDigest` sends to each user whose LOCAL send
+ * hour matches now — for weekly, also their chosen weekday — falling back to UTC
+ * when a user has no timezone. Idempotent per user per CADENCE WINDOW via
+ * `User.lastDigestAt` (the window is the local day for daily, the local week-
+ * since-their-weekday for weekly), so a restart, an in-process scheduler tick,
+ * or a double-run inside the same window never double-sends. The "new shares"
+ * lookback follows the cadence too (24h daily / 7d weekly), and the body line
+ * reads "today" vs "this week". The assemble-and-send core (`digestFor`) is the
+ * load-bearing part and is exercised directly by the SEED_DEMO dev route,
+ * window-bypassed.
  */
 
 import { formatCents } from '@/lib/money';
@@ -21,18 +26,17 @@ import { db } from './db';
 import { deepLinkPath, mintDeepLinkToken } from './deeplink';
 import { netByCounterparty } from './ledger';
 import { sendSubscription } from './mail';
-import { openLoopsFor } from './routers/activity';
-import { shareVisible } from './routers/share';
+import { openLoopsFor } from './open-loops';
+import { shareVisible } from './share-reach';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-/** Local hour (0–23) the digest goes out on Sunday. */
-const DIGEST_SEND_HOUR = 9;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Start of the current UTC week (most recent Sunday 00:00Z) — the idempotency window. */
-function weekStart(now: Date): Date {
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // back up to Sunday
-  return d;
+export type DigestCadence = 'off' | 'daily' | 'weekly';
+
+/** The "new shares" lookback for a cadence: daily → 24h, weekly → 7d. */
+function lookbackMs(cadence: DigestCadence): number {
+  return cadence === 'daily' ? DAY_MS : WEEK_MS;
 }
 
 /** The user's local {weekday 0–6, hour 0–23} in their IANA zone (UTC fallback). */
@@ -57,6 +61,66 @@ function localParts(now: Date, timezone: string | null): { weekday: number; hour
   }
 }
 
+/**
+ * The user's local calendar day as 'YYYY-MM-DD' in their zone (UTC fallback).
+ * This is the idempotency key: a digest fires at most once per LOCAL DAY, and
+ * the cadence gate (weekly only fires on the user's `digestWeekday`) makes that
+ * effectively once-per-week for weekly. DST-proof by construction — it never
+ * does offset arithmetic, it just asks the zone what day it is.
+ */
+function localDayKey(now: Date, timezone: string | null): string {
+  const zone = timezone ?? 'UTC';
+  try {
+    // 'en-CA' formats as YYYY-MM-DD.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
+}
+
+/** True when a real send already happened in this user's current local day. */
+function alreadySentThisWindow(
+  lastDigestAt: Date | null,
+  now: Date,
+  timezone: string | null,
+): boolean {
+  if (!lastDigestAt) return false;
+  return localDayKey(lastDigestAt, timezone) === localDayKey(now, timezone);
+}
+
+/** The per-user due fields the batch gate reads (a subset of the User row). */
+export type DigestDueUser = {
+  timezone: string | null;
+  digestCadence: string;
+  digestHour: number;
+  digestWeekday: number;
+  lastDigestAt: Date | null;
+};
+
+/**
+ * Pure "is a digest owed to this user at `now`?" gate — the single decision
+ * `runDigest` applies to every user each tick, factored out so it is unit-
+ * testable without a DB. A user is due when: cadence isn't 'off'; their LOCAL
+ * send hour matches `digestHour`; for 'weekly', their local weekday also matches
+ * `digestWeekday`; and no send already landed in their current local-day window.
+ * Runs at 1-hour resolution (so every tick inside the matching hour is due until
+ * the first send stamps the window).
+ */
+export function digestDue(user: DigestDueUser, now: Date): boolean {
+  const cadence = user.digestCadence as DigestCadence;
+  if (cadence === 'off') return false;
+  const { weekday, hour } = localParts(now, user.timezone);
+  if (hour !== user.digestHour) return false;
+  if (cadence === 'weekly' && weekday !== user.digestWeekday) return false;
+  if (alreadySentThisWindow(user.lastDigestAt, now, user.timezone)) return false;
+  return true;
+}
+
 type LoopMembership = {
   receiveStock: boolean;
   fulfill: boolean;
@@ -72,15 +136,14 @@ type HouseholdSection = {
   newShares: number;
 };
 
-/** Assemble one household's digest slice: balances, open loops, new shares this week. */
+/** Assemble one household's digest slice: balances, open loops, new shares this period. */
 async function sectionFor(
   householdId: string,
   householdName: string,
   membership: LoopMembership,
   now: Date,
+  since: Date,
 ): Promise<HouseholdSection> {
-  const weekAgo = new Date(now.getTime() - WEEK_MS);
-
   const net = await netByCounterparty(householdId);
   const counterpartyIds = [...net.keys()];
   const counterparties = counterpartyIds.length
@@ -99,13 +162,13 @@ async function sectionFor(
   const loops = await openLoopsFor(householdId, membership);
   const waitingOnYou = loops.actionableCount;
 
-  // New shares this week from connections that this household can still see.
+  // New shares this period from connections that this household can still see.
   const candidates = await db.sharePost.findMany({
     where: {
       householdId: { not: householdId },
       status: { in: ['OPEN', 'CLAIMED'] },
       expiresAt: { gt: now },
-      createdAt: { gt: weekAgo },
+      createdAt: { gt: since },
     },
     select: { householdId: true },
   });
@@ -138,8 +201,14 @@ function renderSubject(sections: HouseholdSection[]): string {
   return `Your Potluck week: ${parts.join(', ')}`;
 }
 
-function renderBody(userName: string, sections: HouseholdSection[], openLink: string | null): string {
-  const lines: string[] = [`Hi ${userName}, here's your Potluck week.`, ''];
+function renderBody(
+  userName: string,
+  sections: HouseholdSection[],
+  openLink: string | null,
+  cadence: DigestCadence,
+): string {
+  const period = cadence === 'daily' ? 'today' : 'this week';
+  const lines: string[] = [`Hi ${userName}, here's your Potluck ${cadence === 'daily' ? 'day' : 'week'}.`, ''];
   for (const sec of sections) {
     lines.push(`— ${sec.householdName} —`);
     if (sec.standings.length === 0) {
@@ -158,7 +227,7 @@ function renderBody(userName: string, sections: HouseholdSection[], openLink: st
       `Waiting on you: ${sec.waitingOnYou === 0 ? 'nothing right now' : `${sec.waitingOnYou} to handle`}`,
     );
     lines.push(
-      `New shares from neighbors this week: ${sec.newShares === 0 ? 'none' : sec.newShares}`,
+      `New shares from neighbors ${period}: ${sec.newShares === 0 ? 'none' : sec.newShares}`,
     );
     lines.push('');
   }
@@ -175,10 +244,12 @@ export type DigestResult = {
 };
 
 /**
- * Assemble + send one user's digest. `force` bypasses the weekly-window
- * idempotency guard (the dev route uses it so e2e can trigger on demand); the
- * digest opt-out is ALWAYS honored (via `sendSubscription`, and short-circuited
- * here). Sets `lastDigestAt` on a real send so the batch never double-fires.
+ * Assemble + send one user's digest. `force` bypasses the cadence-window
+ * idempotency guard (the dev route uses it so e2e can trigger on demand); a
+ * cadence of 'off' is ALWAYS honored (via `sendSubscription`, and short-
+ * circuited here). The "new shares" lookback and the body copy follow the
+ * user's cadence (daily → 24h/"today", weekly → 7d/"this week"). Sets
+ * `lastDigestAt` on a real send so the batch never double-fires in-window.
  */
 export async function digestFor(
   userId: string,
@@ -190,7 +261,8 @@ export async function digestFor(
     select: {
       name: true,
       email: true,
-      digestOptOut: true,
+      timezone: true,
+      digestCadence: true,
       lastDigestAt: true,
       memberships: {
         select: {
@@ -206,15 +278,17 @@ export async function digestFor(
     },
   });
   if (!user) return { sent: false, capturedId: null };
-  if (user.digestOptOut) return { sent: false, capturedId: null, reason: 'opted-out' };
+  const cadence = user.digestCadence as DigestCadence;
+  if (cadence === 'off') return { sent: false, capturedId: null, reason: 'opted-out' };
   if (user.memberships.length === 0) return { sent: false, capturedId: null, reason: 'no-household' };
-  if (!opts.force && user.lastDigestAt && user.lastDigestAt >= weekStart(now)) {
+  if (!opts.force && alreadySentThisWindow(user.lastDigestAt, now, user.timezone)) {
     return { sent: false, capturedId: null, reason: 'already-sent' };
   }
 
+  const since = new Date(now.getTime() - lookbackMs(cadence));
   const sections: HouseholdSection[] = [];
   for (const m of user.memberships) {
-    sections.push(await sectionFor(m.householdId, m.household.name, m, now));
+    sections.push(await sectionFor(m.householdId, m.household.name, m, now, since));
   }
 
   // Nav-only CTA (N7): opens /activity switched to the recipient's default
@@ -230,7 +304,7 @@ export async function digestFor(
     category: 'digest',
     kind: 'digest',
     subject: renderSubject(sections),
-    text: renderBody(user.name, sections, openLink),
+    text: renderBody(user.name, sections, openLink, cadence),
   });
 
   // A send that the subscription gate skipped (suppressed/opted-out) leaves the
@@ -247,23 +321,31 @@ export async function digestFor(
 }
 
 /**
- * Batch entry point: send this week's digest to every user whose LOCAL Sunday
- * send-hour matches `now` and who hasn't been sent this window. Meant to be
- * poked by an EXTERNAL cron on an authenticated trigger (self-hosted compose
- * model) — no in-process scheduler this round. Returns a per-user tally.
+ * Batch entry point: send the digest to every user whose cadence is due at
+ * `now`. A user is due when their LOCAL send hour matches (`digestHour`), for
+ * `weekly` also their local weekday (`digestWeekday`), and no send has already
+ * landed in their current local-day window (idempotent via `lastDigestAt`).
+ * Driven by the in-process scheduler (`src/instrumentation.ts`) on a ~10-minute
+ * tick, and still callable from the `run-digest` CLI as a cron fallback. Runs
+ * at 1-hour resolution, so several ticks inside the matching hour all resolve to
+ * the same window and only the first sends. Returns a per-user tally.
  */
 export async function runDigest(now: Date = new Date()): Promise<{ sent: number; considered: number }> {
   const users = await db.user.findMany({
-    where: { digestOptOut: false },
-    select: { id: true, timezone: true, lastDigestAt: true },
+    where: { digestCadence: { not: 'off' } },
+    select: {
+      id: true,
+      timezone: true,
+      lastDigestAt: true,
+      digestCadence: true,
+      digestHour: true,
+      digestWeekday: true,
+    },
   });
-  const window = weekStart(now);
   let sent = 0;
   let considered = 0;
   for (const u of users) {
-    const { weekday, hour } = localParts(now, u.timezone);
-    if (weekday !== 0 || hour !== DIGEST_SEND_HOUR) continue;
-    if (u.lastDigestAt && u.lastDigestAt >= window) continue;
+    if (!digestDue(u, now)) continue;
     considered += 1;
     const res = await digestFor(u.id, { now });
     if (res.sent) sent += 1;

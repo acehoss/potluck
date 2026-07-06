@@ -183,25 +183,27 @@ use — the domain reputation you built carries over. When you do, the one DNS g
 SPF record **replaces** DreamHost's auto one, so **merge** the provider's `include:` into a
 single SPF record rather than adding a second.
 
-**Notifications (Round C):** members set per-category preferences (pickups / neighborhood
-activity / money) across push + email, plus a weekly digest, on the More → Notifications
-screen. Two operational requirements:
+**Notifications:** members set per-category preferences (pickups / neighborhood activity /
+money) across push + email on the More → Notifications screen, plus a **digest** with a
+per-user cadence — **daily (the default)**, weekly (pick a day), or off — and a per-user
+send hour. New shares push to visible connections **immediately** by default (the app wants
+leftovers picked up tonight, not next week); the digest is the email channel for that
+ambient activity. Operational notes:
 
 - **`MAIL_UNSUB_SECRET`** — an HMAC secret for the one-click `/unsub` links on subscription
   mail (digests). A demo stack injects a dev value; the entrypoint **refuses to start a
   `MAIL_PRODUCTION=1` stack without a real one** (set it to a long random string in the host
   env). Rotating it invalidates outstanding unsubscribe links (they re-issue on the next send).
-- **Weekly digest** — there is no in-process scheduler; drive it from an **external cron**
-  on the Docker host, **hourly**:
+- **Digest scheduling — automatic.** The app runs an in-process scheduler (a ~10-minute
+  tick started at boot) that sends each user's digest at their chosen local hour (and day,
+  for weekly), idempotent per window — no cron needed. To use an external cron instead, set
+  `DIGEST_SCHEDULER=off` and run **hourly**:
   ```bash
   0 * * * *  cd /path/to/coop && docker compose exec -T app npx tsx scripts/run-digest.ts
   ```
-  `scripts/run-digest.ts` (no args) calls `runDigest(now)`, which sends each user only at
-  their local Sunday-morning window (`User.timezone`, UTC fallback) and is idempotent per
-  weekly window (`lastDigestAt`) — so the hourly cron sweeps every timezone across Sunday,
-  never double-sends, and is a cheap no-op the rest of the week. To **smoke-test** the mail
-  path on a fresh deploy without waiting for Sunday, force one user's digest now (opt-out
-  still honored): `docker compose exec -T app npx tsx scripts/run-digest.ts you@example.com`.
+  To **smoke-test** the mail path on a fresh deploy without waiting for the window, force
+  one user's digest now (a cadence of "off" is still honored):
+  `docker compose exec -T app npx tsx scripts/run-digest.ts you@example.com`.
   (The `SEED_DEMO`-gated `/api/dev/digest-run` route is the e2e/on-demand hook only.)
 
 ## Receipt extraction (VLM)

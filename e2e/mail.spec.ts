@@ -106,6 +106,20 @@ function headers(row: CapturedRow): Record<string, string> {
   return JSON.parse(row.headersJson || '{}');
 }
 
+/**
+ * A REAL seeded user id for subscription sends. `subscriptionAllowed` is
+ * fail-closed for an unknown userId (digest-cadence round) — a synthetic id
+ * would make every subscription trigger read skipped:'opted-out'.
+ */
+function seededUserId(username = 'aaron'): string {
+  const out = execInApp(
+    `const Database = require('better-sqlite3');
+     const db = new Database(process.env.DATABASE_URL.replace(/^file:/, ''));
+     process.stdout.write(db.prepare('SELECT id FROM User WHERE username = ?').get(${JSON.stringify(username)}).id);`,
+  );
+  return out.trim();
+}
+
 /** Case-insensitive header lookup — header names are not case-sensitive. */
 function hasHeader(h: Record<string, string>, name: string): boolean {
   return Object.keys(h).some((k) => k.toLowerCase() === name.toLowerCase());
@@ -139,7 +153,7 @@ test.describe('mail capture pipeline', () => {
     const ctx = await apiLogin('aaron');
     try {
       const to = `digest-${RUN}-${project}@example.com`;
-      const id = await triggerMail(ctx, { to, kind: 'digest', pipeline: 'subscription', userId: 'e2e-mailtest' });
+      const id = await triggerMail(ctx, { to, kind: 'digest', pipeline: 'subscription', userId: seededUserId() });
 
       const row = readCaptured(id);
       expect(row, 'a CapturedEmail row was written').not.toBeNull();
@@ -185,7 +199,7 @@ test.describe('mail capture pipeline', () => {
       suppress(to);
 
       // Subscription to a suppressed address: no send, no CapturedEmail row.
-      const sub = await postMail(ctx, { to, kind: 'digest', pipeline: 'subscription', userId: 'e2e-mailtest' });
+      const sub = await postMail(ctx, { to, kind: 'digest', pipeline: 'subscription', userId: seededUserId() });
       expect(sub.ok).toBe(true);
       expect(sub.capturedId, 'a suppressed subscription is never attempted').toBeFalsy();
       expect(sub.skipped).toBe('suppressed');

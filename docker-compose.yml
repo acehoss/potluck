@@ -55,6 +55,11 @@ services:
       EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-587}
       EMAIL_IMAP_SERVER: ${EMAIL_IMAP_SERVER:-}
       EMAIL_IMAP_PORT: ${EMAIL_IMAP_PORT:-993}
+      # Digest scheduler (digest-cadence round). Unset/anything but 'off' → the
+      # in-process scheduler runs digests on a ~10-min tick (the self-hosted
+      # default, no external cron needed). Set to 'off' to disable it and drive
+      # digests from an external cron hitting scripts/run-digest.ts instead.
+      DIGEST_SCHEDULER: ${DIGEST_SCHEDULER:-}
     volumes:
       # Data (SQLite DB + images) uses the `coop-data` named volume by default
       # — safe for macOS dev/e2e (no bind-mount SQLite WAL flakiness). On a

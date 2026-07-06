@@ -32,14 +32,16 @@ function validTimezone(tz: string): boolean {
 }
 
 export const notificationRouter = router({
-  /** The full matrix + digest/showDetails/timezone/onboarded for the current user. */
+  /** The full matrix + digest cadence/time/showDetails/timezone/onboarded. */
   get: protectedProcedure.query(async ({ ctx }) => {
     const [categories, user] = await Promise.all([
       effectivePrefs(ctx.user.id),
       db.user.findUniqueOrThrow({
         where: { id: ctx.user.id },
         select: {
-          digestOptOut: true,
+          digestCadence: true,
+          digestHour: true,
+          digestWeekday: true,
           showDetails: true,
           timezone: true,
           notifyOnboardedAt: true,
@@ -48,7 +50,9 @@ export const notificationRouter = router({
     ]);
     return {
       categories,
-      digestOptOut: user.digestOptOut,
+      digestCadence: user.digestCadence,
+      digestHour: user.digestHour,
+      digestWeekday: user.digestWeekday,
       showDetails: user.showDetails,
       timezone: user.timezone,
       onboarded: user.notifyOnboardedAt !== null,
@@ -87,25 +91,32 @@ export const notificationRouter = router({
     }),
 
   /**
-   * The single-valued prefs: weekly-digest opt-out, show-details-in-notifications
-   * (N4 opt-in), and the digest timezone. Any subset — pass only what changed;
-   * `timezone: null` clears it back to the instance default.
+   * The single-valued prefs: digest cadence (off/daily/weekly) + its local send
+   * hour (0–23) and weekday (0=Sun..6=Sat, weekly only), show-details-in-
+   * notifications (N4 opt-in), and the digest timezone. Any subset — pass only
+   * what changed; `timezone: null` clears it back to the instance default.
    */
   setPrefs: protectedProcedure
     .input(
       z.object({
-        digestOptOut: z.boolean().optional(),
+        digestCadence: z.enum(['off', 'daily', 'weekly']).optional(),
+        digestHour: z.number().int().min(0).max(23).optional(),
+        digestWeekday: z.number().int().min(0).max(6).optional(),
         showDetails: z.boolean().optional(),
         timezone: z.string().max(64).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const data: {
-        digestOptOut?: boolean;
+        digestCadence?: 'off' | 'daily' | 'weekly';
+        digestHour?: number;
+        digestWeekday?: number;
         showDetails?: boolean;
         timezone?: string | null;
       } = {};
-      if (input.digestOptOut !== undefined) data.digestOptOut = input.digestOptOut;
+      if (input.digestCadence !== undefined) data.digestCadence = input.digestCadence;
+      if (input.digestHour !== undefined) data.digestHour = input.digestHour;
+      if (input.digestWeekday !== undefined) data.digestWeekday = input.digestWeekday;
       if (input.showDetails !== undefined) data.showDetails = input.showDetails;
       if (input.timezone !== undefined) {
         if (input.timezone !== null && !validTimezone(input.timezone)) {
@@ -116,7 +127,13 @@ export const notificationRouter = router({
       const user = await db.user.update({
         where: { id: ctx.user.id },
         data,
-        select: { digestOptOut: true, showDetails: true, timezone: true },
+        select: {
+          digestCadence: true,
+          digestHour: true,
+          digestWeekday: true,
+          showDetails: true,
+          timezone: true,
+        },
       });
       return user;
     }),
