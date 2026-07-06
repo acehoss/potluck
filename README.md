@@ -47,6 +47,31 @@ first account is created by hand (registration is invite-only, so there's a
 chicken-and-egg for user #1). The container already sets `restart:
 unless-stopped`, so it survives host reboots and crashes.
 
+### 0. Generate the production secrets
+
+Three secrets must be set in the host env (or the gitignored `.env`) **before
+first boot** — the entrypoint refuses to start a non-demo stack without real
+values (demo stacks inject publicly-known dev values, which are also refused
+in production):
+
+```bash
+# MFA_ENC_KEY — AES-256 key encrypting TOTP secrets at rest (always required)
+openssl rand -base64 32
+
+# MAIL_UNSUB_SECRET — HMAC key signing one-click-unsubscribe + deep-link
+# tokens (required when MAIL_PRODUCTION=1)
+openssl rand -base64 32
+
+# VAPID keypair — web push (prints VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY;
+# also set VAPID_SUBJECT=mailto:you@your-domain)
+npx web-push generate-vapid-keys
+```
+
+Keep them stable once live: rotating `MFA_ENC_KEY` orphans every enrolled
+TOTP secret, rotating the VAPID pair invalidates every push subscription, and
+rotating `MAIL_UNSUB_SECRET` invalidates outstanding unsubscribe/deep-link
+tokens (those re-issue on the next send — the mildest of the three).
+
 ### 1. Bootstrap the first household + user
 
 A fresh DB has zero users and no open signup, so no invite can be minted yet.
