@@ -98,6 +98,7 @@ export const planRouter = router({
             servings: number | null;
             servingsOverride: number | null;
             text: string | null;
+            addedToShoppingAt: Date | null;
           }[]
         >,
       }));
@@ -122,6 +123,9 @@ export const planRouter = router({
           servings: e.servingsOverride ?? baseServings,
           servingsOverride: e.servingsOverride,
           text: e.text,
+          // Round S: the plan UI's "on the shopping list" marker (null = never
+          // sent). Set by shopping.generate (range) / shopping.addFromEntry.
+          addedToShoppingAt: e.addedToShoppingAt,
         });
       }
 

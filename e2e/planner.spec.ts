@@ -75,6 +75,9 @@ type PlanEntry = {
   servings: number | null;
   servingsOverride: number | null;
   text: string | null;
+  // Round S: the "was sent to the shopping list" marker (range-generate or the
+  // per-entry add stamp it); null = never sent. Deliberately a marker, not a link.
+  addedToShoppingAt: string | null;
 };
 type PlanWeek = {
   start: string;
@@ -747,5 +750,263 @@ test('Plan surface (P3): the in-calendar picker forks a connection recipe into y
     }
     await deleteRecipeQuietly(page.request, forkId);
     await deleteRecipeQuietly(dana, danaRecipeId);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Round S — Add-from-Plan + added-to-list tracking. The plan↔shopping link
+// grew a "was sent to the list" marker (PlanEntry.addedToShoppingAt): the
+// range Generate stamps every recipe entry it consumed, a NEW single-entry
+// shopping.addFromEntry stamps just its own entry, the shopping button is
+// relabelled "Add from Plan", and the plan surface shows a subtle in-list
+// indicator + a per-entry "Add to shopping list" sheet button. Zero money.
+// The stamp is a marker, not a live link (list rows merge/check/clear
+// independently), so the assertions are on the stamp + list rows, never on a
+// back-reference. Rerun-safe on the shared DB via the per-run token; every
+// entry, recipe, and list row is swept in finally (deleting our entries also
+// clears the stamps that live on them, restoring plan topology).
+// ---------------------------------------------------------------------------
+
+/** The addedToShoppingAt marker for one entry id, read fresh from plan.week. */
+async function stampOf(api: Api, start: string, date: string, meal: string, id: string) {
+  return findEntry(await planWeek(api, start), date, meal, id)?.addedToShoppingAt ?? null;
+}
+
+test('Add-from-Plan (S2): range Generate stamps consumed recipe entries; plan UI shows the in-list marker', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  const token = `${P}-${RUN}`;
+  const ing = uniq('StampIng', P);
+  const today = localToday();
+  await login(page, 'aaron');
+
+  let recipeId: string | undefined;
+  let entryId: string | undefined;
+  try {
+    // A recipe with one item ingredient (so it CONTRIBUTES to generation — a
+    // recipe with no item lines would be consumed but stamp nothing), planned on
+    // today so it sits in the plan UI's default (current-week) view.
+    recipeId = (
+      await ok(page.request, 'recipe.create', {
+        title: uniq('Stamp Recipe', P),
+        servings: 4,
+        ingredients: [{ kind: 'item', amount: '2', unit: 'cups', text: ing }],
+      })
+    ).id;
+    entryId = (
+      await ok(page.request, 'plan.addEntry', {
+        date: today,
+        meal: 'dinner',
+        kind: 'recipe',
+        recipeId,
+      })
+    ).id;
+
+    // Before generation the marker is null (never sent).
+    expect(await stampOf(page.request, today, today, 'dinner', entryId!), 'unsent = null').toBeNull();
+
+    // Range Generate over today..today stamps the consumed recipe entry.
+    await ok(page.request, 'shopping.generate', { from: today, to: today });
+    const stamp = await stampOf(page.request, today, today, 'dinner', entryId!);
+    expect(stamp, 'generate stamped the consumed recipe entry').toBeTruthy();
+    expect(new Date(stamp!).toString(), 'a real timestamp').not.toBe('Invalid Date');
+
+    // A fresh /plan load renders the row with the subtle in-list indicator.
+    await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();
+    await expect(page).toHaveURL(/\/plan$/);
+    const row = page.getByTestId('plan-entry').filter({ hasText: uniq('Stamp Recipe', P) }).first();
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId('plan-entry-in-list')).toBeVisible();
+  } finally {
+    await removeEntriesQuietly(page.request, [entryId]);
+    await deleteRecipeQuietly(page.request, recipeId);
+    await cleanShopping(page.request, token);
+  }
+});
+
+test('Add-from-Plan (S2): addFromEntry scales its ingredients, stamps its entry, re-adds without duplicating; note/item + cross-household guards', async ({}, testInfo) => {
+  const P = testInfo.project.name;
+  const token = `${P}-${RUN}`;
+  const aaron = await apiLogin('aaron');
+  const dana = await apiLogin('dana');
+  const D = '2026-09-07';
+  const ing = uniq('AfeIng', P);
+
+  let recipeId: string | undefined;
+  let danaRecipeId: string | undefined;
+  const entries: (string | undefined)[] = [];
+  const danaEntries: (string | undefined)[] = [];
+  try {
+    // servings 4, one 2-cups ingredient; planned at override 8 → factor 2, so the
+    // single-entry add lands 2 × 2 = 4 cups (proves it scales exactly like Generate).
+    recipeId = (
+      await ok(aaron, 'recipe.create', {
+        title: uniq('Afe Recipe', P),
+        servings: 4,
+        ingredients: [{ kind: 'item', amount: '2', unit: 'cups', text: ing }],
+      })
+    ).id;
+    const recipeEntry = (
+      await ok(aaron, 'plan.addEntry', {
+        date: D,
+        meal: 'dinner',
+        kind: 'recipe',
+        recipeId,
+        servingsOverride: 8,
+      })
+    ).id;
+    entries.push(recipeEntry);
+
+    // Unsent to start.
+    expect(await stampOf(aaron, D, D, 'dinner', recipeEntry), 'unsent = null').toBeNull();
+
+    // addFromEntry: one item lands, scaled to 4 cups; the entry gets stamped.
+    const first = await ok(aaron, 'shopping.addFromEntry', { planEntryId: recipeEntry });
+    expect(first.added, 'one new row').toBe(1);
+    let rows = (await listShopping(aaron)).filter(
+      (i) => i.normalizedName === norm(ing) && i.unit === 'cups',
+    );
+    expect(rows.length, 'exactly one row for this ingredient/unit').toBe(1);
+    expect(rows[0].amounts, '2 cups × factor 2 = 4').toBe('4');
+    const firstStamp = await stampOf(aaron, D, D, 'dinner', recipeEntry);
+    expect(firstStamp, 'entry stamped').toBeTruthy();
+
+    // Add AGAIN → the natural-key upsert re-derives the row from THIS single
+    // entry each time (the shared core with generate overwrites amounts with the
+    // freshly-bucketed value; it never reads the existing row's amount), so a
+    // replay is idempotent: no duplicate row, amount stays the single-entry
+    // scaled value, only the stamp is refreshed. (This asserts the LANDED
+    // overwrite/idempotent semantics of the generate-shared core, not accumulate
+    // — see the note flagged to the coordinator.)
+    const second = await ok(aaron, 'shopping.addFromEntry', { planEntryId: recipeEntry });
+    expect(second.added, 're-add updates the row, never adds a new one').toBe(0);
+    rows = (await listShopping(aaron)).filter(
+      (i) => i.normalizedName === norm(ing) && i.unit === 'cups',
+    );
+    expect(rows.length, 'still exactly one row — merge, never a duplicate').toBe(1);
+    expect(rows[0].amounts, 're-add is idempotent: the single-entry scaled value').toBe('4');
+    const secondStamp = await stampOf(aaron, D, D, 'dinner', recipeEntry);
+    expect(secondStamp, 'still stamped after re-add').toBeTruthy();
+    expect(
+      new Date(secondStamp!).getTime() >= new Date(firstStamp!).getTime(),
+      'stamp refreshed (>= the first)',
+    ).toBe(true);
+
+    // Guards: a note entry and an item entry carry no recipe → BAD_REQUEST (400).
+    const noteEntry = (
+      await ok(aaron, 'plan.addEntry', { date: D, meal: 'lunch', kind: 'note', text: uniq('Afe Note', P) })
+    ).id;
+    entries.push(noteEntry);
+    expect(
+      (await rpc(aaron, 'shopping.addFromEntry', { planEntryId: noteEntry })).status,
+      'note entry → 400',
+    ).toBe(400);
+    const itemEntry = (
+      await ok(aaron, 'plan.addEntry', { date: D, meal: 'lunch', kind: 'item', text: uniq('Afe Item', P) })
+    ).id;
+    entries.push(itemEntry);
+    expect(
+      (await rpc(aaron, 'shopping.addFromEntry', { planEntryId: itemEntry })).status,
+      'item entry → 400',
+    ).toBe(400);
+
+    // Cross-household: Dana plans one of her own recipes; Aaron can't reach it (404).
+    danaRecipeId = (
+      await ok(dana, 'recipe.create', {
+        title: uniq('Afe Dana', P),
+        servings: 2,
+        ingredients: [{ kind: 'item', amount: '1', unit: 'cups', text: uniq('AfeDanaIng', P) }],
+      })
+    ).id;
+    const danaEntry = (
+      await ok(dana, 'plan.addEntry', { date: D, meal: 'dinner', kind: 'recipe', recipeId: danaRecipeId })
+    ).id;
+    danaEntries.push(danaEntry);
+    expect(
+      (await rpc(aaron, 'shopping.addFromEntry', { planEntryId: danaEntry })).status,
+      "another household's entry → 404 (existence never leaks)",
+    ).toBe(404);
+  } finally {
+    await removeEntriesQuietly(aaron, entries);
+    await removeEntriesQuietly(dana, danaEntries);
+    await deleteRecipeQuietly(aaron, recipeId);
+    await deleteRecipeQuietly(dana, danaRecipeId);
+    await cleanShopping(aaron, token);
+  }
+});
+
+test('Add-from-Plan (S3): the edit-sheet "Add to shopping list" button lands scaled items + indicator; shopping button reads "Add from Plan"', async ({
+  page,
+}, testInfo) => {
+  const P = testInfo.project.name;
+  const token = `${P}-${RUN}`;
+  const ing = uniq('SheetIng', P);
+  const title = uniq('Sheet Recipe', P);
+  const today = localToday();
+  await login(page, 'aaron');
+
+  let recipeId: string | undefined;
+  let entryId: string | undefined;
+  try {
+    recipeId = (
+      await ok(page.request, 'recipe.create', {
+        title,
+        servings: 4,
+        ingredients: [{ kind: 'item', amount: '2', unit: 'cups', text: ing }],
+      })
+    ).id;
+    // Planned on today at override 8 (factor 2 → 4 cups), so the row lands scaled.
+    entryId = (
+      await ok(page.request, 'plan.addEntry', {
+        date: today,
+        meal: 'dinner',
+        kind: 'recipe',
+        recipeId,
+        servingsOverride: 8,
+      })
+    ).id;
+
+    // Open the entry's edit sheet from today's card and add it to the list.
+    await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();
+    await expect(page).toHaveURL(/\/plan$/);
+    const row = page.getByTestId('plan-entry').filter({ hasText: title }).first();
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId('plan-entry-in-list'), 'not on the list yet').toBeHidden();
+    await row.click();
+    await expect(page.getByTestId('plan-entry-sheet')).toBeVisible();
+    await page.getByTestId('plan-entry-add-to-list').click();
+    // Brief inline confirmation naming how many items landed.
+    await expect(page.getByTestId('plan-entry-sheet')).toContainText(/Added/i);
+
+    // The row now carries the in-list indicator (the add invalidated the week).
+    await page.getByTestId('plan-entry-sheet').getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByTestId('plan-entry-sheet')).toBeHidden();
+    await expect(row.getByTestId('plan-entry-in-list')).toBeVisible();
+
+    // The scaled row is really on the list (server truth).
+    const listed = (await listShopping(page.request)).filter(
+      (i) => i.normalizedName === norm(ing) && i.unit === 'cups',
+    );
+    expect(listed.length, 'one row for the added ingredient').toBe(1);
+    expect(listed[0].amounts, '2 cups × factor 2 = 4').toBe('4');
+    expect(await stampOf(page.request, today, today, 'dinner', entryId!), 'entry stamped').toBeTruthy();
+
+    // The shopping generator button is relabelled "Add from Plan" (rename only —
+    // same testid, same procedure) and the generate flow still works.
+    await page.getByTestId('shopping-link').click();
+    await expect(page).toHaveURL(/\/shopping$/);
+    await expect(page.getByTestId('shopping-generate')).toHaveText(/Add from Plan/i);
+    await page.getByTestId('shopping-generate-from').fill(today);
+    await page.getByTestId('shopping-generate-to').fill(today);
+    await page.getByTestId('shopping-generate').click();
+    await expect(
+      page.getByTestId('shopping-item').filter({ hasText: ing }).first(),
+      'generate still lands the row end to end',
+    ).toBeVisible();
+  } finally {
+    await removeEntriesQuietly(page.request, [entryId]);
+    await deleteRecipeQuietly(page.request, recipeId);
+    await cleanShopping(page.request, token);
   }
 });

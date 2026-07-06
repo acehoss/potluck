@@ -2,8 +2,12 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { activeConnectionsOf, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
-import { formatQuantity, mergeAmounts, scaleAmount } from '../plan-scale';
 import { normalizeIngredientName } from '../recipe-parse';
+import {
+  bucketPlanEntries,
+  planEntryRecipeInclude,
+  upsertBuckets,
+} from '../shopping-generate';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -33,11 +37,6 @@ function dayDiff(from: string, to: string): number {
   const a = new Date(`${from}T00:00:00Z`).getTime();
   const b = new Date(`${to}T00:00:00Z`).getTime();
   return (b - a) / 86_400_000;
-}
-
-/** Store the ''-normalized unit exactly as the merge key uses it. */
-function normUnit(unit: string | null | undefined): string {
-  return (unit ?? '').trim();
 }
 
 type AvailabilityRow = {
@@ -232,6 +231,11 @@ export const shoppingRouter = router({
    * amounts/sourceNote (and a learned category only if it had none); a new row
    * is created. NOTHING is ever deleted by generate.
    *
+   * As it writes, it STAMPS addedToShoppingAt=now on every recipe entry it
+   * consumed (a live recipe present) — the plan UI's "on the shopping list"
+   * marker (round S). The scale/bucket/upsert core is shared with addFromEntry
+   * (src/server/shopping-generate.ts) so the two can never drift.
+   *
    * clientKey: accepted for API symmetry, but the real replay guard is the
    * natural-key upsert — re-running merges into the same rows and never
    * duplicates (the schema keeps no per-generation record to key a replay on).
@@ -251,119 +255,64 @@ export const shoppingRouter = router({
 
       const entries = await db.planEntry.findMany({
         where: { householdId: H, date: { gte: input.from, lte: input.to } },
-        include: {
-          recipe: {
-            select: {
-              title: true,
-              servings: true,
-              ingredients: {
-                where: { kind: 'item' },
-                select: { amount: true, unit: true, text: true },
-                orderBy: { position: 'asc' },
-              },
-            },
-          },
-        },
+        include: planEntryRecipeInclude,
       });
-
-      // Accumulate lines under the merge key.
-      type Bucket = {
-        normalizedName: string;
-        unit: string;
-        title: string; // first-seen original casing
-        amounts: (string | null)[];
-        sources: string[]; // ordered, de-duplicated provenance labels
-      };
-      const buckets = new Map<string, Bucket>();
-      const push = (title: string, unit: string, amount: string | null, source: string) => {
-        const normalizedName = normalizeIngredientName(title);
-        if (!normalizedName) return;
-        const key = `${normalizedName} ${unit}`;
-        let b = buckets.get(key);
-        if (!b) {
-          b = { normalizedName, unit, title: title.trim(), amounts: [], sources: [] };
-          buckets.set(key, b);
-        }
-        b.amounts.push(amount);
-        if (source && !b.sources.includes(source)) b.sources.push(source);
-      };
-
-      for (const e of entries) {
-        if (e.kind === 'note') continue;
-        if (e.kind === 'item') {
-          if (e.text) push(e.text, '', null, e.text.trim());
-          continue;
-        }
-        // kind === 'recipe'
-        const recipe = e.recipe;
-        if (!recipe) continue; // deleted-recipe tombstone contributes nothing
-        const factor =
-          e.servingsOverride && recipe.servings ? e.servingsOverride / recipe.servings : 1;
-        const label =
-          factor !== 1 ? `${recipe.title} ×${formatQuantity(factor)}` : recipe.title;
-        for (const ing of recipe.ingredients) {
-          const amount = ing.amount ? scaleAmount(ing.amount, factor) : null;
-          push(ing.text, normUnit(ing.unit), amount, label);
-        }
-      }
-
-      // Learned categories for the names we're about to write.
-      const normNames = [...new Set([...buckets.values()].map((b) => b.normalizedName))];
-      const assignments = normNames.length
-        ? await db.categoryAssignment.findMany({
-            where: { householdId: H, normalizedName: { in: normNames } },
-          })
-        : [];
-      const catByName = new Map(assignments.map((a) => [a.normalizedName, a.category]));
+      const { buckets, consumedEntryIds } = bucketPlanEntries(entries);
 
       return dbTransaction(async (tx) => {
-        let added = 0;
-        let updated = 0;
-        for (const b of buckets.values()) {
-          const amounts = mergeAmounts(b.amounts);
-          const sourceNote = b.sources.length ? b.sources.join(' · ') : null;
-          const learnedCategory = catByName.get(b.normalizedName) ?? null;
-          const existing = await tx.shoppingItem.findUnique({
-            where: {
-              householdId_normalizedName_unit: {
-                householdId: H,
-                normalizedName: b.normalizedName,
-                unit: b.unit,
-              },
-            },
+        const res = await upsertBuckets(tx, H, buckets);
+        if (consumedEntryIds.length) {
+          await tx.planEntry.updateMany({
+            where: { id: { in: consumedEntryIds }, householdId: H },
+            data: { addedToShoppingAt: new Date() },
           });
-          if (existing) {
-            await tx.shoppingItem.update({
-              where: { id: existing.id },
-              data: {
-                amounts,
-                sourceNote,
-                // Only fill a category when the row has none — never overwrite a
-                // user's manual choice (the learning moment is setCategory).
-                ...(existing.category === null && learnedCategory
-                  ? { category: learnedCategory }
-                  : {}),
-              },
-            });
-            updated++;
-          } else {
-            await tx.shoppingItem.create({
-              data: {
-                householdId: H,
-                title: b.title,
-                normalizedName: b.normalizedName,
-                unit: b.unit,
-                amounts,
-                category: learnedCategory,
-                checked: false,
-                manual: false,
-                sourceNote,
-              },
-            });
-            added++;
-          }
         }
-        return { added, updated };
+        return res;
+      });
+    }),
+
+  /**
+   * Single-entry version of generate (round S): send ONE planned recipe entry's
+   * ingredients to the list. requireCapability('editRecipes'); the entry must be
+   * the acting household's, kind 'recipe', with a live recipe (else NOT_FOUND /
+   * BAD_REQUEST). Scales + buckets + upserts through the SAME shared core as
+   * generate, then stamps the entry's addedToShoppingAt. Adding twice is safe:
+   * the natural-key upsert merges, never duplicates (so clientKey is accepted for
+   * symmetry but the upsert is the real replay guard). Returns {added, updated}.
+   */
+  addFromEntry: protectedProcedure
+    .input(z.object({ planEntryId: z.string().min(1), clientKey: clientKeySchema }))
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'editRecipes');
+      const H = ctx.user.householdId;
+      return dbTransaction(async (tx) => {
+        const entry = await tx.planEntry.findUnique({
+          where: { id: input.planEntryId },
+          include: planEntryRecipeInclude,
+        });
+        // 404 = not this household's entry (existence never leaks).
+        if (!entry || entry.householdId !== H) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Plan entry not found.' });
+        }
+        if (entry.kind !== 'recipe') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Only recipe entries add to the shopping list.',
+          });
+        }
+        if (!entry.recipe) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'That recipe is no longer available.',
+          });
+        }
+        const { buckets } = bucketPlanEntries([entry]);
+        const res = await upsertBuckets(tx, H, buckets);
+        await tx.planEntry.update({
+          where: { id: entry.id },
+          data: { addedToShoppingAt: new Date() },
+        });
+        return res;
       });
     }),
 

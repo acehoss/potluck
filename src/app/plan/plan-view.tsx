@@ -32,6 +32,7 @@ type PlanEntry = {
   servings: number | null;
   servingsOverride: number | null;
   text: string | null;
+  addedToShoppingAt: string | null;
 };
 type WeekRecipe = { id: string; title: string; servings: number | null };
 type OutgoingOrder = {
@@ -314,6 +315,16 @@ function EntryRow({ entry, onEdit }: { entry: PlanEntry; onEdit: (e: PlanEntry) 
             )}
           </span>
         ))}
+      {entry.kind === 'recipe' && !deletedRecipe && entry.addedToShoppingAt && (
+        <span
+          data-testid="plan-entry-in-list"
+          title="On the shopping list"
+          aria-label="On the shopping list"
+          className="shrink-0 text-xs text-success"
+        >
+          🛒✓
+        </span>
+      )}
       {entry.kind === 'item' && <span className="min-w-0 flex-1 truncate">{entry.text}</span>}
       {entry.kind === 'note' && (
         <span className="min-w-0 flex-1 truncate italic text-text-muted">{entry.text}</span>
@@ -608,15 +619,35 @@ function EditSheet({
   onDone: () => void;
 }) {
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const [meal, setMeal] = useState<Meal>(entry.meal as Meal);
   const [date, setDate] = useState(''); // filled by the caller's day; see below
   const [servings, setServings] = useState<number | null>(entry.servings);
   const [error, setError] = useState<string | null>(null);
   const isRecipe = entry.kind === 'recipe' && entry.recipeId !== null;
 
+  // "Add to shopping list" (per-entry). Independent of Save/Remove: it keeps the
+  // sheet open, shows an inline count, and re-invalidates the week so the row's
+  // 🛒✓ indicator appears. Re-adding is safe (server merges by name+unit).
+  const [listKey, setListKey] = useState(newClientKey);
+  const [listMsg, setListMsg] = useState<string | null>(null);
+  const [addedOnce, setAddedOnce] = useState(entry.addedToShoppingAt != null);
+
   const onError = (e: { message: string }) => setError(e.message);
   const update = useMutation(trpc.plan.updateEntry.mutationOptions({ onSuccess: onDone, onError }));
   const remove = useMutation(trpc.plan.removeEntry.mutationOptions({ onSuccess: onDone, onError }));
+  const addToList = useMutation(
+    trpc.shopping.addFromEntry.mutationOptions({
+      onSuccess: (res) => {
+        setListMsg(`Added ${res.added + res.updated} items`);
+        setError(null);
+        setAddedOnce(true);
+        setListKey(newClientKey());
+        queryClient.invalidateQueries(trpc.plan.week.pathFilter());
+      },
+      onError,
+    }),
+  );
 
   function save(e: React.FormEvent) {
     e.preventDefault();
@@ -719,6 +750,29 @@ function EditSheet({
                 +
               </button>
             </div>
+          </div>
+        )}
+
+        {isRecipe && (
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              data-testid="plan-entry-add-to-list"
+              disabled={addToList.isPending}
+              onClick={() => addToList.mutate({ planEntryId: entry.id, clientKey: listKey })}
+              className="min-h-11 rounded-lg border border-border-strong px-4 py-2.5 font-medium text-text transition-colors hover:bg-surface-sunken disabled:opacity-50"
+            >
+              {addToList.isPending
+                ? 'Adding…'
+                : addedOnce
+                  ? 'Add to shopping list again'
+                  : 'Add to shopping list'}
+            </button>
+            {listMsg && (
+              <p role="status" className="text-sm font-medium text-success">
+                {listMsg}
+              </p>
+            )}
           </div>
         )}
 

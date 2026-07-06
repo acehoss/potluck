@@ -1,0 +1,11 @@
+-- Plan/shopping tracking (round S, docs/REWORK.md). Add
+-- PlanEntry.addedToShoppingAt — a nullable "was sent to the shopping list"
+-- marker, stamped by shopping.generate (range) and the new shopping.addFromEntry
+-- (single entry). Deliberately NOT a live link: shopping-list rows merge, get
+-- checked, and clear independently of the plan (Walt-simple semantics). Null =
+-- never sent.
+--
+-- Purely additive: a plain ADD COLUMN, no table rebuild, no backfill (existing
+-- rows read NULL = never sent, which is correct). Zero money paths; every money
+-- invariant and the append-only ledger are untouched.
+ALTER TABLE "PlanEntry" ADD COLUMN "addedToShoppingAt" DATETIME;

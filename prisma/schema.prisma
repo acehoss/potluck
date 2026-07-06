@@ -978,6 +978,11 @@ model PlanEntry {
                             // foreign recipes are forked first, fork-on-save)
   servingsOverride Int?     // per-instance scaling (kind=recipe), 1..999
   text             String?  // kind=item: ingredient/product text; kind=note: the note
+  // Round S: stamped whenever this entry's ingredients were sent to the shopping
+  // list (range shopping.generate or single shopping.addFromEntry). Null = never
+  // sent. A deliberate "was sent" marker, NOT a live link — list items merge,
+  // get checked, and clear independently (Walt-simple semantics).
+  addedToShoppingAt DateTime?
   createdAt        DateTime @default(now())
 
   household Household @relation(fields: [householdId], references: [id])

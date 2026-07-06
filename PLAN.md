@@ -140,6 +140,30 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round S — plan/shopping: Add from Plan, added-to-list tracking (2026-07-06)
+
+**Done** (the last of Aaron's 2026-07-06 batch). One additive migration
+`20260706120000_plan_shopping_tracking` (`PlanEntry.addedToShoppingAt DateTime?`).
+
+- Shopping's "Generate" button reads **"Add from Plan"** (testid/procedure unchanged).
+- **Added-to-list tracking**: range-generate and the new per-entry add both stamp the
+  consumed recipe entries in-tx; the plan week returns the stamp and EntryRow shows a
+  🛒✓ "On the shopping list" indicator (`plan-entry-in-list`).
+- **Per-entry add**: the plan entry sheet's "Add to shopping list"
+  (`plan-entry-add-to-list`) → NEW `shopping.addFromEntry({planEntryId, clientKey?})` —
+  built on an EXTRACTED shared core (`src/server/shopping-generate.ts`:
+  `bucketPlanEntries`/`upsertBuckets`, used by both generate and addFromEntry so the
+  merge logic can't drift). Guards: cross-household 404, note/item 400.
+- **Semantics decision (argued and settled)**: re-adding an entry is **IDEMPOTENT** —
+  the core recomputes the entry's need (one planned lasagna needs 4 cups no matter how
+  many times it's sent); cleared rows are re-created; nothing is ever silently removed
+  (the real PTE invariant). The coordinator's initial accumulate ruling was reversed on
+  s-e2e's architectural argument (generate's tested idempotence shares the core).
+- **Gate — green first try**: unit **202/202**, full both-engine e2e **360 passed / 0
+  failed** on a fresh stack; s-e2e self-verified 22/22 twice on an isolated `-p` stack;
+  s-ui browser-verified idempotent re-add + dark scheme. Wire note: no tRPC transformer,
+  so the stamp is an ISO string client-side.
+
 ## Round R — recipes: view page, Cook view, URL image import (2026-07-06)
 
 **Done** (Aaron's asks, modeled on Plan to Eat — research summary in the 2026-07-06
