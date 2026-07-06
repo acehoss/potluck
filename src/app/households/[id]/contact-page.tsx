@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Avatar } from '@/app/more/profile-card';
+import { phoneHref } from '@/lib/phone';
 
 /**
  * A connected household's people & contact page (REWORK P5, Round C). Pickup
@@ -208,7 +209,11 @@ function MemberDetailSheet({
         <div className="flex flex-col gap-2">
           {member.phone && (
             <>
-              <a data-testid="member-phone" href={`tel:${member.phone}`} className={rowClass}>
+              <a
+                data-testid="member-phone"
+                href={`tel:${phoneHref(member.phone)}`}
+                className={rowClass}
+              >
                 <span aria-hidden>📞</span>
                 <span className="min-w-0 flex-1">
                   <span className="block">Call</span>
@@ -217,7 +222,11 @@ function MemberDetailSheet({
                   </span>
                 </span>
               </a>
-              <a data-testid="member-sms" href={`sms:${member.phone}`} className={rowClass}>
+              <a
+                data-testid="member-sms"
+                href={`sms:${phoneHref(member.phone)}`}
+                className={rowClass}
+              >
                 <span aria-hidden>💬</span>
                 <span className="min-w-0 flex-1">
                   <span className="block">Text</span>

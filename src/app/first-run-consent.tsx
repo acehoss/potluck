@@ -81,6 +81,17 @@ export function FirstRunConsent() {
     void queryClient.invalidateQueries({ queryKey: trpc.notification.get.queryKey() });
   };
 
+  // Quietly adopt the browser's IANA zone when the account has none stored yet
+  // (D3). Detection failure just skips — the server default stays the safety net.
+  const detectedZone = (): string | null => {
+    if (prefs.data?.timezone != null) return null;
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch {
+      return null;
+    }
+  };
+
   const save = async () => {
     for (const cat of ['pickups', 'circle', 'ledger'] as const) {
       await setChannel.mutateAsync({ category: cat, channel: 'push', enabled: choices[cat].push });
@@ -90,12 +101,18 @@ export function FirstRunConsent() {
         enabled: choices[cat].email,
       });
     }
-    await setPrefs.mutateAsync({ digestCadence: digest ? 'daily' : 'off' });
+    const tz = detectedZone();
+    await setPrefs.mutateAsync({
+      digestCadence: digest ? 'daily' : 'off',
+      ...(tz && { timezone: tz }),
+    });
     await markOnboarded.mutateAsync();
     finish();
   };
 
   const notNow = async () => {
+    const tz = detectedZone();
+    if (tz) await setPrefs.mutateAsync({ timezone: tz });
     await markOnboarded.mutateAsync();
     finish();
   };

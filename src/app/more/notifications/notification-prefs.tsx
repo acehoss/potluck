@@ -84,6 +84,15 @@ function timezoneOptions(): string[] {
   }
 }
 
+/** The browser's own IANA zone (D3) — shown on the "Server default" option when unset. */
+function detectedZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
 export function NotificationPrefs() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -165,6 +174,7 @@ export function NotificationPrefs() {
   const prefs = prefsQuery.data;
   const busy = setChannel.isPending || setPrefs.isPending;
   const zones = timezoneOptions();
+  const detected = prefs.timezone == null ? detectedZone() : null;
 
   return (
     <div className="flex flex-col gap-4" data-testid="notif-prefs-screen">
@@ -315,7 +325,9 @@ export function NotificationPrefs() {
             onChange={(e) => setPrefs.mutate({ timezone: e.target.value || null })}
             className={selectClass}
           >
-            <option value="">Server default</option>
+            <option value="">
+              {detected ? `Server default (you look like ${detected})` : 'Server default'}
+            </option>
             {zones.map((z) => (
               <option key={z} value={z}>
                 {z}

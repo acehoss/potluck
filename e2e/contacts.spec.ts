@@ -330,7 +330,9 @@ test('vCard route: reach-gated, RFC-escaped, session-required, and private-membe
     expect(res.headers()['content-type']).toContain('text/vcard');
     const body = await res.text();
     expect(body).toContain('FN:Dana');
-    expect(body).toContain(`TEL;TYPE=CELL:${SEED.dana.phone}`);
+    // The TEL line is phoneHref-normalized (profile-polish round): dana's seed
+    // "555-0188" is 7 digits (not a +1-able US number), so it emits bare digits.
+    expect(body).toContain(`TEL;TYPE=CELL:${SEED.dana.phone.replace(/\D/g, '')}`);
     expect(body).toContain(`EMAIL:${SEED.dana.email}`);
     // ADR street component carries the household address, newline escaped to \n.
     expect(body).toContain('ADR;TYPE=HOME:;;18 Oakhurst Lane\\nShelbyville;;;;');
@@ -479,12 +481,15 @@ test('UI smoke: profile edit, In-Laws contact card + detail sheet, and READY-ord
     await expect(page.getByTestId('profile-card')).toBeVisible();
     await page.getByTestId('profile-edit').click();
     await expect(page.getByTestId('profile-sheet')).toBeVisible();
-    await page.getByTestId('profile-phone').fill('555-0100');
+    // The input auto-formats US numbers as you type (profile-polish round):
+    // 10 raw digits render + store as "(913) 555-0100".
+    await page.getByTestId('profile-phone').fill('9135550100');
+    await expect(page.getByTestId('profile-phone')).toHaveValue('(913) 555-0100');
     await page.getByTestId('profile-save').click();
     await expect(page.getByTestId('profile-sheet')).toBeHidden();
     await expect
       .poll(async () => (await (await api.get('/api/trpc/profile.get')).json()).result.data.phone)
-      .toBe('555-0100');
+      .toBe('(913) 555-0100');
 
     // (2) In-Laws contact page (read-only): pickup logistics FIRST — the contact
     //     card with address, map link, and pickup notes — then dana's member card

@@ -9,6 +9,8 @@
  */
 
 /** Escape one text value per RFC 6350 §3.4 (order-sensitive; backslash first). */
+import { phoneHref } from '../lib/phone';
+
 export function vcardEscape(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
@@ -28,7 +30,9 @@ export type VcardFields = {
 
 /**
  * Build a VERSION:3.0 vCard. Lines are CRLF-joined per spec. TEL is TYPE=CELL
- * (the card's phone is a mobile in this app's model). The free-text household
+ * (the card's phone is a mobile in this app's model) and carries the E.164-ish
+ * `phoneHref` normalization (`+1…` for US numbers) so the imported contact dials
+ * correctly regardless of how the stored string was formatted. The free-text household
  * address goes in the ADR street component (3rd of the 7 semicolon-separated
  * fields) — the whole location as one escaped run, which readers render fine.
  */
@@ -36,7 +40,7 @@ export function buildVcard(fields: VcardFields): string {
   const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
   lines.push(`FN:${vcardEscape(fields.name)}`);
   lines.push(`ORG:${vcardEscape(fields.org)}`);
-  if (fields.phone) lines.push(`TEL;TYPE=CELL:${vcardEscape(fields.phone)}`);
+  if (fields.phone) lines.push(`TEL;TYPE=CELL:${phoneHref(fields.phone)}`);
   lines.push(`EMAIL:${vcardEscape(fields.email)}`);
   if (fields.address) lines.push(`ADR;TYPE=HOME:;;${vcardEscape(fields.address)};;;;`);
   if (fields.bio) lines.push(`NOTE:${vcardEscape(fields.bio)}`);

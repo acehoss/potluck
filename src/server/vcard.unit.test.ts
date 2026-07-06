@@ -24,7 +24,7 @@ test('buildVcard: full card escapes every field and emits CRLF lines', () => {
     name: 'Smith; Jane',
     org: 'Heise · Potluck',
     email: 'jane@example.com',
-    phone: '555-1234',
+    phone: '(913) 555-0142',
     address: '12 Main St\nApt 4',
     bio: 'Loves, sourdough; bakes weekly',
   });
@@ -33,7 +33,8 @@ test('buildVcard: full card escapes every field and emits CRLF lines', () => {
   assert.equal(lines[1], 'VERSION:3.0');
   assert.ok(card.includes('FN:Smith\\; Jane'));
   assert.ok(card.includes('ORG:Heise · Potluck'));
-  assert.ok(card.includes('TEL;TYPE=CELL:555-1234'));
+  // TEL is normalized to the E.164-ish phoneHref form, not the stored display string.
+  assert.ok(card.includes('TEL;TYPE=CELL:+19135550142'));
   assert.ok(card.includes('EMAIL:jane@example.com'));
   // Free-text address in the 3rd (street) ADR component, newline escaped.
   assert.ok(card.includes('ADR;TYPE=HOME:;;12 Main St\\nApt 4;;;;'));

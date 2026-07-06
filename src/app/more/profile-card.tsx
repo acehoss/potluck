@@ -2,7 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
+import { AvatarCropSheet } from '@/app/avatar-crop-sheet';
+import { formatUsPhone } from '@/lib/phone';
 import { useTRPC } from '@/lib/trpc';
 
 /**
@@ -121,7 +122,7 @@ function ProfileSheet({
   const [phone, setPhone] = useState(initial.phone ?? '');
   const [bio, setBio] = useState(initial.bio ?? '');
   const [newPhoto, setNewPhoto] = useState<{ path: string; preview: string } | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [cropFile, setCropFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const update = useMutation(
@@ -131,22 +132,18 @@ function ProfileSheet({
     }),
   );
 
-  async function handleFile(files: FileList | null) {
+  function handleFile(files: FileList | null) {
     const file = files?.[0];
+    if (fileRef.current) fileRef.current.value = '';
     if (!file) return;
-    setUploading(true);
     setError(null);
-    try {
-      const jpeg = await downscaleToJpeg(file);
-      const { path } = await uploadImage('avatars', jpeg);
-      if (newPhoto) URL.revokeObjectURL(newPhoto.preview);
-      setNewPhoto({ path, preview: URL.createObjectURL(jpeg) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed.');
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
+    setCropFile(file); // opens the crop sheet; upload happens on crop-save
+  }
+
+  function handleCropped(result: { path: string; preview: string }) {
+    if (newPhoto) URL.revokeObjectURL(newPhoto.preview);
+    setNewPhoto(result);
+    setCropFile(null);
   }
 
   const previewSrc = newPhoto
@@ -204,12 +201,19 @@ function ProfileSheet({
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={uploading}
             className="min-h-11 rounded-lg border border-border-strong px-3 py-2 text-sm font-medium text-text hover:bg-surface-sunken disabled:opacity-50"
           >
-            {uploading ? 'Uploading…' : previewSrc ? 'Replace photo' : 'Add photo'}
+            {previewSrc ? 'Replace photo' : 'Add photo'}
           </button>
         </div>
+
+        {cropFile && (
+          <AvatarCropSheet
+            file={cropFile}
+            onCancel={() => setCropFile(null)}
+            onCropped={handleCropped}
+          />
+        )}
 
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
           Name
@@ -227,10 +231,11 @@ function ProfileSheet({
           Phone (optional)
           <input
             type="tel"
+            inputMode="tel"
             data-testid="profile-phone"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="555-0142"
+            onChange={(e) => setPhone(formatUsPhone(e.target.value))}
+            placeholder="(555) 555-0142"
             className={inputClass}
           />
         </label>
@@ -264,7 +269,7 @@ function ProfileSheet({
           <button
             type="submit"
             data-testid="profile-save"
-            disabled={update.isPending || uploading}
+            disabled={update.isPending}
             className={primaryBtn}
           >
             {update.isPending ? 'Saving…' : 'Save'}

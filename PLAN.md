@@ -140,6 +140,36 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Profile polish — avatar crop, US phone formatting, TZ auto-detect (2026-07-05)
+
+**Done** (Aaron's asks). No schema, no migration, no new deps.
+
+- **Avatar cropper** (`src/app/avatar-crop-sheet.tsx`, net-new — the repo had zero
+  pointer-gesture code): a circle-mask viewport over the picked photo; Pointer Events on a
+  `touch-none` stage — one pointer pans, two pinch-zoom (phones), wheel zooms (desktop),
+  plus an always-visible slider (min = cover, max 5×; the accessible path). Offset clamped
+  so the image always covers the circle. Save canvas-crops to **512×512 JPEG q0.85** into
+  the EXISTING upload pipeline (`uploadImage('avatars')` → JPEG-magic/8MB route →
+  `assertFreshAvatar`) — server contract untouched, container stays native-dep-free.
+- **US phone formatting**: pure `src/lib/phone.ts` (`formatUsPhone` as-you-type
+  progressive `(913) 555-0142`, non-US passthrough; `phoneDigits`; `phoneHref` E.164-ish).
+  The profile input is `inputMode="tel"` + formatter-controlled (fixes Aaron's "phone
+  keypad can't type parens/dashes"); stored value = the formatted string (schema stays
+  free text). **Latent wart fixed:** `tel:`/`sms:` hrefs and the vCard TEL interpolated
+  the raw string — now `phoneHref`-normalized (`tel:+19135550142`;
+  `TEL;TYPE=CELL:+1…`).
+- **Timezone — quiet auto-detect, deliberately nothing more**: first-run consent (Save
+  AND "Not now") captures `Intl.DateTimeFormat().resolvedOptions().timeZone` when unset,
+  so digests fire local instead of the UTC fallback with zero UI; the prefs "Server
+  default" option labels the detected zone. NO instance/household TZ, no locale plumbing
+  — connections are physically co-located (Aaron), and per-user detection already covers
+  a future multi-region instance.
+- **Gate — green.** typecheck + lint:tokens clean, unit **171/171**, full both-engine
+  e2e **341 passed / 0 failed** on a fresh `down -v` stack; cropper hand-verified against
+  the prod build in light-desktop + dark-390px (drag + slider). Two stale contacts.spec
+  expectations of the OLD raw-phone behavior updated at the gate (vCard TEL normalized;
+  profile edit now types 10 digits and expects the formatted round-trip).
+
 ## Digest cadence + in-process scheduler (2026-07-05, post-Phase-3)
 
 **Done.** Aaron's asks: a daily digest option (weekly kept but demoted), per-user send
