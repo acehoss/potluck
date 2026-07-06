@@ -3,6 +3,7 @@
 import { useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { BackLink } from '@/app/nav-history';
 import { useRef, useState } from 'react';
 import { ScanSheet } from '@/app/scan-sheet';
 import { newClientKey } from '@/lib/client-key';
@@ -104,9 +105,7 @@ export function InventoryView({
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex items-center gap-3">
-        <Link href="/" aria-label="Back to pantries" className="text-lg text-text-muted">
-          ←
-        </Link>
+        <BackLink fallback="/home" />
         <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">
           {pantry.name} <span className="font-normal text-text-muted">({pantry.householdName})</span>
         </h1>

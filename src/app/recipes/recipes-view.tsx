@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import { BackLink } from '@/app/nav-history';
 import { useTRPC } from '@/lib/trpc';
 import type { SlimRecipe } from './types';
 
@@ -72,9 +73,7 @@ export function RecipesView() {
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-5 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex flex-col gap-1">
         <div className="flex items-center gap-3">
-          <Link href="/" aria-label="Back to home" className="shrink-0 text-lg text-text-muted">
-            ←
-          </Link>
+          <BackLink fallback="/home" />
           <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">Recipes</h1>
         </div>
         <p className="pl-8 text-sm text-text-muted">

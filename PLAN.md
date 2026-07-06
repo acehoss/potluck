@@ -140,6 +140,38 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round Q — quick fixes + navigation review (2026-07-06, Aaron's device feedback)
+
+**Done.** Six fixes from real-device testing. No schema, no deps.
+
+- **Phone backspace** (`formatUsPhoneEdit` in src/lib/phone.ts): the formatter re-appended
+  punctuation from digit count, so deletes were undone — a deletion that removed only
+  punctuation now also drops the preceding digit; backspace erases all the way to empty.
+- **Empty digest suppressed**: `digestFor` returns `reason:'nothing-to-report'` (no
+  watermark stamp) when every household section has no standings/loops/new-shares.
+- **Items header** standardized to the shares/recipes idiom (back link + truncate title +
+  caption); kept its deliberate lg two-column layout.
+- **Recipe editor mobile overflow**: `min-w-0` on all flex label rows + `w-full min-w-0`
+  inputs (servings/yield, prep/cook, course/cuisine) — no horizontal scroll at 390px.
+- **iOS notch**: the safe-area top inset lived on BODY (content padding), so the sticky
+  header pinned under the status bar when stuck — moved to the header itself
+  (`pt-[env(safe-area-inset-top)]`); headerless /login + /invite carry their own
+  `max(1.5rem, inset)` padding. FOLLOW-UP: the receive wizard (also headerless) still
+  starts at y=0 on notch devices — locate its top wrapper and add the same inset.
+- **Navigation review**: every back arrow was a hardcoded href (zero router.back() in the
+  app). New `src/app/nav-history.tsx` — a sessionStorage nav stack (NavTracker in the
+  layout) + `BackLink({fallback})` that goes BACK when in-app history exists and to the
+  fallback on deep links. Applied: recipes→/home, items→/home, shares→/, shopping→/plan,
+  pantry inventory→/home (was stale `/`), contact page→/more. **Plan's arrow removed**
+  (top-level tab; orphaned pl-8 cleaned). Single-parent detail pages stay hardcoded
+  (deliberate).
+- **Gate — green**: unit 175/175, full both-engine e2e **350 passed / 0 failed** on a
+  fresh stack; 390px screenshots of Items/Plan verified. Gate notes: an integrator JSX
+  comment briefly broke the build (q-dev caught it — comments in a return must not be
+  sibling expressions); slice7's safe-area assertion updated body→header (the intended
+  change); digest-cadence fixtures gained real content (the empty-suppression exposed that
+  its digests had nothing to report — they only "sent" because digests always sent).
+
 ## Profile polish — avatar crop, US phone formatting, TZ auto-detect (2026-07-05)
 
 **Done** (Aaron's asks). No schema, no migration, no new deps.

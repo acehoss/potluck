@@ -139,7 +139,7 @@ async function netWith(page: Page, counterpartyId: string): Promise<number> {
 /** Availability (remaining − reserved) shown for a product on a pantry page. */
 async function availability(page: Page, pantryId: string, product: string): Promise<number> {
   await page.goto(`/pantries/${pantryId}`);
-  await expect(page.getByLabel('Back to pantries')).toBeVisible();
+  await expect(page.getByTestId('back-link')).toBeVisible(); // pantry detail rendered (Q6 BackLink)
   const row = page.getByTestId('product-row').filter({ hasText: product });
   // Zero-availability products are filtered off the pantry page entirely.
   if ((await row.count()) === 0) return 0;

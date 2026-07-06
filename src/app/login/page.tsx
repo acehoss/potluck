@@ -17,8 +17,10 @@ export default async function LoginPage({
   // Already signed in → skip the form and continue to where they were headed.
   if (await getSessionUser()) redirect(safeNext);
 
+  // Headerless page: it carries the notch inset itself (the app header normally
+  // does) — pt grows to the safe-area inset but never shrinks below p-6's 1.5rem.
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
+    <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6 pt-[max(1.5rem,env(safe-area-inset-top))]">
       <div className="flex flex-col items-center text-center">
         <BrandMark className="size-16 text-accent" />
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">Potluck</h1>

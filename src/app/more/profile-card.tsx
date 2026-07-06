@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { AvatarCropSheet } from '@/app/avatar-crop-sheet';
-import { formatUsPhone } from '@/lib/phone';
+import { formatUsPhoneEdit } from '@/lib/phone';
 import { useTRPC } from '@/lib/trpc';
 
 /**
@@ -234,7 +234,7 @@ function ProfileSheet({
             inputMode="tel"
             data-testid="profile-phone"
             value={phone}
-            onChange={(e) => setPhone(formatUsPhone(e.target.value))}
+            onChange={(e) => setPhone(formatUsPhoneEdit(phone, e.target.value))}
             placeholder="(555) 555-0142"
             className={inputClass}
           />

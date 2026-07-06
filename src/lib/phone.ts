@@ -53,6 +53,23 @@ export function phoneDigits(raw: string): string {
 }
 
 /**
+ * Deletion-aware wrapper around {@link formatUsPhone} for a controlled input.
+ * When the user backspaces over a formatter-inserted separator (`)`, `(`, the
+ * space, the dash), the browser removes only that punctuation — the digit count
+ * is unchanged, so a naive reformat re-inserts the char and traps the caret. We
+ * detect that (the value got shorter but the digits are identical) and drop the
+ * last digit instead, so backspace makes real progress all the way to empty.
+ * Any other edit (typing, mid-string change, deleting an actual digit) formats
+ * normally.
+ */
+export function formatUsPhoneEdit(prevFormatted: string, nextRaw: string): string {
+  if (nextRaw.length < prevFormatted.length && phoneDigits(nextRaw) === phoneDigits(prevFormatted)) {
+    return formatUsPhone(nextRaw.replace(/\D/g, '').slice(0, -1));
+  }
+  return formatUsPhone(nextRaw);
+}
+
+/**
  * Normalize a phone string to an E.164-ish value for `tel:`/`sms:` hrefs and the
  * vCard TEL line. A leading `+` is honored as-is (`+` + its digits); a bare
  * 10-digit number gets a US `+1`; 11 digits starting with `1` become `+…`;

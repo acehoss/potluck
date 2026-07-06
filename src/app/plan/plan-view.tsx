@@ -122,9 +122,6 @@ export function PlanView({
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-5 p-4 pb-24 sm:p-6 sm:pb-24">
       <header className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
-          <Link href="/" aria-label="Back to home" className="shrink-0 text-lg text-text-muted">
-            ←
-          </Link>
           <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">
             Meal plan
           </h1>
@@ -136,7 +133,7 @@ export function PlanView({
             Shopping list →
           </Link>
         </div>
-        <div className="flex items-center justify-between gap-2 pl-8">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <button
               type="button"

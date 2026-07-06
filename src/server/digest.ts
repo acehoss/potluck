@@ -240,7 +240,7 @@ function renderBody(
 export type DigestResult = {
   sent: boolean;
   capturedId: string | null;
-  reason?: 'opted-out' | 'already-sent' | 'no-household';
+  reason?: 'opted-out' | 'already-sent' | 'no-household' | 'nothing-to-report';
 };
 
 /**
@@ -289,6 +289,15 @@ export async function digestFor(
   const sections: HouseholdSection[] = [];
   for (const m of user.memberships) {
     sections.push(await sectionFor(m.householdId, m.household.name, m, now, since));
+  }
+
+  // Nothing to say → don't send an empty "all caught up" nag, and DON'T stamp
+  // lastDigestAt: the watermark only advances on a real send, so a later window
+  // that DOES find content still fires (matches the cadence-guard convention).
+  if (
+    sections.every((s) => s.standings.length === 0 && s.waitingOnYou === 0 && s.newShares === 0)
+  ) {
+    return { sent: false, capturedId: null, reason: 'nothing-to-report' };
   }
 
   // Nav-only CTA (N7): opens /activity switched to the recipient's default

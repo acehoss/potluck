@@ -117,6 +117,24 @@ test('profile phone: as-you-type US formatting persists and drives contact tel:/
     await phoneInput.fill('9135550142');
     await expect(phoneInput).toHaveValue('(913) 555-0142');
 
+    // (1b) Q1 regression: keyboard-Backspace must erase all the way to empty.
+    //      The as-you-type formatter is deletion-aware (formatUsPhoneEdit) so a
+    //      backspace over a formatter-inserted `)`/`(`/space/dash drops a real
+    //      digit instead of re-appearing and trapping the caret — the exact bug
+    //      Aaron hit ("can't backspace into the area code"). Delete one char per
+    //      keypress from the caret at the end; the value must strictly reach ''.
+    await phoneInput.click();
+    await phoneInput.press('End');
+    for (let i = 0; i < 20 && (await phoneInput.inputValue()) !== ''; i++) {
+      await phoneInput.press('Backspace');
+    }
+    await expect(phoneInput).toHaveValue('');
+
+    // Re-enter the number so the persistence + contact-href checks below run on
+    // the formatted value.
+    await phoneInput.fill('9135550142');
+    await expect(phoneInput).toHaveValue('(913) 555-0142');
+
     // (2) Save and reopen — the FORMATTED string is what persisted.
     await page.getByTestId('profile-save').click();
     await expect(page.getByTestId('profile-sheet')).toBeHidden();

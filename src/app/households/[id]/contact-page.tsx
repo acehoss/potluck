@@ -1,7 +1,7 @@
 'use client';
 
-import Link from 'next/link';
 import { useState } from 'react';
+import { BackLink } from '@/app/nav-history';
 import { Avatar } from '@/app/more/profile-card';
 import { phoneHref } from '@/lib/phone';
 
@@ -95,9 +95,7 @@ export function ContactPageView({
       className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 p-4 pb-24 sm:p-6 sm:pb-24"
     >
       <header className="flex items-center gap-3">
-        <Link href="/more" aria-label="Back" className="shrink-0 text-lg text-text-muted">
-          ←
-        </Link>
+        <BackLink fallback="/more" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-xl font-semibold tracking-tight">
             {household.householdName}

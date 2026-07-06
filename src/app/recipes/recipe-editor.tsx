@@ -335,7 +335,7 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
         </label>
 
         <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-text">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-medium text-text">
             Servings
             <input
               type="number"
@@ -344,10 +344,10 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
               data-testid="recipe-servings"
               value={servings}
               onChange={(e) => setServings(e.target.value)}
-              className={inputClass}
+              className={`${inputClass} w-full min-w-0`}
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-text">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-medium text-text">
             Yield (optional)
             <input
               type="text"
@@ -355,13 +355,13 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
               value={yieldText}
               onChange={(e) => setYieldText(e.target.value)}
               placeholder="1 loaf"
-              className={inputClass}
+              className={`${inputClass} w-full min-w-0`}
             />
           </label>
         </div>
 
         <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-text">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-medium text-text">
             Prep (min)
             <input
               type="number"
@@ -370,10 +370,10 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
               data-testid="recipe-prep"
               value={prep}
               onChange={(e) => setPrep(e.target.value)}
-              className={inputClass}
+              className={`${inputClass} w-full min-w-0`}
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-text">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-medium text-text">
             Cook (min)
             <input
               type="number"
@@ -382,13 +382,13 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
               data-testid="recipe-cook"
               value={cook}
               onChange={(e) => setCook(e.target.value)}
-              className={inputClass}
+              className={`${inputClass} w-full min-w-0`}
             />
           </label>
         </div>
 
         <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-text">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-medium text-text">
             Course (optional)
             <input
               type="text"
@@ -396,10 +396,10 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
               value={course}
               onChange={(e) => setCourse(e.target.value)}
               placeholder="Dinner"
-              className={inputClass}
+              className={`${inputClass} w-full min-w-0`}
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-text">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-medium text-text">
             Cuisine (optional)
             <input
               type="text"
@@ -407,7 +407,7 @@ export function RecipeEditor({ initial }: { initial?: RecipeDto }) {
               value={cuisine}
               onChange={(e) => setCuisine(e.target.value)}
               placeholder="Southern"
-              className={inputClass}
+              className={`${inputClass} w-full min-w-0`}
             />
           </label>
         </div>

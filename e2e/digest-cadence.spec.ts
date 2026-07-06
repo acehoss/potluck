@@ -50,12 +50,22 @@ const DEV = {
   unsub: '/unsub', // POST ?token=… body List-Unsubscribe=One-Click (RFC-8058)
 } as const;
 
-// A non-Sunday reference day at hour 5 (isolates nia from seeded weekly defaults).
+// A reference instant at nia's isolated send-hour (05:00Z — seeded users fire at
+// 9, so a whole-instance batch at 05:00Z matches ONLY nia regardless of the day).
+// Pinned to TODAY, not a fixed literal: Round Q2 suppresses fully-empty digests,
+// so nia now needs real content, and the content this suite posts is an API share
+// whose createdAt is real-now — it must fall inside the daily 24h lookback that
+// ends at AT_HOUR, which only holds when AT_HOUR tracks the current day.
 const HOUR = 5;
-const AT_HOUR = '2026-07-08T05:00:00Z'; // the send-hour
-const OFF_HOUR = '2026-07-08T06:00:00Z'; // one hour later — not the send-hour
-const NEXT_DAY_AT_HOUR = '2026-07-09T05:00:00Z'; // a fresh daily window
-const RIGHT_WD = new Date(AT_HOUR).getUTCDay();
+const REF = (() => {
+  const d = new Date();
+  d.setUTCHours(HOUR, 0, 0, 0);
+  return d;
+})();
+const AT_HOUR = REF.toISOString(); // the send-hour
+const OFF_HOUR = new Date(REF.getTime() + 60 * 60 * 1000).toISOString(); // +1h — not the send-hour
+const NEXT_DAY_AT_HOUR = new Date(REF.getTime() + 24 * 60 * 60 * 1000).toISOString(); // fresh daily window / next weekday
+const RIGHT_WD = REF.getUTCDay();
 
 type Api = Pick<APIRequestContext, 'get' | 'post'>;
 
@@ -164,12 +174,39 @@ async function batchRun(api: Api, nowIso: string) {
   expect(res.ok(), `digest-run batch @ ${nowIso} → ${res.status()}`).toBe(true);
 }
 
+const RUN = Date.now().toString(36);
+
+/**
+ * Give nia's digest something to report. Round Q2 suppresses a fully-empty
+ * digest (no balances, no open loops, no new shares), and the seed leaves nia
+ * content-less — so the send-path tests below must post real content first.
+ * aaron (Heise) posts a NEED; Heise↔Neighbors is share-connected, so it counts
+ * as a "new share from neighbors" in nia's section. The share's real createdAt
+ * sits inside the daily/weekly lookback ending at AT_HOUR (see REF). Returns a
+ * teardown the caller runs in its finally.
+ */
+async function postNeighborShare(): Promise<() => Promise<void>> {
+  const aaron = await apiLogin('aaron');
+  const expiresAt = new Date(Date.now() + 40 * 24 * 60 * 60 * 1000).toISOString(); // < 60d cap, > AT_HOUR
+  const res = await aaron.post('/api/trpc/share.create', {
+    data: { type: 'NEED', title: `Digest content ${RUN}`, expiresAt },
+  });
+  expect(res.ok(), `share.create → ${res.status()}`).toBe(true);
+  const postId = (await res.json()).result.data.id as string;
+  return async () => {
+    await aaron.post('/api/trpc/share.withdraw', { data: { postId } });
+    await aaron.dispose();
+  };
+}
+
 // =============================================================================
 
 test('daily cadence: sends at the send-hour, silent off-hour, idempotent same day', async () => {
   const anon = await playwrightRequest.newContext({ baseURL: BASE });
   const startRowid = maxCapturedRowid();
+  let withdrawShare: (() => Promise<void>) | null = null;
   try {
+    withdrawShare = await postNeighborShare(); // Q2: nia needs content to send
     setDigestPrefs(USER, { cadence: 'daily', hour: HOUR, weekday: 0, tz: 'UTC' });
 
     // Off-hour → nothing (the batch runs but nia's hour doesn't match).
@@ -192,6 +229,7 @@ test('daily cadence: sends at the send-hour, silent off-hour, idempotent same da
     await batchRun(anon, AT_HOUR);
     expect(digestRowsFor(startRowid, EMAIL.nia)).toHaveLength(1);
   } finally {
+    if (withdrawShare) await withdrawShare();
     resetDigest(USER);
     sweepCapturedAbove(startRowid);
     await anon.dispose();
@@ -201,7 +239,9 @@ test('daily cadence: sends at the send-hour, silent off-hour, idempotent same da
 test('weekly cadence: sends only on the chosen weekday', async () => {
   const anon = await playwrightRequest.newContext({ baseURL: BASE });
   const startRowid = maxCapturedRowid();
+  let withdrawShare: (() => Promise<void>) | null = null;
   try {
+    withdrawShare = await postNeighborShare(); // Q2: nia needs content to send
     setDigestPrefs(USER, { cadence: 'weekly', hour: HOUR, weekday: RIGHT_WD, tz: 'UTC' });
 
     // Wrong weekday (next day, same hour) → nothing.
@@ -216,6 +256,7 @@ test('weekly cadence: sends only on the chosen weekday', async () => {
     // Weekly wording: the shares window is "this week".
     expect(rows[0].textBody).toMatch(/this week/i);
   } finally {
+    if (withdrawShare) await withdrawShare();
     resetDigest(USER);
     sweepCapturedAbove(startRowid);
     await anon.dispose();
@@ -273,7 +314,9 @@ test('cadence prefs CRUD through the notification router', async () => {
 test('/unsub one-click flips the digest cadence to off; a later run is skipped', async () => {
   const anon = await playwrightRequest.newContext({ baseURL: BASE });
   const startRowid = maxCapturedRowid();
+  let withdrawShare: (() => Promise<void>) | null = null;
   try {
+    withdrawShare = await postNeighborShare(); // Q2: nia needs content to send
     setDigestPrefs(USER, { cadence: 'daily', hour: HOUR, weekday: 0, tz: 'UTC' });
 
     // Produce a digest so we can read its digest-category List-Unsubscribe token.
@@ -295,6 +338,44 @@ test('/unsub one-click flips the digest cadence to off; a later run is skipped',
     await batchRun(anon, NEXT_DAY_AT_HOUR);
     expect(digestRowsFor(startRowid, EMAIL.nia)).toHaveLength(1); // still just the first
   } finally {
+    if (withdrawShare) await withdrawShare();
+    resetDigest(USER);
+    sweepCapturedAbove(startRowid);
+    await anon.dispose();
+  }
+});
+
+test('empty digest is suppressed (nothing-to-report) until there is content', async () => {
+  const anon = await playwrightRequest.newContext({ baseURL: BASE });
+  const startRowid = maxCapturedRowid();
+  let withdrawShare: (() => Promise<void>) | null = null;
+  try {
+    // nia is content-less by seed. `force` bypasses the cadence send-window, so
+    // the ONLY thing that can suppress this run is emptiness (Round Q2).
+    setDigestPrefs(USER, { cadence: 'daily', hour: HOUR, weekday: 0, tz: 'UTC' });
+    const empty = await anon.post(DEV.digestRun, {
+      data: { identifier: USER, force: true, now: AT_HOUR },
+    });
+    expect(empty.ok(), `digest-run single @ empty → ${empty.status()}`).toBe(true);
+    const emptyBody = await empty.json();
+    expect(emptyBody.sent, 'a content-less digest does not send').toBe(false);
+    expect(emptyBody.capturedId, 'no CapturedEmail id for an empty digest').toBeFalsy();
+    expect(emptyBody.reason, 'the dev route surfaces the skip reason').toBe('nothing-to-report');
+    expect(digestRowsFor(startRowid, EMAIL.nia), 'no digest row written').toHaveLength(0);
+
+    // Give nia a visible new share → the SAME forced run now assembles + sends.
+    withdrawShare = await postNeighborShare();
+    const filled = await anon.post(DEV.digestRun, {
+      data: { identifier: USER, force: true, now: AT_HOUR },
+    });
+    expect(filled.ok(), `digest-run single @ content → ${filled.status()}`).toBe(true);
+    const filledBody = await filled.json();
+    expect(filledBody.sent, 'content makes the digest send').toBe(true);
+    expect(filledBody.capturedId, 'a CapturedEmail id is returned').toBeTruthy();
+    expect(filledBody.reason, 'no skip reason on a real send').toBeFalsy();
+    expect(digestRowsFor(startRowid, EMAIL.nia), 'exactly one digest row').toHaveLength(1);
+  } finally {
+    if (withdrawShare) await withdrawShare();
     resetDigest(USER);
     sweepCapturedAbove(startRowid);
     await anon.dispose();

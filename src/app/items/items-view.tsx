@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
+import { BackLink } from '@/app/nav-history';
 import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { formatCents, parseDollarsToCents } from '@/lib/money';
@@ -74,9 +75,12 @@ export function ItemsView({
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-4 pb-24 sm:p-6 sm:pb-24 lg:max-w-4xl">
-      <header className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold tracking-tight">Items</h1>
-        <p className="text-sm text-text-muted">{yourName}</p>
+      <header className="flex flex-col gap-1">
+        <div className="flex items-center gap-3">
+          <BackLink fallback="/home" />
+          <h1 className="min-w-0 flex-1 truncate text-xl font-semibold tracking-tight">Items</h1>
+        </div>
+        <p className="pl-8 text-sm text-text-muted">{yourName}</p>
       </header>
 
       {/* Desktop: household groups side-by-side where it's free (blueprint 02

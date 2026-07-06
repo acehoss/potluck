@@ -5,6 +5,7 @@ import { db } from "@/server/db";
 import "./globals.css";
 import { AppHeader } from "./app-header";
 import { FirstRunConsent } from "./first-run-consent";
+import { NavTracker } from "./nav-history";
 import { Providers } from "./providers";
 import { PwaSetup } from "./pwa-setup";
 import { TabBar } from "./tab-bar";
@@ -87,6 +88,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col">
         <Providers>
           <PwaSetup />
+          <NavTracker />
           <AppHeader data={header} />
           <VerifyBanner />
           {children}

@@ -108,7 +108,7 @@ export function AppHeader({ data }: { data: HeaderData }) {
   return (
     <header
       data-testid="app-header"
-      className="sticky top-0 z-20 border-b border-border bg-surface-raised px-3"
+      className="sticky top-0 z-20 border-b border-border bg-surface-raised px-3 pt-[env(safe-area-inset-top)]"
     >
       {/* The bar's chrome (border/background) runs edge to edge; its CONTENTS
           align with the pages' mx-auto max-w-2xl column on wide screens. */}

@@ -255,26 +255,17 @@ test('iPadOS 13+ (desktop Macintosh UA + touch) is treated as iOS by both cards'
   await context.close();
 });
 
-test('safe-area CSS is present: tab bar inset padding, body top inset, cover viewport', async ({
+test('safe-area CSS is present: tab bar inset padding, header top inset, cover viewport', async ({
   page,
 }) => {
   await login(page, 'aaron');
   const tabBarClass = await page.getByTestId('tab-bar').getAttribute('class');
   expect(tabBarClass).toContain('pb-[env(safe-area-inset-bottom)]');
-  // The compiled stylesheet actually ships the body's safe-area padding.
-  const bodyRuleShipped = await page.evaluate(() =>
-    Array.from(document.styleSheets).some((sheet) => {
-      try {
-        return Array.from(sheet.cssRules).some(
-          (rule) =>
-            rule.cssText.includes('safe-area-inset-top') && rule.cssText.includes('body'),
-        );
-      } catch {
-        return false;
-      }
-    }),
-  );
-  expect(bodyRuleShipped).toBe(true);
+  // Round Q moved the top inset from body onto the STICKY HEADER (a body inset
+  // is content padding, so the stuck header pinned under the iOS status bar).
+  const headerClass = await page.getByTestId('app-header').getAttribute('class');
+  expect(headerClass).toContain('pt-[env(safe-area-inset-top)]');
+  expect(headerClass).toContain('sticky');
 });
 
 test('notifications card offers the toggle (or explains itself) — never auto-prompts', async ({

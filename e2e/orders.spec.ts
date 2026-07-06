@@ -29,7 +29,7 @@ async function openOwnPantry(page: Page) {
   // the sentinel: it's owner-only since R1S3 — the history page is the
   // household's books.)
   await expect(page).toHaveURL(/\/pantries\/[^/]+$/);
-  await expect(page.getByLabel('Back to pantries')).toBeVisible();
+  await expect(page.getByTestId('back-link')).toBeVisible(); // pantry detail rendered (Q6 BackLink)
 }
 
 /** Receive one product into the signed-in user's own pantry; returns ids/cost. */
@@ -95,7 +95,7 @@ async function netCents(page: Page): Promise<number> {
 /** Availability (remaining − reserved) shown for a product on a pantry page. */
 async function availability(page: Page, pantryId: string, product: string): Promise<number> {
   await page.goto(`/pantries/${pantryId}`);
-  await expect(page.getByLabel('Back to pantries')).toBeVisible(); // page rendered
+  await expect(page.getByTestId('back-link')).toBeVisible(); // page rendered (Q6 BackLink)
   const row = page.getByTestId('product-row').filter({ hasText: product });
   // A product with zero availability is filtered off the page entirely.
   if ((await row.count()) === 0) return 0;
