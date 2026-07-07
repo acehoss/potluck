@@ -182,8 +182,10 @@ function CookScreen({ recipe }: { recipe: RecipeDto }) {
 
   return (
     <div className="fixed inset-0 z-30 flex flex-col bg-surface">
-      {/* Header: exit + live servings scaler. */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
+      {/* Header: exit + live servings scaler. fixed inset-0 covers the app
+          header (which normally owns the notch inset), so this full-screen view
+          carries its own safe-area top padding. */}
+      <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <button
           type="button"
           data-testid="cook-done"

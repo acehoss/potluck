@@ -140,6 +140,26 @@ per-household ingredient→product mapping · shopping list never silently remov
 Implementation began 2026-07-03 (overnight autonomous session, Aaron's handoff). Round 1
 progress below, newest first.
 
+## Round T follow-up — back-stack loop + Cook-view notch (2026-07-06)
+
+**Done** (Aaron's report: Cook → Done → the view's back button bounced BACK to Cook; and
+the Cook view's header sat under the iOS status bar).
+
+- **The back-stack loop, two layered causes**: (1) NavTracker recorded every navigation
+  as forward, so a Done-style A→B→A round trip pushed a loop — it now **collapses a
+  return to the immediately-previous page as a POP**; (2) deeper, `BackLink` called
+  `router.back()`, which replays BROWSER history — after Done's push the browser history
+  still holds the forward hop, so back() bounced to /cook no matter what the stack said.
+  BackLink now navigates **explicitly to the stack's previous entry** (router.push),
+  never router.back() — the stack is the single source of truth for in-app intent, at
+  the cost of slightly deeper browser history. Regression e2e added (view → Cook → Done
+  → back lands /recipes) — it faithfully reproduced the bug against the first
+  (tracker-only) fix, which is what exposed cause 2.
+- **Cook-view notch**: the view is `fixed inset-0` (covers the app header, which owns
+  the safe-area inset) — its own header now carries `pt-[max(0.75rem,
+  env(safe-area-inset-top))]`, same pattern as /login and /invite.
+- **Gate — green**: nav-back 10/10, full both-engine e2e **366 passed / 0 failed**.
+
 ## Round T — dvh tab bar, circle-picker household invite, vCard copy (2026-07-06)
 
 **Done** (Aaron's trickle-ins). No schema change.

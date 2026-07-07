@@ -71,6 +71,38 @@ test('the app body sizes to the dynamic viewport (min-h-dvh) so the tab bar ride
   expect(bodyClass.split(/\s+/)).not.toContain('min-h-full');
 });
 
+test('a Done-style round trip does not loop the back stack (view → Cook → Done → back)', async ({
+  page,
+}) => {
+  // Round T follow-up (Aaron's report): cook-done pushes BACK to the recipe view,
+  // which the tracker used to record as a FORWARD hop — the view's back-link then
+  // "returned" to /cook. NavTracker now collapses an A→B→A round trip as a pop,
+  // so back from the view goes where the user originally came from (/recipes).
+  await login(page, 'aaron');
+  const created = await page.request.post(`${BASE}/api/trpc/recipe.create`, {
+    data: {
+      title: `Navloop ${Date.now().toString(36)}`,
+      servings: 2,
+      directions: 'Step one.\nStep two.',
+      ingredients: [{ kind: 'item', amount: '1', unit: 'cup', text: 'stock' }],
+    },
+  });
+  const recipeId = (await created.json()).result.data.id as string;
+  try {
+    await gotoStable(page, '/recipes');
+    await gotoStable(page, `/recipes/${recipeId}`);
+    await page.getByTestId('recipe-cook').click();
+    await expect(page).toHaveURL(/\/cook$/);
+    await page.getByTestId('cook-done').click();
+    await expect(page).toHaveURL(new RegExp(`/recipes/${recipeId}$`));
+    // The regression: this used to bounce forward to /cook again.
+    await page.getByTestId('back-link').click();
+    await expect(page).toHaveURL(/\/recipes$/);
+  } finally {
+    await page.request.post(`${BASE}/api/trpc/recipe.delete`, { data: { id: recipeId } });
+  }
+});
+
 test('Plan is a top-level tab and shows no back control', async ({ page }) => {
   await login(page, 'aaron');
   await page.getByTestId('tab-bar').getByRole('link', { name: 'Plan' }).click();

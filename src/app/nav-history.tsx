@@ -45,6 +45,16 @@ export function NavTracker() {
   useEffect(() => {
     const stack = readStack();
     if (stack[stack.length - 1] === pathname) return;
+    // Arriving at the page we were on IMMEDIATELY before the current one is a
+    // return trip (router.back(), or a "Done"-style push back to the opener) —
+    // collapse it as a POP instead of pushing, or A→B→A loops the stack and
+    // BackLink on A would go "back" to B. (Round T follow-up: the Cook view's
+    // Done button exposed exactly that loop.)
+    if (stack.length >= 2 && stack[stack.length - 2] === pathname) {
+      stack.pop();
+      writeStack(stack);
+      return;
+    }
     stack.push(pathname);
     if (stack.length > CAP) stack.splice(0, stack.length - CAP);
     writeStack(stack);
@@ -54,9 +64,11 @@ export function NavTracker() {
 
 /**
  * The standard `←` header control. If the tab has an in-app previous page it
- * pops the stack and calls `router.back()` (returning where the user actually
- * came from); on a cold deep link it pushes `fallback` instead. `href` is set
- * to the fallback so middle-click / open-in-new-tab still lands somewhere sane.
+ * navigates EXPLICITLY to the stack's previous entry (never `router.back()` —
+ * browser history can disagree with user intent: a "Done"-style push back to
+ * the opener leaves a forward hop in browser history, so back() would bounce
+ * to the page the user just closed). On a cold deep link it pushes `fallback`.
+ * `href` is the fallback so middle-click / open-in-new-tab lands somewhere sane.
  */
 export function BackLink({ fallback, label }: { fallback: string; label?: string }) {
   const router = useRouter();
@@ -71,7 +83,7 @@ export function BackLink({ fallback, label }: { fallback: string; label?: string
         if (stack.length > 1) {
           stack.pop();
           writeStack(stack);
-          router.back();
+          router.push(stack[stack.length - 1]);
         } else {
           router.push(fallback);
         }
