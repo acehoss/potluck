@@ -372,7 +372,7 @@ test('item photo pipeline: fresh-upload contract, attach uniqueness, unlink on r
 
   const create = (name: string, photoPath: string) =>
     page.request.post('/api/trpc/item.create', {
-      data: { householdId: mine, name, feeCents: 0, photoPath },
+      data: { householdId: mine, name, feeCents: 0, photos: [{ path: photoPath }] },
     });
 
   // Attach guards: only fresh, server-named uploads of kind "items" pass —
@@ -387,32 +387,43 @@ test('item photo pipeline: fresh-upload contract, attach uniqueness, unlink on r
   const itemId = (await created.json()).result.data.id as string;
   expect((await page.request.get(`/api/images/${p1}`)).status()).toBe(200);
   await page.goto(`/items/${itemId}`);
-  await expect(page.locator(`img[src="/api/images/${p1}"]`)).toBeVisible();
+  // The gallery renders the photo as hero AND thumb — assert the hero.
+  await expect(page.getByTestId('item-photo-hero')).toHaveAttribute('src', `/api/images/${p1}`);
 
   // Attach uniqueness: a second item may not claim the same file — and the
   // rejected attach must not delete the file the first item still shows.
   expect((await create(uniq('Dup Photo', P), p1)).status()).toBe(409);
   expect((await page.request.get(`/api/images/${p1}`)).status()).toBe(200);
 
-  // Replace p1 → p2: the replaced file is unlinked post-commit, p2 serves.
-  const replaced = await page.request.post('/api/trpc/item.update', {
-    data: { itemId, photoPath: p2 },
+  // Replace p1 → p2 (gallery mutations: remove the old image, add the new):
+  // the replaced file is unlinked post-commit, p2 serves.
+  const detail = await page.request.get(
+    `/api/trpc/item.get?input=${encodeURIComponent(JSON.stringify({ itemId }))}`,
+  );
+  const imageId = (await detail.json()).result.data.images[0].id as string;
+  const removedOld = await page.request.post('/api/trpc/item.removeImage', {
+    data: { imageId },
   });
-  expect(replaced.ok()).toBe(true);
+  expect(removedOld.ok()).toBe(true);
+  const added = await page.request.post('/api/trpc/item.addImage', {
+    data: { itemId, path: p2 },
+  });
+  expect(added.ok()).toBe(true);
   expect((await page.request.get(`/api/images/${p1}`)).status()).toBe(404);
   expect((await page.request.get(`/api/images/${p2}`)).status()).toBe(200);
 
   // Re-attaching a path that's already attached (even to this item) is
   // refused without touching the file.
-  const reattach = await page.request.post('/api/trpc/item.update', {
-    data: { itemId, photoPath: p2 },
+  const reattach = await page.request.post('/api/trpc/item.addImage', {
+    data: { itemId, path: p2 },
   });
   expect(reattach.status()).toBe(409);
   expect((await page.request.get(`/api/images/${p2}`)).status()).toBe(200);
 
   // Remove the photo: the now-unreferenced file is unlinked.
-  const removed = await page.request.post('/api/trpc/item.update', {
-    data: { itemId, photoPath: null },
+  const addedId = (await added.json()).result.data.id as string;
+  const removed = await page.request.post('/api/trpc/item.removeImage', {
+    data: { imageId: addedId },
   });
   expect(removed.ok()).toBe(true);
   expect((await page.request.get(`/api/images/${p2}`)).status()).toBe(404);

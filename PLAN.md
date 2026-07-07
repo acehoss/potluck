@@ -31,6 +31,55 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
 
+## Media round — product/item galleries, attachments, linkified notes (2026-07-07)
+
+Multi-photo galleries for Products and loanable Items (main = position 0, optional preset
+label chips nutrition/ingredients/angle), PDF attachments on items (user manuals), and
+URL auto-linking in item notes. Team build: server slice GPT-5.5 (codex), UI slice
+Opus 4.8, e2e slice GPT-5.5, Fable coordinating/integrating + codex second-opinion review.
+
+- **Schema** — migration `20260707150000_product_item_media`: `ProductImage`/`ItemImage`
+  (position-unique per parent; **main = position 0**; label preset) + `ItemAttachment`
+  (path/name/sizeBytes); `Item.photoPath` dropped via table rebuild with backfill into
+  `ItemImage(position=0)`. Item notes cap 500 → 2000.
+- **Server** — `product` gains its first mutations (get/addImage/removeImage/setMain/
+  setLabel; `receiveStock`, owner-only, 404-before-403) with `product.get` reach =
+  owner's pantry grant + a FINALIZED lot in a pantry visible to the viewer (the derived
+  fallback photo is computed only from lots the viewer can see); `item` gains the same
+  gallery mutations + add/removeAttachment (`lendBorrow`; cap 8 photos / 5 attachments);
+  setMain renumbers via a negative-offset two-pass inside `dbTransaction` (unique index
+  stays valid); shared pure `media-positions.ts`. New image kind `products`; attachments
+  upload path (`%PDF` magic, 20 MiB, `?name=` sanitized) + session-gated
+  `/api/attachments/[...path]` (inline PDF, nosniff, immutable-private). Sweep covers all
+  three new tables + both new dirs. Derived-photo rule unchanged as fallback: explicit
+  main → else newest lot unit photo (D8 amended, not removed).
+- **UI** — shared `MediaGallery` (hero + thumb strip + label chips + owner controls);
+  product photo sheet in pantry browse (📷 button on the product row; read-only for
+  connected viewers); item detail gallery + "Manuals & documents" + inline
+  autosave-on-blur notes textarea with live `<Linkified>` preview
+  (`src/app/linkified.tsx` — React-element linkification, http/https only,
+  trailing-punctuation-safe, no dangerouslySetInnerHTML).
+- **Integration fixes** (coordinator): stripped the server slice's deprecated
+  `photoPath` shims once the UI stopped reading them; restored `item.update`'s
+  non-owner rejection to **403** (codex had changed it to 404 — a visible item you
+  can't edit is a capability failure; slice6 asserts it); ported slice6's photo-pipeline
+  spec from the removed single-photo API to the gallery mutations (same invariants);
+  e2e helper passed the attachment display name via `?name=` (multipart filename is
+  deliberately ignored); scoped notes assertions to the new `item-notes-display` block
+  (owner textarea + preview both contain the raw text); added Content-Disposition/
+  nosniff/file-unlinked-after-remove assertions per the codex review finding.
+- **Ops note:** the "thin sonnet wrapper for codex" pattern failed — the wrapper
+  spawned three concurrent codex processes against the shared checkout and stopped
+  early. Killed them (tree was still clean) and ran `codex exec` directly from the
+  coordinator as a tracked background task; that worked first try for both codex slices.
+- **Cosmetic follow-up:** thumb label chips truncate at 390px ("Nutrition f…") — full
+  text stays in the DOM/a11y and the owner's Label dropdown; consider a hero-adjacent
+  chip or shorter display copy later.
+- **Gate — green:** unit 216/216 · tsc/eslint/lint:tokens clean · migration proven by
+  `prisma migrate deploy` on a scratch DB · full both-engine e2e on the rebuilt stack
+  **378 passed / 6 skipped / 0 failed** (real playwright exit code) · 390px light+dark
+  hand-check screenshots in `.playwright-mcp/media/`.
+
 ## Docs re-sync + PLAN split (2026-07-07)
 
 Full documentation sync to the running app (everything but PLAN.md was frozen at

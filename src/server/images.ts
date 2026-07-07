@@ -5,7 +5,15 @@ import path from 'node:path';
 /** Root of the image volume; blueprint 04 §1. */
 export const IMAGES_DIR = process.env.IMAGES_DIR ?? './data/images';
 
-export const IMAGE_KINDS = ['receipts', 'units', 'items', 'shares', 'recipes', 'avatars'] as const;
+export const IMAGE_KINDS = [
+  'receipts',
+  'units',
+  'items',
+  'products',
+  'shares',
+  'recipes',
+  'avatars',
+] as const;
 export type ImageKind = (typeof IMAGE_KINDS)[number];
 
 /** Resolve a DB-stored relative path ("receipts/abc.jpg") safely, or null. */
@@ -22,6 +30,29 @@ export function resolveImagePath(rel: string) {
  */
 export function isStoredImagePath(kind: ImageKind, rel: string) {
   return new RegExp(`^${kind}/[0-9a-f]{32}\\.jpg$`).test(rel);
+}
+
+/** True when `rel` is a server-generated stored PDF attachment path. */
+export function isStoredAttachmentPath(rel: string) {
+  return /^attachments\/[0-9a-f]{32}\.pdf$/.test(rel) && resolveImagePath(rel) !== null;
+}
+
+/** Normalize a client-supplied attachment display name to a safe PDF basename. */
+export function sanitizeAttachmentName(name: string): string {
+  const basename = name.split(/[\\/]+/).filter(Boolean).pop() ?? '';
+  const cleaned = basename
+    .replace(/[\p{C}"'`]+/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return 'document.pdf';
+
+  const hasPdfSuffix = /\.pdf$/i.test(cleaned);
+  let stem = hasPdfSuffix ? cleaned.slice(0, -4).trim() : cleaned;
+  if (!stem || /^\.+$/.test(stem)) return 'document.pdf';
+
+  if (stem.length > 116) stem = stem.slice(0, 116).trim();
+  if (!stem) return 'document.pdf';
+  return `${stem}.pdf`;
 }
 
 /** Whether the stored file actually exists on the image volume. */

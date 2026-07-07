@@ -18,7 +18,8 @@ export type ItemGroup = {
   items: {
     id: string;
     name: string;
-    photoPath: string | null;
+    /** Ordered gallery images; index 0 is the main thumbnail (media round). */
+    images: { path: string }[];
     feeCents: number;
     activeLoan: {
       borrowerName: string;
@@ -129,10 +130,10 @@ export function ItemsView({
                         href={`/items/${item.id}`}
                         className="flex min-h-14 items-center gap-3 py-3"
                       >
-                        {item.photoPath ? (
+                        {item.images[0]?.path ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={`/api/images/${item.photoPath}`}
+                            src={`/api/images/${item.images[0].path}`}
                             alt=""
                             className="size-12 shrink-0 rounded-lg border border-border object-cover"
                           />
@@ -266,7 +267,9 @@ function AddItemSheet({
             name: name.trim(),
             notes: notes.trim() || undefined,
             feeCents,
-            photoPath: photo?.path,
+            // Multi-photo management lives on the detail page; create keeps its
+            // single-photo capture, sent as the position-0 gallery image.
+            photos: photo ? [{ path: photo.path }] : undefined,
             clientKey,
           });
         }}

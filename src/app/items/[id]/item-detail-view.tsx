@@ -5,17 +5,27 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { newClientKey } from '@/lib/client-key';
-import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { centsToDollarsString, formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
+import { Linkified } from '../../linkified';
+import { MediaGallery, type GalleryImage } from '../../media-gallery';
 import { VisibilityControl } from '../../visibility-control';
 import { dueShortDate, isOverdue, localShortDate } from '../format';
 import { FeeBadge, OverdueBadge } from '../items-view';
 
+export type ItemAttachment = {
+  id: string;
+  path: string;
+  name: string;
+  sizeBytes: number;
+  position: number;
+};
+
 export type ItemDetail = {
   id: string;
   name: string;
-  photoPath: string | null;
+  images: GalleryImage[];
+  attachments: ItemAttachment[];
   notes: string | null;
   feeCents: number;
   /** Circle-scoped visibility (REWORK P4) — PRIVATE items are connection-
@@ -53,14 +63,21 @@ export function ItemDetailView({
   item,
   yourHouseholdId,
   canManageVisibility,
+  canManageMedia,
 }: {
   item: ItemDetail;
   yourHouseholdId: string;
   /** Owner + manageHousehold — gates the visibility control (P4/A3a). */
   canManageVisibility: boolean;
+  /** Owner + lendBorrow — gates photo gallery + attachment editing. */
+  canManageMedia: boolean;
 }) {
   const router = useRouter();
   const trpc = useTRPC();
+  const addImage = useMutation(trpc.item.addImage.mutationOptions());
+  const removeImage = useMutation(trpc.item.removeImage.mutationOptions());
+  const setMainImage = useMutation(trpc.item.setMain.mutationOptions());
+  const setImageLabel = useMutation(trpc.item.setLabel.mutationOptions());
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -123,44 +140,54 @@ export function ItemDetailView({
       </header>
 
       <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-4 shadow-sm">
-        <div className="flex items-start gap-4">
-          {item.photoPath ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={`/api/images/${item.photoPath}`}
-              alt={item.name}
-              className="size-24 shrink-0 rounded-lg border border-border object-cover"
-            />
-          ) : (
-            <span className="flex size-24 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-2xl text-text-muted">
-              ⛏
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="flex flex-wrap items-center gap-2 text-sm text-text-muted">
-              {item.isYours ? 'Yours' : item.householdName}
-              <FeeBadge feeCents={item.feeCents} />
-              {item.feeCents === 0 && <span>· no fee</span>}
-            </p>
-            {item.notes && <p className="mt-1 text-sm text-text">{item.notes}</p>}
-            <p data-testid="item-status" className="mt-2 flex items-center gap-2 text-sm">
-              {active ? (
-                <>
-                  <span className="text-text">
-                    Out to{' '}
-                    {active.borrowerHouseholdId === yourHouseholdId
-                      ? active.borrowerName
-                      : active.borrowerHouseholdName}{' '}
-                    since {localShortDate(active.outAt)}
-                    {active.dueAt && <> · due {dueShortDate(active.dueAt)}</>}
-                  </span>
-                  {overdue && <OverdueBadge />}
-                </>
-              ) : (
-                <span className="font-medium text-success">Available</span>
-              )}
-            </p>
-          </div>
+        <MediaGallery
+          images={item.images}
+          fallbackPath={null}
+          alt={item.name}
+          canEdit={canManageMedia}
+          uploadKind="items"
+          testIdPrefix="item"
+          placeholder="⛏"
+          onAddImage={async (path) => {
+            await addImage.mutateAsync({ itemId: item.id, path });
+            router.refresh();
+          }}
+          onSetMain={async (imageId) => {
+            await setMainImage.mutateAsync({ imageId });
+            router.refresh();
+          }}
+          onSetLabel={async (imageId, label) => {
+            await setImageLabel.mutateAsync({ imageId, label });
+            router.refresh();
+          }}
+          onRemove={async (imageId) => {
+            await removeImage.mutateAsync({ imageId });
+            router.refresh();
+          }}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-center gap-2 text-sm text-text-muted">
+            {item.isYours ? 'Yours' : item.householdName}
+            <FeeBadge feeCents={item.feeCents} />
+            {item.feeCents === 0 && <span>· no fee</span>}
+          </p>
+          <p data-testid="item-status" className="mt-2 flex items-center gap-2 text-sm">
+            {active ? (
+              <>
+                <span className="text-text">
+                  Out to{' '}
+                  {active.borrowerHouseholdId === yourHouseholdId
+                    ? active.borrowerName
+                    : active.borrowerHouseholdName}{' '}
+                  since {localShortDate(active.outAt)}
+                  {active.dueAt && <> · due {dueShortDate(active.dueAt)}</>}
+                </span>
+                {overdue && <OverdueBadge />}
+              </>
+            ) : (
+              <span className="font-medium text-success">Available</span>
+            )}
+          </p>
         </div>
 
         {active === null ? (
@@ -183,6 +210,15 @@ export function ItemDetailView({
           </button>
         ) : null}
       </section>
+
+      <ItemNotes itemId={item.id} notes={item.notes} canEdit={item.isYours} />
+
+      <AttachmentsSection
+        itemId={item.id}
+        attachments={item.attachments}
+        canEdit={canManageMedia}
+        onChanged={() => router.refresh()}
+      />
 
       <section className="flex flex-col gap-2">
         <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
@@ -463,6 +499,71 @@ function ReturnSheet({
 }
 
 /**
+ * Item notes (media round §4). Owners get an inline textarea that autosaves on
+ * blur (multiline, ≤2000 chars) with a live `<Linkified>` preview beneath;
+ * viewers see the linkified notes read-only (nothing when empty). The preview
+ * reads the live draft so pasted links resolve immediately.
+ */
+function ItemNotes({
+  itemId,
+  notes,
+  canEdit,
+}: {
+  itemId: string;
+  notes: string | null;
+  canEdit: boolean;
+}) {
+  const router = useRouter();
+  const trpc = useTRPC();
+  const [value, setValue] = useState(notes ?? '');
+  const update = useMutation(
+    trpc.item.update.mutationOptions({ onSuccess: () => router.refresh() }),
+  );
+
+  if (!canEdit) {
+    if (!notes) return null;
+    return (
+      <section className="flex flex-col gap-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">Notes</h2>
+        <p
+          data-testid="item-notes-display"
+          className="whitespace-pre-line rounded-xl border border-border bg-surface-raised p-4 text-sm text-text shadow-sm"
+        >
+          <Linkified text={notes} />
+        </p>
+      </section>
+    );
+  }
+
+  const trimmed = value.trim();
+  return (
+    <section className="flex flex-col gap-2">
+      <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-text-muted">
+        Notes
+        <textarea
+          data-testid="item-notes-input"
+          rows={3}
+          maxLength={2000}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => {
+            const next = trimmed || null;
+            if (next !== (notes ?? null)) update.mutate({ itemId, notes: next });
+          }}
+          placeholder="Care tips, model number, a link to the manual…"
+          className={`${inputClass} resize-y font-normal normal-case tracking-normal`}
+        />
+      </label>
+      {trimmed && (
+        <p data-testid="item-notes-display" className="whitespace-pre-line text-sm text-text">
+          <Linkified text={value} />
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
  * Owner-household edit (blueprint 01 authz: "Create/edit Item, edit
  * feeCents"). Fee changes affect future loans only — the snapshot on past
  * loans is immutable.
@@ -477,12 +578,8 @@ function EditItemSheet({
   onDone: () => void;
 }) {
   const trpc = useTRPC();
-  const fileRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(item.name);
-  const [notes, setNotes] = useState(item.notes ?? '');
   const [fee, setFee] = useState(item.feeCents === 0 ? '' : centsToDollarsString(item.feeCents));
-  const [newPhoto, setNewPhoto] = useState<{ path: string; preview: string } | null>(null);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const update = useMutation(
@@ -491,30 +588,6 @@ function EditItemSheet({
       onError: (e) => setError(e.message),
     }),
   );
-
-  async function handleFile(files: FileList | null) {
-    const file = files?.[0];
-    if (!file) return;
-    setUploading(true);
-    setError(null);
-    try {
-      const jpeg = await downscaleToJpeg(file);
-      const { path } = await uploadImage('items', jpeg);
-      if (newPhoto) URL.revokeObjectURL(newPhoto.preview);
-      setNewPhoto({ path, preview: URL.createObjectURL(jpeg) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  }
-
-  const previewSrc = newPhoto
-    ? newPhoto.preview
-    : item.photoPath
-      ? `/api/images/${item.photoPath}`
-      : null;
 
   return (
     <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
@@ -528,12 +601,12 @@ function EditItemSheet({
             setError('Fee must look like 5.00 (or be left empty).');
             return;
           }
+          // Photos + notes are managed inline on the detail page now — the edit
+          // sheet only owns name + fee.
           update.mutate({
             itemId: item.id,
             name: name.trim(),
-            notes: notes.trim() || null,
             feeCents,
-            photoPath: newPhoto?.path, // undefined = keep the current photo
           });
         }}
       >
@@ -550,47 +623,6 @@ function EditItemSheet({
           />
         </label>
 
-        <div className="flex items-center gap-3">
-          {previewSrc ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={previewSrc}
-              alt="Item"
-              className="size-16 shrink-0 rounded-lg border border-border object-cover"
-            />
-          ) : (
-            <span className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-text-muted">
-              ⛏
-            </span>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => handleFile(e.target.files)}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className="min-h-11 rounded-lg border border-border-strong px-3 py-2 text-sm font-medium text-text hover:bg-surface-sunken disabled:opacity-50"
-          >
-            {uploading ? 'Uploading…' : previewSrc ? 'Replace photo' : 'Photo (optional)'}
-          </button>
-        </div>
-
-        <label className="flex flex-col gap-1 text-sm font-medium text-text">
-          Notes (optional)
-          <input
-            type="text"
-            data-testid="edit-item-notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className={inputClass}
-          />
-        </label>
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
           Fee per loan (optional)
           <input
@@ -618,7 +650,7 @@ function EditItemSheet({
           <button
             type="submit"
             data-testid="edit-item-save"
-            disabled={update.isPending || uploading}
+            disabled={update.isPending}
             className={primaryBtn}
           >
             {update.isPending ? 'Saving…' : 'Save'}
@@ -626,5 +658,181 @@ function EditItemSheet({
         </div>
       </form>
     </div>
+  );
+}
+
+const ATTACHMENT_CAP = 5;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20 MB, matches the upload route
+
+/** Human file size (e.g. "2.4 MB") for attachment rows. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+}
+
+/**
+ * Upload a raw PDF to the attachments route (media round §3). Mirrors
+ * `uploadImage`'s multipart POST, but no downscale — PDFs go up as-is. The
+ * display name rides the query string; the server re-stats the real size.
+ */
+async function uploadAttachment(file: File): Promise<{ path: string; name: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api/upload/attachments?name=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Upload failed (${res.status}).`);
+  return (await res.json()) as { path: string; name: string };
+}
+
+/**
+ * "Manuals & documents" (media round §3): PDF attachments for an item. Rows
+ * open the session-gated serving route in a new tab. Owners (lendBorrow) add
+ * PDFs (≤20 MB, cap 5) and remove them with an arm-to-confirm tap. Viewers see
+ * the section only when there's at least one document.
+ */
+function AttachmentsSection({
+  itemId,
+  attachments,
+  canEdit,
+  onChanged,
+}: {
+  itemId: string;
+  attachments: ItemAttachment[];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const trpc = useTRPC();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const addAttachment = useMutation(trpc.item.addAttachment.mutationOptions());
+  const removeAttachment = useMutation(trpc.item.removeAttachment.mutationOptions());
+
+  const atCap = attachments.length >= ATTACHMENT_CAP;
+
+  async function handleFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setError(null);
+    const isPdf =
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      setError('Only PDF documents can be attached.');
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setError('That PDF is over 20 MB — attach a smaller file.');
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+    setUploading(true);
+    try {
+      const { path, name } = await uploadAttachment(file);
+      await addAttachment.mutateAsync({ itemId, path, name, sizeBytes: file.size });
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed.');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  // Viewers with nothing to see get no empty section.
+  if (attachments.length === 0 && !canEdit) return null;
+
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">
+        Manuals &amp; documents
+      </h2>
+      {attachments.length > 0 && (
+        <ul className="divide-y divide-border rounded-xl border border-border bg-surface-raised px-4 shadow-sm">
+          {attachments.map((a) => (
+            <li
+              key={a.id}
+              data-testid="item-attachment-row"
+              className="flex min-h-12 items-center gap-2 py-2"
+            >
+              <a
+                href={`/api/attachments/${a.path}?name=${encodeURIComponent(a.name)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-w-0 flex-1 items-center gap-3"
+              >
+                <span
+                  aria-hidden
+                  className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-base text-text-muted"
+                >
+                  📄
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-text">{a.name}</span>
+                  <span className="block text-xs text-text-muted">
+                    {formatBytes(a.sizeBytes)}
+                  </span>
+                </span>
+              </a>
+              {canEdit && (
+                <button
+                  type="button"
+                  data-testid="item-attachment-remove"
+                  disabled={removeAttachment.isPending}
+                  onClick={() =>
+                    removeAttachment.mutate(
+                      { attachmentId: a.id },
+                      { onSuccess: onChanged, onError: (e) => setError(e.message) },
+                    )
+                  }
+                  className="min-h-11 shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-danger transition-colors hover:bg-surface-sunken disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {attachments.length === 0 && canEdit && (
+        <p className="rounded-xl border border-dashed border-border-strong px-6 py-6 text-center text-sm text-text-muted">
+          No documents yet — add a manual or spec sheet (PDF).
+        </p>
+      )}
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/pdf"
+            data-testid="item-attachment-add"
+            onChange={(e) => handleFile(e.target.files)}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || atCap}
+            className="min-h-11 rounded-lg border border-border-strong px-3 py-2 text-sm font-medium text-text transition-colors hover:bg-surface-sunken disabled:opacity-50"
+          >
+            {uploading ? 'Uploading…' : 'Add document'}
+          </button>
+          {atCap && (
+            <span className="text-xs text-text-muted">Up to {ATTACHMENT_CAP} documents.</span>
+          )}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }

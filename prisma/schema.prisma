@@ -504,9 +504,24 @@ model Product {
   household Household @relation(fields: [householdId], references: [id])
   lots      Lot[]
   ingredientLinks IngredientLink[]
+  images    ProductImage[]
 
   @@index([householdId, upc])
   @@index([householdId])
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  path      String   // under IMAGES_DIR volume, kind "products"; position 0 is the main photo
+  label     String?  // "nutrition" | "ingredients" | "angle"; nullable user hint
+  position  Int
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, position])
+  @@index([productId])
 }
 
 model Restock {
@@ -708,12 +723,11 @@ model Adjustment {
 // affect FUTURE loans only (Loan.feeCents is a snapshot).
 model Item {
   id          String   @id @default(cuid())
-  // Idempotency key: a photo-less create has no other server-side dedupe, so
+  // Idempotency key: a media-less create has no other server-side dedupe, so
   // a double-tap replay must return the original item, not a twin.
   clientKey   String?  @unique
   householdId String
   name        String
-  photoPath   String? // under IMAGES_DIR volume, kind "items"
   notes       String?
   feeCents    Int      @default(0)
   // Circle-scoped visibility (REWORK P4, replaces B3's shared flag), mirroring
@@ -726,8 +740,39 @@ model Item {
   household Household    @relation(fields: [householdId], references: [id])
   loans     Loan[]
   circles   ItemCircle[]
+  images    ItemImage[]
+  attachments ItemAttachment[]
 
   @@index([householdId])
+}
+
+model ItemImage {
+  id        String   @id @default(cuid())
+  itemId    String
+  path      String   // under IMAGES_DIR volume, kind "items"; position 0 is the main photo
+  label     String?  // "nutrition" | "ingredients" | "angle"; nullable user hint
+  position  Int
+  createdAt DateTime @default(now())
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, position])
+  @@index([itemId])
+}
+
+model ItemAttachment {
+  id        String   @id @default(cuid())
+  itemId    String
+  path      String   // under IMAGES_DIR volume, kind "attachments"; server-named PDF
+  name      String   // sanitized display/download filename
+  sizeBytes Int
+  position  Int
+  createdAt DateTime @default(now())
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, position])
+  @@index([itemId])
 }
 
 // item + borrower + out date + optional due date + returned date + condition

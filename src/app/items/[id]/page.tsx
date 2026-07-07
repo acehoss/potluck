@@ -14,6 +14,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     where: { id },
     include: {
       household: { select: { id: true, name: true } },
+      images: { orderBy: { position: 'asc' } },
+      attachments: { orderBy: { position: 'asc' } },
       loans: {
         orderBy: { outAt: 'desc' },
         include: { borrower: { select: { name: true } } },
@@ -81,7 +83,19 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const detail: ItemDetail = {
     id: item.id,
     name: item.name,
-    photoPath: item.photoPath,
+    images: item.images.map((image) => ({
+      id: image.id,
+      path: image.path,
+      label: image.label as ItemDetail['images'][number]['label'],
+      position: image.position,
+    })),
+    attachments: item.attachments.map((a) => ({
+      id: a.id,
+      path: a.path,
+      name: a.name,
+      sizeBytes: a.sizeBytes,
+      position: a.position,
+    })),
     notes: item.notes,
     feeCents: item.feeCents,
     visibility: item.visibility as ItemDetail['visibility'],
@@ -113,6 +127,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       item={detail}
       yourHouseholdId={user.householdId}
       canManageVisibility={detail.isYours && user.activeMembership.manageHousehold}
+      canManageMedia={detail.isYours && user.activeMembership.lendBorrow}
     />
   );
 }

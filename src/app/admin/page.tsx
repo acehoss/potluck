@@ -51,7 +51,13 @@ export default async function AdminPage() {
       lots: { select: { unitPhotoPath: true } },
     },
   });
-  const items = await db.item.findMany({ select: { householdId: true, photoPath: true } });
+  const items = await db.item.findMany({
+    select: {
+      householdId: true,
+      images: { select: { path: true } },
+      attachments: { select: { path: true } },
+    },
+  });
 
   const rows = await Promise.all(
     households.map(async (h) => {
@@ -59,7 +65,10 @@ export default async function AdminPage() {
       const paths = [
         ...mine.flatMap((r) => r.images.map((i) => i.path)),
         ...mine.flatMap((r) => r.lots.map((l) => l.unitPhotoPath)),
-        ...items.filter((i) => i.householdId === h.id).map((i) => i.photoPath),
+        ...items.filter((i) => i.householdId === h.id).flatMap((i) => [
+          ...i.images.map((image) => image.path),
+          ...i.attachments.map((attachment) => attachment.path),
+        ]),
       ];
       const sizes = await Promise.all(paths.map(fileSize));
       return {

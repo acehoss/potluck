@@ -55,11 +55,18 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
 
   // D8: product display photo = newest lot of the product with a unit photo.
   const productIds = [...new Set(lots.map((l) => l.productId))];
-  const photoLots = await db.lot.findMany({
-    where: { productId: { in: productIds }, unitPhotoPath: { not: null } },
-    orderBy: { restock: { purchasedAt: 'desc' } },
-    select: { productId: true, unitPhotoPath: true },
-  });
+  const [photoLots, productImages] = await Promise.all([
+    db.lot.findMany({
+      where: { productId: { in: productIds }, unitPhotoPath: { not: null } },
+      orderBy: { restock: { purchasedAt: 'desc' } },
+      select: { productId: true, unitPhotoPath: true },
+    }),
+    db.productImage.findMany({
+      where: { productId: { in: productIds }, position: 0 },
+      select: { productId: true, path: true },
+    }),
+  ]);
+  const mainPhotoByProduct = new Map(productImages.map((image) => [image.productId, image.path]));
   const photoByProduct = new Map<string, string>();
   for (const l of photoLots) {
     if (l.productId && !photoByProduct.has(l.productId)) {
@@ -75,7 +82,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
         productId: lot.productId,
         name: lot.product.name,
         upc: lot.product.upc,
-        photoPath: photoByProduct.get(lot.productId) ?? null,
+        photoPath: mainPhotoByProduct.get(lot.productId) ?? photoByProduct.get(lot.productId) ?? null,
         total: 0,
         lots: [],
       };
@@ -170,6 +177,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       visibility={pantry.visibility as 'ALL' | 'SELECT' | 'PRIVATE'}
       scopeCircleIds={scopeCircleIds}
       canManageVisibility={isOwn && user.activeMembership.manageHousehold}
+      canEditProductPhotos={isOwn && user.activeMembership.receiveStock}
     />
   );
 }

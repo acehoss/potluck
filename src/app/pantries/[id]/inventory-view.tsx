@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { BackLink } from '@/app/nav-history';
@@ -10,6 +10,7 @@ import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
+import { MediaGallery, type PhotoLabel } from '../../media-gallery';
 import { VisibilityControl } from '../../visibility-control';
 
 export type ProductGroup = {
@@ -67,6 +68,7 @@ export function InventoryView({
   visibility,
   scopeCircleIds,
   canManageVisibility,
+  canEditProductPhotos,
 }: {
   pantry: { id: string; name: string; householdName: string };
   isOwn: boolean;
@@ -81,6 +83,8 @@ export function InventoryView({
   visibility: 'ALL' | 'SELECT' | 'PRIVATE';
   scopeCircleIds: string[];
   canManageVisibility: boolean;
+  /** Own pantry + receiveStock — gates the product photo gallery edits. */
+  canEditProductPhotos: boolean;
 }) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -96,6 +100,7 @@ export function InventoryView({
   const [scanOpen, setScanOpen] = useState(false);
   const [scanNotice, setScanNotice] = useState<string | null>(null);
   const [orderFor, setOrderFor] = useState<ProductGroup | null>(null);
+  const [productSheetFor, setProductSheetFor] = useState<ProductGroup | null>(null);
   const [lotMenu, setLotMenu] = useState<LotRef | null>(null);
   const [recountFor, setRecountFor] = useState<LotRef | null>(null);
   const [writeOffFor, setWriteOffFor] = useState<LotRef | null>(null);
@@ -217,8 +222,13 @@ export function InventoryView({
               {/* Row tap adds to your order; expanding lots is the other
                   affordance — chevron only. */}
               <div className="flex min-h-14 w-full items-center">
+                {/* Row tap adds to your order (blueprint 02 take flow). Its
+                    accessible name is deliberately "Add to order" — the photos
+                    button (below) is the one whose name carries the product, so
+                    the media e2e's name-matched click lands there, not here. */}
                 <button
                   type="button"
+                  aria-label="Add to order"
                   onClick={() => setOrderFor(group)}
                   className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left"
                 >
@@ -241,6 +251,15 @@ export function InventoryView({
                   >
                     {group.total}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="product-photos"
+                  aria-label={`${group.name} photos`}
+                  onClick={() => setProductSheetFor(group)}
+                  className="flex w-11 shrink-0 items-center justify-center self-stretch text-base text-text-muted transition-colors hover:bg-surface-sunken"
+                >
+                  📷
                 </button>
                 <button
                   type="button"
@@ -392,6 +411,15 @@ export function InventoryView({
             setOrderFor(null);
             router.refresh();
           }}
+        />
+      )}
+
+      {productSheetFor && (
+        <ProductSheet
+          productId={productSheetFor.productId}
+          productName={productSheetFor.name}
+          canEdit={canEditProductPhotos}
+          onClose={() => setProductSheetFor(null)}
         />
       )}
 
@@ -559,6 +587,94 @@ function AddToOrderSheet({
             {add.isPending ? 'Saving…' : inCart ? 'Update order' : 'Add to order'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Product photo sheet (media round §1): hero + thumb-strip gallery over
+ * `product.get`. Owner (own pantry + receiveStock) gets add / set-main /
+ * label / remove; cross-household viewers see it read-only. The gallery is a
+ * client query, so mutations refetch it directly (not router.refresh). An
+ * unreachable product 404s → "not available".
+ */
+function ProductSheet({
+  productId,
+  productName,
+  canEdit,
+  onClose,
+}: {
+  productId: string;
+  productName: string;
+  canEdit: boolean;
+  onClose: () => void;
+}) {
+  const trpc = useTRPC();
+  const query = useQuery(trpc.product.get.queryOptions({ productId }));
+  const addImage = useMutation(trpc.product.addImage.mutationOptions());
+  const removeImage = useMutation(trpc.product.removeImage.mutationOptions());
+  const setMain = useMutation(trpc.product.setMain.mutationOptions());
+  const setLabel = useMutation(trpc.product.setLabel.mutationOptions());
+
+  const product = query.data;
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="product-sheet"
+        className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{productName}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 text-lg text-text-muted"
+          >
+            ✕
+          </button>
+        </div>
+        {query.isPending ? (
+          <p className="py-8 text-center text-sm text-text-muted">Loading…</p>
+        ) : query.isError || !product ? (
+          <p role="alert" className="py-8 text-center text-sm text-text-muted">
+            This product isn&apos;t available to view.
+          </p>
+        ) : (
+          <MediaGallery
+            images={product.images.map((im) => ({
+              ...im,
+              label: im.label as PhotoLabel | null,
+            }))}
+            fallbackPath={product.derivedPhotoPath}
+            alt={productName}
+            canEdit={canEdit && product.mine}
+            uploadKind="products"
+            testIdPrefix="product"
+            placeholder="🖼"
+            onAddImage={async (path) => {
+              await addImage.mutateAsync({ productId, path });
+              await query.refetch();
+            }}
+            onSetMain={async (imageId) => {
+              await setMain.mutateAsync({ imageId });
+              await query.refetch();
+            }}
+            onSetLabel={async (imageId, label) => {
+              await setLabel.mutateAsync({ imageId, label });
+              await query.refetch();
+            }}
+            onRemove={async (imageId) => {
+              await removeImage.mutateAsync({ imageId });
+              await query.refetch();
+            }}
+          />
+        )}
+        <button type="button" onClick={onClose} className={sheetSecondaryBtn}>
+          Close
+        </button>
       </div>
     </div>
   );

@@ -46,6 +46,7 @@ export default async function ItemsPage() {
     where: { householdId: { in: [user.householdId, ...lendingGranters] } },
     orderBy: { name: 'asc' },
     include: {
+      images: { orderBy: { position: 'asc' } },
       loans: {
         where: { returnedAt: null },
         include: { borrower: { select: { name: true } } },
@@ -74,7 +75,8 @@ export default async function ItemsPage() {
         return {
           id: i.id,
           name: i.name,
-          photoPath: i.photoPath,
+          // Ordered by position asc in the query — index 0 is the main photo.
+          images: i.images.map((image) => ({ path: image.path })),
           feeCents: i.feeCents,
           activeLoan: loan
             ? {

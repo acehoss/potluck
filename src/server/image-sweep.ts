@@ -13,25 +13,30 @@ const MIN_AGE_MS = 24 * 60 * 60 * 1000;
  * sit on the volume forever. Runs at server boot (src/instrumentation.ts).
  */
 export async function sweepOrphanImages(now = Date.now()) {
-  const [images, lots, items, sharePosts, recipes, users] = await Promise.all([
-    db.restockImage.findMany({ select: { path: true } }),
-    db.lot.findMany({ where: { unitPhotoPath: { not: null } }, select: { unitPhotoPath: true } }),
-    db.item.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
-    db.sharePost.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
-    db.recipe.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
-    db.user.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
-  ]);
+  const [images, lots, productImages, itemImages, itemAttachments, sharePosts, recipes, users] =
+    await Promise.all([
+      db.restockImage.findMany({ select: { path: true } }),
+      db.lot.findMany({ where: { unitPhotoPath: { not: null } }, select: { unitPhotoPath: true } }),
+      db.productImage.findMany({ select: { path: true } }),
+      db.itemImage.findMany({ select: { path: true } }),
+      db.itemAttachment.findMany({ select: { path: true } }),
+      db.sharePost.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
+      db.recipe.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
+      db.user.findMany({ where: { photoPath: { not: null } }, select: { photoPath: true } }),
+    ]);
   const referenced = new Set<string>([
     ...images.map((i) => i.path),
     ...lots.map((l) => l.unitPhotoPath!),
-    ...items.map((i) => i.photoPath!),
+    ...productImages.map((i) => i.path),
+    ...itemImages.map((i) => i.path),
+    ...itemAttachments.map((a) => a.path),
     ...sharePosts.map((p) => p.photoPath!),
     ...recipes.map((r) => r.photoPath!),
     ...users.map((u) => u.photoPath!),
   ]);
 
   let removed = 0;
-  for (const kind of IMAGE_KINDS) {
+  for (const kind of [...IMAGE_KINDS, 'attachments']) {
     const dir = path.join(IMAGES_DIR, kind);
     const names = await fs.readdir(dir).catch(() => [] as string[]);
     for (const name of names) {

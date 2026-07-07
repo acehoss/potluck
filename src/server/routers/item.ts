@@ -1,14 +1,35 @@
+import { stat } from 'node:fs/promises';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { formatCents } from '@/lib/money';
-import { reachesResource, requireCapability } from '../authz';
-import { dbTransaction } from '../db';
-import { deleteImageFile, imageFileExists, isStoredImagePath } from '../images';
+import {
+  activeConnectionsOf,
+  reachesResource,
+  requireCapability,
+  visibleUnderCircle,
+} from '../authz';
+import { db, dbTransaction } from '../db';
+import {
+  deleteImageFile,
+  imageFileExists,
+  isStoredAttachmentPath,
+  isStoredImagePath,
+  resolveImagePath,
+  sanitizeAttachmentName,
+} from '../images';
+import { moveMediaToMain } from '../media-positions';
 import { protectedProcedure, router } from '../trpc';
 
 /** Upper bound for money inputs: keeps values inside Prisma's Int range. */
 const MAX_CENTS = 100_000_000; // $1,000,000
+const MAX_IMAGES_PER_ITEM = 8;
+const MAX_ATTACHMENTS_PER_ITEM = 5;
+const itemImageLabel = z.enum(['nutrition', 'ingredients', 'angle']).nullish();
+const itemImageInput = z.object({
+  path: z.string().min(1).max(300),
+  label: itemImageLabel,
+});
 
 /**
  * A mistaken checkout is undone by returning immediately; the grace window
@@ -33,30 +54,195 @@ const dateOnly = z
 
 /**
  * An item photo may only reference a freshly uploaded file of kind "items":
- * server-generated name, present on disk, referenced by no other Item. Same
- * contract as the restock image attach paths — never trust a client string
- * that later drives a file unlink.
+ * server-generated name, present on disk, referenced by no other ItemImage.
+ * Same contract as the restock image attach paths — never trust a client
+ * string that later drives a file unlink.
  */
-async function assertFreshItemPhoto(tx: Prisma.TransactionClient, path: string) {
+async function assertFreshItemImage(tx: Prisma.TransactionClient, path: string) {
   if (!isStoredImagePath('items', path)) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Not an uploaded image path.' });
   }
   if (!(await imageFileExists(path))) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Image not found — upload it first.' });
   }
-  const inUse = await tx.item.findFirst({ where: { photoPath: path } });
+  const inUse = await tx.itemImage.findFirst({ where: { path } });
   if (inUse) {
     throw new TRPCError({ code: 'CONFLICT', message: 'That image is already attached.' });
   }
 }
 
-/** Item photos are referenced only by Item.photoPath; unlink when orphaned. */
-async function unlinkItemPhotoIfUnreferenced(tx: Prisma.TransactionClient, path: string) {
-  const stillUsed = await tx.item.findFirst({ where: { photoPath: path } });
-  if (!stillUsed) await deleteImageFile(path);
+async function assertFreshAttachment(tx: Prisma.TransactionClient, path: string) {
+  if (!isStoredAttachmentPath(path)) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Not an uploaded attachment path.' });
+  }
+  const abs = resolveImagePath(path);
+  const file = abs ? await stat(abs).catch(() => null) : null;
+  if (!file?.isFile()) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Attachment not found — upload it first.' });
+  }
+  const inUse = await tx.itemAttachment.findFirst({ where: { path } });
+  if (inUse) {
+    throw new TRPCError({ code: 'CONFLICT', message: 'That attachment is already attached.' });
+  }
+  return file.size;
+}
+
+async function unlinkItemImageIfUnreferenced(path: string) {
+  const [asItem, asProduct] = await Promise.all([
+    db.itemImage.findFirst({ where: { path } }),
+    db.productImage.findFirst({ where: { path } }),
+  ]);
+  if (!asItem && !asProduct) await deleteImageFile(path);
+}
+
+async function unlinkAttachmentIfUnreferenced(path: string) {
+  if (!(await db.itemAttachment.findFirst({ where: { path } }))) await deleteImageFile(path);
+}
+
+function mediaRows<
+  T extends { id: string; path: string; label: string | null; position: number },
+>(rows: readonly T[]) {
+  return rows.map((row) => ({
+    id: row.id,
+    path: row.path,
+    label: row.label,
+    position: row.position,
+  }));
+}
+
+function attachmentRows<
+  T extends { id: string; path: string; name: string; sizeBytes: number; position: number },
+>(rows: readonly T[]) {
+  return rows.map((row) => ({
+    id: row.id,
+    path: row.path,
+    name: row.name,
+    sizeBytes: row.sizeBytes,
+    position: row.position,
+  }));
 }
 
 export const itemRouter = router({
+  list: protectedProcedure.query(async ({ ctx }) => {
+    const connections = await activeConnectionsOf(db, ctx.user.householdId);
+    const lendingConns = connections.filter((c) => c.theyGrant.lending);
+    const lendingGranters = lendingConns.map((c) => c.counterpartyId);
+    const circleByGranter = new Map(lendingConns.map((c) => [c.counterpartyId, c.theirCircleId]));
+
+    const granterCircleIds = [...circleByGranter.values()].filter((id): id is string => id !== null);
+    const scopedItemKeys = new Set(
+      granterCircleIds.length
+        ? (
+            await db.itemCircle.findMany({
+              where: { circleId: { in: granterCircleIds } },
+              select: { itemId: true, circleId: true },
+            })
+          ).map((r) => `${r.itemId}:${r.circleId}`)
+        : [],
+    );
+
+    const items = await db.item.findMany({
+      where: { householdId: { in: [ctx.user.householdId, ...lendingGranters] } },
+      orderBy: { name: 'asc' },
+      include: {
+        household: { select: { id: true, name: true } },
+        images: { orderBy: { position: 'asc' } },
+        attachments: { orderBy: { position: 'asc' } },
+        loans: {
+          where: { returnedAt: null },
+          include: { borrower: { select: { name: true } } },
+        },
+      },
+    });
+
+    return items
+      .filter((item) => {
+        if (item.householdId === ctx.user.householdId) return true;
+        const circleId = circleByGranter.get(item.householdId);
+        if (!circleId) return false;
+        return visibleUnderCircle(item.visibility, scopedItemKeys.has(`${item.id}:${circleId}`));
+      })
+      .map((item) => {
+        const loan = item.loans[0] ?? null;
+        return {
+          id: item.id,
+          householdId: item.householdId,
+          householdName: item.household.name,
+          mine: item.householdId === ctx.user.householdId,
+          name: item.name,
+          notes: item.notes,
+          feeCents: item.feeCents,
+          visibility: item.visibility,
+          images: mediaRows(item.images),
+          attachments: attachmentRows(item.attachments),
+          activeLoan: loan
+            ? {
+                id: loan.id,
+                borrowerName: loan.borrower.name,
+                borrowerHouseholdId: loan.borrowerHouseholdId,
+                outAt: loan.outAt.toISOString(),
+                dueAt: loan.dueAt?.toISOString() ?? null,
+              }
+            : null,
+        };
+      });
+  }),
+
+  get: protectedProcedure
+    .input(z.object({ itemId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const item = await db.item.findUnique({
+        where: { id: input.itemId },
+        include: {
+          household: { select: { id: true, name: true } },
+          images: { orderBy: { position: 'asc' } },
+          attachments: { orderBy: { position: 'asc' } },
+          loans: {
+            orderBy: { outAt: 'desc' },
+            include: { borrower: { select: { name: true } } },
+          },
+        },
+      });
+      if (!item) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+      if (item.householdId !== ctx.user.householdId) {
+        const visible = await reachesResource(
+          db,
+          item.householdId,
+          ctx.user.householdId,
+          'lending',
+          item,
+          (circleId) =>
+            db.itemCircle
+              .findUnique({ where: { itemId_circleId: { itemId: item.id, circleId } } })
+              .then(Boolean),
+        );
+        if (!visible) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+      }
+
+      return {
+        id: item.id,
+        householdId: item.householdId,
+        householdName: item.household.name,
+        mine: item.householdId === ctx.user.householdId,
+        name: item.name,
+        notes: item.notes,
+        feeCents: item.feeCents,
+        visibility: item.visibility,
+        images: mediaRows(item.images),
+        attachments: attachmentRows(item.attachments),
+        loans: item.loans.map((loan) => ({
+          id: loan.id,
+          borrowerName: loan.borrower.name,
+          borrowerHouseholdId: loan.borrowerHouseholdId,
+          feeCents: loan.feeCents,
+          outAt: loan.outAt.toISOString(),
+          dueAt: loan.dueAt?.toISOString() ?? null,
+          returnedAt: loan.returnedAt?.toISOString() ?? null,
+          conditionReturned: loan.conditionReturned,
+        })),
+      };
+    }),
+
   /**
    * Create a durable item (SPEC §4). Owner-household only (blueprint 01 authz
    * matrix): the client names its own household explicitly so a mismatch
@@ -67,12 +253,12 @@ export const itemRouter = router({
       z.object({
         householdId: z.string().min(1),
         name: z.string().trim().min(1).max(120),
-        notes: z.string().trim().max(500).optional(),
+        notes: z.string().trim().max(2000).optional(),
         feeCents: z.number().int().min(0).max(MAX_CENTS),
-        photoPath: z.string().min(1).max(300).optional(),
+        photos: z.array(itemImageInput).max(MAX_IMAGES_PER_ITEM).optional(),
         // Idempotency key, generated once per add-item sheet: `disabled`
         // flips on the NEXT render, so a fast double-tap fires twice — a
-        // photo-less create has no other dedupe and would mint twin items.
+        // media-less create has no other dedupe and would mint twin items.
         clientKey: z.string().min(8).max(64).optional(),
       }),
     )
@@ -88,6 +274,10 @@ export const itemRouter = router({
           message: 'Items can only be added to your own household.',
         });
       }
+      const photos = input.photos ?? [];
+      if (new Set(photos.map((photo) => photo.path)).size !== photos.length) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'That image is already attached.' });
+      }
       const item = await dbTransaction(async (tx) => {
         // Replay of a committed create (same key): return the original item.
         // Safe check-then-act — dbTransaction holds the app-wide DB lock.
@@ -100,54 +290,60 @@ export const itemRouter = router({
             return existing;
           }
         }
-        if (input.photoPath) await assertFreshItemPhoto(tx, input.photoPath);
-        return tx.item.create({
+        for (const photo of photos) await assertFreshItemImage(tx, photo.path);
+        const created = await tx.item.create({
           data: {
             clientKey: input.clientKey ?? null,
             householdId: ctx.user.householdId,
             name: input.name,
             notes: input.notes || null,
             feeCents: input.feeCents,
-            photoPath: input.photoPath ?? null,
           },
         });
+        for (let position = 0; position < photos.length; position++) {
+          const photo = photos[position];
+          await tx.itemImage.create({
+            data: {
+              itemId: created.id,
+              path: photo.path,
+              label: photo.label ?? null,
+              position,
+            },
+          });
+        }
+        return created;
       });
       return { id: item.id };
     }),
 
   /**
-   * Edit an item (name/notes/fee/photo) — member of the owning household only.
-   * Fee edits affect FUTURE loans only: Loan.feeCents is snapshotted at
-   * checkout and immutable (blueprint 01). photoPath: undefined = keep,
-   * null = remove, string = replace with a fresh upload.
+   * Edit an item (name/notes/fee) — member of the owning household only. Fee
+   * edits affect FUTURE loans only: Loan.feeCents is snapshotted at checkout
+   * and immutable (blueprint 01). Gallery changes use dedicated mutations.
    */
   update: protectedProcedure
     .input(
       z.object({
         itemId: z.string().min(1),
         name: z.string().trim().min(1).max(120).optional(),
-        notes: z.string().trim().max(500).nullish(),
+        notes: z.string().trim().max(2000).nullish(),
         feeCents: z.number().int().min(0).max(MAX_CENTS).optional(),
-        photoPath: z.string().min(1).max(300).nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'lendBorrow');
-      const oldPhoto = await dbTransaction(async (tx) => {
+      await dbTransaction(async (tx) => {
         const item = await tx.item.findUnique({ where: { id: input.itemId } });
         if (!item) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
         if (item.householdId !== ctx.user.householdId) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Only the owning household can edit an item.',
-          });
+          // The item may be legitimately visible (borrowable) to this user —
+          // editing it is a permission failure, not a visibility one (403,
+          // matching pre-gallery behavior; slice6 e2e asserts it).
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner household can edit an item.' });
         }
         // Fee changes are money administration (see item.create).
         if (input.feeCents !== undefined && input.feeCents !== item.feeCents) {
           requireCapability(ctx.user, 'settleMoney');
-        }
-        if (typeof input.photoPath === 'string') {
-          await assertFreshItemPhoto(tx, input.photoPath);
         }
         await tx.item.update({
           where: { id: item.id },
@@ -156,17 +352,169 @@ export const itemRouter = router({
             feeCents: input.feeCents,
             // undefined = leave untouched; null/'' = clear.
             notes: input.notes === undefined ? undefined : input.notes || null,
-            photoPath: input.photoPath === undefined ? undefined : input.photoPath,
           },
         });
-        // Report the replaced/removed photo for cleanup after commit.
-        return input.photoPath !== undefined && item.photoPath !== input.photoPath
-          ? item.photoPath
-          : null;
       });
-      // DB first, then drop the replaced file if truly unreferenced — a crash
-      // between the two leaves an orphan file, never a dangling row.
-      if (oldPhoto) await dbTransaction((tx) => unlinkItemPhotoIfUnreferenced(tx, oldPhoto));
+      return { ok: true };
+    }),
+
+  addImage: protectedProcedure
+    .input(
+      z.object({
+        itemId: z.string().min(1),
+        path: z.string().min(1).max(300),
+        label: itemImageLabel,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      const image = await dbTransaction(async (tx) => {
+        const item = await tx.item.findUnique({ where: { id: input.itemId } });
+        if (!item || item.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+        }
+        await assertFreshItemImage(tx, input.path);
+        const count = await tx.itemImage.count({ where: { itemId: item.id } });
+        if (count >= MAX_IMAGES_PER_ITEM) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'An item can have at most 8 images.' });
+        }
+        const last = await tx.itemImage.findFirst({
+          where: { itemId: item.id },
+          orderBy: { position: 'desc' },
+        });
+        return tx.itemImage.create({
+          data: {
+            itemId: item.id,
+            path: input.path,
+            label: input.label ?? null,
+            position: last ? last.position + 1 : 0,
+          },
+        });
+      });
+      return { id: image.id };
+    }),
+
+  removeImage: protectedProcedure
+    .input(z.object({ imageId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      const path = await dbTransaction(async (tx) => {
+        const image = await tx.itemImage.findUnique({
+          where: { id: input.imageId },
+          include: { item: { select: { householdId: true } } },
+        });
+        if (!image || image.item.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Image not found.' });
+        }
+        await tx.itemImage.delete({ where: { id: image.id } });
+        return image.path;
+      });
+      await unlinkItemImageIfUnreferenced(path);
+      return { ok: true };
+    }),
+
+  setMain: protectedProcedure
+    .input(z.object({ imageId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      await dbTransaction(async (tx) => {
+        const image = await tx.itemImage.findUnique({
+          where: { id: input.imageId },
+          include: { item: { select: { householdId: true } } },
+        });
+        if (!image || image.item.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Image not found.' });
+        }
+        const images = await tx.itemImage.findMany({
+          where: { itemId: image.itemId },
+          orderBy: { position: 'asc' },
+          select: { id: true, position: true },
+        });
+        const updates = moveMediaToMain(images, image.id);
+        for (let i = 0; i < images.length; i++) {
+          await tx.itemImage.update({ where: { id: images[i].id }, data: { position: -1 - i } });
+        }
+        for (const update of updates) {
+          await tx.itemImage.update({ where: { id: update.id }, data: { position: update.position } });
+        }
+      });
+      return { ok: true };
+    }),
+
+  setLabel: protectedProcedure
+    .input(z.object({ imageId: z.string().min(1), label: itemImageLabel }))
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      await dbTransaction(async (tx) => {
+        const image = await tx.itemImage.findUnique({
+          where: { id: input.imageId },
+          include: { item: { select: { householdId: true } } },
+        });
+        if (!image || image.item.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Image not found.' });
+        }
+        await tx.itemImage.update({ where: { id: image.id }, data: { label: input.label ?? null } });
+      });
+      return { ok: true };
+    }),
+
+  addAttachment: protectedProcedure
+    .input(
+      z.object({
+        itemId: z.string().min(1),
+        path: z.string().min(1).max(300),
+        name: z.string().max(300),
+        sizeBytes: z.number().int().min(0),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      const attachment = await dbTransaction(async (tx) => {
+        const item = await tx.item.findUnique({ where: { id: input.itemId } });
+        if (!item || item.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found.' });
+        }
+        const sizeBytes = await assertFreshAttachment(tx, input.path);
+        const count = await tx.itemAttachment.count({ where: { itemId: item.id } });
+        if (count >= MAX_ATTACHMENTS_PER_ITEM) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'An item can have at most 5 attachments.',
+          });
+        }
+        const last = await tx.itemAttachment.findFirst({
+          where: { itemId: item.id },
+          orderBy: { position: 'desc' },
+        });
+        return tx.itemAttachment.create({
+          data: {
+            itemId: item.id,
+            path: input.path,
+            name: sanitizeAttachmentName(input.name),
+            sizeBytes,
+            position: last ? last.position + 1 : 0,
+          },
+        });
+      });
+      return { id: attachment.id, name: attachment.name, sizeBytes: attachment.sizeBytes };
+    }),
+
+  removeAttachment: protectedProcedure
+    .input(z.object({ attachmentId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      requireCapability(ctx.user, 'lendBorrow');
+      const path = await dbTransaction(async (tx) => {
+        const attachment = await tx.itemAttachment.findUnique({
+          where: { id: input.attachmentId },
+          include: { item: { select: { householdId: true } } },
+        });
+        if (!attachment || attachment.item.householdId !== ctx.user.householdId) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Attachment not found.' });
+        }
+        await tx.itemAttachment.delete({ where: { id: attachment.id } });
+        return attachment.path;
+      });
+      await unlinkAttachmentIfUnreferenced(path);
       return { ok: true };
     }),
 
