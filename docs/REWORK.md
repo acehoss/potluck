@@ -303,7 +303,8 @@ Aaron answers so the reasoning trail survives.
 **Progress (2026-07-04): ALL FOUR ROUNDS ARE BUILT, committed, and green on both
 engines.** Round 1 (five slices) shipped in the overnight autonomous session; Rounds 2–4
 shipped the following day as coordinated teammate rounds (server → UI ∥ e2e per round).
-Full per-round records — decisions, deviations, gates — are in PLAN.md (newest first).
+Full per-round records — decisions, deviations, gates — are in
+[docs/plan-archive.md](./plan-archive.md) (split out of PLAN.md 2026-07-07).
 Scope cuts taken in Round 4 per H3/H4's "if scope allows": menus/queue/leftovers/freezer,
 staples list, and multiple named stores are follow-ups, not shipped; categories with
 learned assignment shipped.
@@ -348,11 +349,19 @@ per-instance scaling, date-range list generation with PTE-conservative merging, 
 categories, availability badges from own + connected pantries, add-to-order integration,
 store list. Menus/queue/staples/stores land here if scope allows, else immediately after.
 
-**Deferred (unchanged or newly noted):** notifications round (now also covering order
-lifecycle, share/claim, and connection-request events — the event list keeps growing;
-design it once); federation build-out (E1 target recorded; only the E3 checklist ships
-now, inside Round 1); label printing; SKU merging; low-stock nudges; chore tracking
-(door opened by A3's roles); shared write-off offers.
+**Deferred (unchanged or newly noted):** ~~notifications round~~ (**shipped 2026-07-05
+as Phase 3** — see the Phase 3 section below, N1–N11); federation build-out (E1 target
+recorded; only the E3 checklist ships now, inside Round 1); label printing; SKU merging;
+low-stock nudges; chore tracking (door opened by A3's roles); shared write-off offers.
+
+> **Canonical deferred list (back-annotated 2026-07-07).** Still open: federation
+> build-out (E1) · minors & the waiting-on-an-adult handoff state (P6/N11) ·
+> staples/stores/menus/queue · connection-scoped image serving · label printing · SKU
+> merging · low-stock nudges · chore tracking · shared write-off offers · the MFA
+> router's per-factor alias unification (cosmetic) · the pre-existing /ledger React #418
+> hydration warning. Shipped since first written: notifications (Phase 3), per-invite
+> grant presets (Round T's circle-picker invite), recipe photos from URL import
+> (Round R). CLAUDE.md and PLAN.md point here rather than keeping their own copies.
 
 **Scale note:** design target moves from "2–10 households, one circle" to "tens of
 households per instance." SQLite + the app-level write lock remain fine at that scale;
@@ -580,8 +589,12 @@ Tailscale reverse proxy).
   notifications**" toggle, default **off**.
 - **N5. Channel matrix + conservative defaults — DECIDED.** ~4 opt-out **categories**
   (not per-event), each with per-channel push/email/in-app toggles:
-  (1) **Pickups & waiting-on-you** — push + email ON; (2) **Circle activity** — digest +
-  in-app, individual push/email OFF (shares get **opt-in per-circle/keyword push**);
+  (1) **Pickups & waiting-on-you** — push + email ON; (2) **Circle activity** — ~~digest +
+  in-app, individual push/email OFF (shares get **opt-in per-circle/keyword push**)~~
+  *(amended 2026-07-07 to the shipped default: **push ON / email OFF** — a share push
+  should land while the leftovers are still good, and the daily digest is the email
+  path; per-circle/keyword push targeting did not ship — see
+  `src/server/notify/defaults.ts`)*;
   (3) **Ledger/money** — in-app + optional digest, no per-event push/email by default;
   (4) **Account & security** — transactional, always on, not unsubscribable. First-run
   one-screen "how should Potluck reach you?" with these pre-selected (explicit consent,

@@ -25,7 +25,9 @@ SEED_DEMO=1 docker compose up -d --wait    # with demo fixtures
 SEED_DEMO=1 EXTRACTION_MODE=fixture docker compose up -d --wait
 npm run e2e
 
-# Extraction unit tests (live error mapping, stored-JSON parsing; no network)
+# Unit tests (~25 suites: money, MFA, mail pipeline/unsub, recipe parse/import,
+# planner, shopping, circles reach, extraction, vCard/phone, digest scheduling,
+# barcode, deep links, …; no network, no running stack)
 npm run test:unit
 
 # Off-mode extraction e2e (boots its own EXTRACTION_MODE=off stack, then downs it)
@@ -37,6 +39,10 @@ Demo logins (only when seeded): usernames `aaron`, `marie`, `dana`, `nia`, `theo
 households exercise the network: Heise ↔ In-Laws (full grants), Heise ↔ Neighbors
 (share-only), In-Laws ↔ Neighbors (unconnected). Marie belongs to two households
 (the acting-household switcher lives on More); Theo is a Teen-preset member.
+`aaron` has TOTP enrolled — `docker compose exec app npx tsx
+scripts/dump-demo-creds.ts` prints every demo account's `otpauth://` URI plus a
+terminal QR for authenticator import (fixture secrets; refuses to run outside
+`SEED_DEMO=1`).
 
 ## Go live (real deployment)
 
@@ -119,7 +125,11 @@ reverse proxy is mandatory in production. The app reads the real scheme and
 client IP from the proxy's `X-Forwarded-Proto` / `X-Forwarded-For` headers,
 trusting **one** proxy hop by default (override with `TRUSTED_PROXY_HOPS` if you
 chain more). Do **not** publish port 3000 to the internet — bind it to the proxy
-only.
+only: set `APP_BIND` in the host env (or the gitignored `.env` — compose reads
+both) to pin the published port to one interface, e.g. `APP_BIND=127.0.0.1` when
+the proxy shares the box, or a Tailscale IP so :3000 never reaches the LAN.
+`APP_PORT` moves the host port if 3000 is taken; the container always listens
+on 3000 internally.
 
 **Caddy** (automatic Let's Encrypt certs — simplest). `Caddyfile`:
 
@@ -178,7 +188,13 @@ EMAIL_SMTP_SERVER=smtp.dreamhost.com
 EMAIL_SMTP_PORT=587                          # 587 ⇒ STARTTLS
 MAIL_MODE=live                               # 'live' to send; 'capture' (default) records only
 MAIL_PRODUCTION=1                            # explicit opt-in: deliver to real recipients unfiltered
+MAIL_PUBLIC_URL=https://coop.example.com     # base URL for every emailed link — set to YOUR domain
 ```
+
+**`MAIL_PUBLIC_URL` is required on your own domain**: verification, password-reset,
+unsubscribe, and deep-link URLs in every email are built from it, and it defaults to
+`https://potluckmutualaid.app` (the reference deployment) — leave it unset and your
+users' email links silently point at someone else's server.
 
 `MAIL_MODE` defaults to **`capture`** — a safe default that records every message to
 the `CapturedEmail` table and sends nothing. A real deployment must set
@@ -283,9 +299,13 @@ involved households, except whoever recorded it.
 ## Backups
 
 One tar covers everything (SPEC §6): the SQLite database plus the images tree,
-both on the `coop-data` volume. The backup is safe to take while the app is
-running — it snapshots the DB through SQLite's online backup API, never a raw
-copy of a live WAL file.
+both on the `coop-data` named volume by default. On a Linux production host you
+can instead set `COOP_DATA=./data` in `.env` before first boot for a
+host-visible bind mount (easier inspection and off-box copying; the named
+volume stays the default because bind-mounted SQLite WAL is flaky on macOS).
+The backup script works with either — it runs inside the container. The backup
+is safe to take while the app is running — it snapshots the DB through SQLite's
+online backup API, never a raw copy of a live WAL file.
 
 ```bash
 # Back up (stack must be running) → backups/coop-YYYYMMDD-HHMMSS.tar

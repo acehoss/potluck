@@ -131,9 +131,12 @@ phone-in-a-basement use: every text pair below clears WCAG AA 4.5:1 (ratios veri
 <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
 
 // Tab bar (bottom nav; live set since the Round-E IA flip, 2026-07-04: Neighbors · Plan · Home · More)
-<nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)]">
-  <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-accent">        {/* active */}
-  <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-text-muted">    {/* inactive */}
+// Chrome runs edge to edge; the inner div aligns the tabs with the pages' max-w-2xl column.
+<nav className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-surface-raised pb-[env(safe-area-inset-bottom)]">
+  <div className="mx-auto flex w-full max-w-2xl">
+    <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-accent">        {/* active */}
+    <Link className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-text-muted">    {/* inactive */}
+  </div>
 </nav>
 
 // List row (inventory, ledger) — parent: <ul className="divide-y divide-border">
@@ -186,7 +189,7 @@ link/active color on dark (7.89:1 on cards). Handled entirely by the token swap;
 
 | Old (light-hardcoded) | New |
 | --- | --- |
-| `layout.tsx` body `bg-stone-50 text-stone-900` | delete both (base layer owns body); keep `min-h-full flex flex-col` |
+| `layout.tsx` body `bg-stone-50 text-stone-900` | delete both (base layer owns body); keep `flex flex-col`, now `min-h-dvh` (was `min-h-full`; Round T 2026-07-06 — dvh so the tab bar doesn't ride up on short iOS Safari pages) |
 | `border-stone-200 bg-white` (cards) | `border-border bg-surface-raised` |
 | `text-stone-400` / `text-stone-500` / `text-stone-600` | `text-text-muted` |
 | `text-stone-700` (invite page emphasis) | `text-text` |

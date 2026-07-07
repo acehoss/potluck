@@ -334,9 +334,111 @@ manageHousehold-gated** (on top of lendBorrow); **setting or editing a fee needs
   iOS → no API; `/more` card shows Share-→-Add-to-Home-Screen pictogram steps.
 - Camera UPC scan (`zxing-wasm` or similar) unhides the `[scan]` buttons in pantry search
   and the line-sheet product picker.
-- Push (installed PWAs, iOS 16.4+): opt-in on `/more`; events (the one list, matching 04 §4):
-  settlement recorded, manual ledger adjustment. Nothing else — no chatty notifications, and
-  no loan-due reminders in v1 (they'd need a scheduler the container design doesn't have).
+- Push (installed PWAs, iOS 16.4+): the per-device subscription stays an opt-in on `/more`
+  ("This device"). ~~events (the one list, matching 04 §4): settlement recorded, manual
+  ledger adjustment. Nothing else — no chatty notifications, and no loan-due reminders in
+  v1 (they'd need a scheduler the container design doesn't have)~~ *(superseded
+  2026-07-05 — Phase 3 Round C + the digest-cadence round)*: **what** reaches you is now
+  the per-user matrix at `/more/notifications` (three opt-out categories — pickups /
+  circle / ledger — each × push + email; see that screen below), and the scheduler
+  rationale inverted — `src/instrumentation.ts` runs an in-process ~10-minute digest tick,
+  so the per-user **daily/weekly digest** (local send hour, weekly weekday, time zone)
+  sends itself with no external cron.
+
+## Auth screens (Phase 3 Round B, 2026-07-05)
+
+- **`/login`** — still "Username or email" + password, now with a `next=` continuation
+  (validated as a same-origin relative path) and a **second MFA step** when the password
+  answer is the discriminated `mfaRequired` union: one input accepting an authenticator
+  (TOTP) code, a saved **backup code** (toggle), or — when enabled — a rate-limited
+  **emailed code** ("Email me a code"). Instance admins are required to carry TOTP.
+- **`/verify?token=`** — the email-confirmation landing; a tokenless or expired visit
+  reads the same generic "link is bad". A signed-in-but-unverified account gets an
+  app-wide **verify banner** under the header (one-tap resend, dismissible per session) —
+  a reminder, not a gate.
+- **`/forgot`** → **`/reset?token=`** — password reset: enumeration-safe ("if that
+  account exists…"), never bypasses TOTP, revokes all sessions on success.
+
+## Notification preferences `/more/notifications` (Phase 3 Round C + digest round)
+
+Reached from More's "Notifications" card. Account-level (not per-device): the **category
+matrix** — pickups / circle / ledger, each × push + email (defaults: pickups both ON,
+circle push-only, ledger all-OFF); the **digest cadence** (`off | daily | weekly`, local
+send hour, weekly weekday) with a **time zone** select (auto-detect suggested); and the
+**"show details"** privacy toggle (adds the counterparty *household name* to notification
+bodies — never $/address; the N4 rule). The per-device push toggle stays on `/more` under
+"This device".
+
+## Mail landings — `/unsub` and `/go` (Phase 3 Rounds C/D)
+
+- **`/unsub?token=`** — the RFC-8058 landing. No session: the HMAC token IS the
+  authorization, and it can only ever turn a preference **off** (digest → cadence `off`;
+  a category → its email channel off, push untouched). POST is the mail client's machine
+  one-click; GET renders a plain human confirmation. Idempotent.
+- **`/go?t=`** — every notification/email tap lands here. **Navigation-only** by
+  construction: verify the HMAC nav token, switch the acting household **only if the
+  viewer is already a member** (the token is a hint, never an authorization), redirect to
+  the target screen. It never authenticates and never mutates; logged out →
+  `/login?next=/go?…` (login is the only thing that signs you in); an invalid / expired /
+  tampered token → `/`, never an error or open redirect.
+
+## Recipes `/recipes` (Round 3; reworked Round R, 2026-07-06)
+
+- **`/recipes`** — the book: own recipes + the shared section (over the `recipes` grant).
+- **`/recipes/[id]`** — the **read view** for own and shared alike; ownership only picks
+  the actions (own → Edit, shared → save-a-copy fork). Not visible = gentle 404.
+- **`/recipes/[id]/cook`** — the **Cook view**: full-screen hands-free stepper
+  (swipe/keys step navigation), a live **servings scaler** in the header, screen
+  **wake lock** while cooking; Done returns via the nav stack (no back-loop).
+- **`/recipes/new`** / **`/recipes/[id]/edit`** — the editor: paste-to-parse, plus the
+  SSRF-guarded **URL import** which also downloads the recipe photo server-side.
+
+## Shopping list `/shopping` (Round 4; reworked Round S, 2026-07-06)
+
+One persistent per-household list, never silently pruned. **"Add from Plan"** (date-range
+pickers) pulls the planned recipes' ingredients in with the conservative merge (adds and
+merges, never removes); each plan entry's edit sheet also carries a per-entry **"Add to
+shopping list"**, and an already-sent entry shows a **🛒✓** badge on `/plan`
+(`addedToShoppingAt` — re-adding is safe, the server merges by name+unit). Manual add,
+check-off, clear-checked, learned **categories** (tap a row to file it), and per-item
+cross-pantry **availability** rows that jump straight into the existing order flow.
+
+## Shares `/shares` (Round 2)
+
+The needs & surpluses board: a NEED/SURPLUS composer (a surplus offer picks from the
+acting household's shareable finalized lots), the connection-scoped feed, claims (a
+claimed surplus fulfills as a **$0 gift take** — no ledger entry, the one sanctioned
+cross-household no-money take), and anonymized hop-limited reshares.
+
+## Activity `/activity` (Phase 2 Round D)
+
+The bell in the global header; the badge counts **actionable** items. One derived
+attention feed for the acting household over existing state (orders, restocks, shares,
+connections — five item types, no schema of its own) with **capability-gated inline
+actions**: a row is informative for everyone, but shows an action only to a user whose
+capabilities can actually advance it, and every action reuses the origin surface's tRPC
+mutation + guards. Money never fires from a list row (a READY order deep-links to its
+detail instead), and money *events* stay off the bell entirely — the ledger "new" nudge
+rides the Neighbors tab dot.
+
+## Household contact page `/households/[id]` (Phase 2 Rounds C/E)
+
+Connection IS the gate: the acting household's own or an ACTIVE-connected household
+resolves, anything else 404s (existence never leaks). Household address + pickup notes,
+then **member cards** — photo, bio, big `tel:`/`sms:` rows, email — filtered by circle
+visibility, each with **"Save contact to device"** (a vCard via `/api/vcard/[userId]`).
+Reached from the Neighbors tab's household sections.
+
+## Back navigation (Rounds Q6/T, 2026-07-06)
+
+Back arrows are **not** hardcoded parent links, and code must never call `router.back()`.
+`src/app/nav-history.tsx` mounts a `NavTracker` in the root layout that keeps a per-tab
+`sessionStorage` nav stack (consecutive-duplicate skip; A→B→A collapses as a POP; capped
+at 50 entries), and `BackLink({fallback})` pops the stack and `router.push`es the
+previous entry **explicitly** — browser history can disagree with user intent (a
+"Done"-style push back to the opener leaves a forward hop that `back()` would bounce
+into). A cold deep link (empty stack) pushes `fallback`, which is also the `href` so
+middle-click / open-in-new-tab lands somewhere sane.
 
 ## Playwright anchors (definition of done, chromium + webkit)
 

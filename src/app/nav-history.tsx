@@ -7,9 +7,11 @@ import { useEffect } from 'react';
 /**
  * History-aware back navigation (Round Q6). Hardcoded back hrefs lie when a page
  * is reachable from several places (e.g. Items opens from Home AND a deep link).
- * Instead we keep a tiny in-app nav stack in `sessionStorage` and let a page's
- * BackLink go `router.back()` when there IS an in-app previous page, or fall
- * back to a sensible parent when the tab was opened cold on a deep link.
+ * Instead we keep a tiny in-app nav stack in `sessionStorage`; a page's
+ * BackLink navigates EXPLICITLY (`router.push`) to the stack's previous entry
+ * when one exists — never `router.back()`, whose browser history can bounce
+ * forward on an A→B→A loop — or falls back to a sensible parent when the tab
+ * was opened cold on a deep link.
  *
  * No server involvement; the stack lives per-tab and is empty on a fresh load.
  */

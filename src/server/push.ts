@@ -7,10 +7,12 @@ import { channelPrefsForUsers, type NotifyCategory } from './notifications';
 import { isAllowedPushEndpoint } from './push-endpoint';
 
 /**
- * Web push sender (blueprint 04 §4). Exactly two events in v1 — settlement
- * recorded and manual ledger adjustment posted — sent to every member of BOTH
- * involved households EXCEPT the creating user (matching the ledger "new"
- * marker semantics: the recorder's housemates are notified too).
+ * Web push sender + the `notify()` fan-out (blueprint 04 §4/§8). Events ride
+ * the three opt-out categories — pickups/circle/ledger, defaults in
+ * `notify/defaults.ts` — resolved per user against NotificationPreference.
+ * Ledger events go to every member of BOTH involved households EXCEPT the
+ * creating user (matching the ledger "new" marker semantics: the recorder's
+ * housemates are notified too).
  *
  * Sends are fire-and-forget AFTER the money transaction commits: a push
  * failure is logged and never fails the mutation. Subscriptions the push

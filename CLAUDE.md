@@ -2,7 +2,26 @@
 
 Potluck (formerly "Private Coop"): a self-hosted web app (PWA) for mutual aid between households — nodes in a network of pairwise connections sharing pantry goods and equipment at cost, with a netted per-household-pair ledger.
 
-## Current state (2026-07-05)
+## Current state (2026-07-07)
+
+**Rounds Q–T + follow-ups (2026-07-06) — device feedback, recipes UX, nav model.**
+**Round Q** — six real-device fixes plus the app's back-navigation primitive:
+`src/app/nav-history.tsx`, a sessionStorage nav stack (NavTracker in the layout) +
+`BackLink({fallback})`. Back arrows navigate the recorded stack explicitly (an A→B→A
+return collapses as POP); **never use `router.back()`** — the nav stack is the single
+source of truth for in-app back intent. **Round R** — a unified recipe read view at
+`/recipes/[id]` (+ `/edit`; own recipes no longer drop straight into the edit form), the
+step-by-step **Cook view** (`/recipes/[id]/cook`: swipe/keyboard, servings scaling,
+wake-lock), and `recipe.importUrl` now downloads the recipe photo server-side
+(SSRF-guarded). **Round S** — "Add from Plan" + per-entry `shopping.addFromEntry` over
+the extracted shared core `src/server/shopping-generate.ts`; idempotent re-adds (the
+PTE never-silently-remove invariant); migration `20260706120000_plan_shopping_tracking`
+(`PlanEntry.addedToShoppingAt`). **Round T** — `min-h-dvh` tab-bar fix (short iOS Safari
+pages), household invites pick a **Circle** (grants snapshotted at mint — closes the
+per-invite-presets deferral), "Save contact to device" vCard copy. Post-Phase-3 also
+landed: digest cadence (per-user off/daily/weekly, **daily default**) + the in-process
+scheduler (`src/instrumentation.ts`), and profile polish (avatar scale-and-crop, US
+phone formatting, TZ auto-detect).
 
 **Phase 3 (email · notifications · auth flows · deep-linking) is COMPLETE — four
 rounds, 2026-07-05.** Commits 4fe63d9 (A), d216f25 (B), c7868fe (C), + D.
@@ -58,7 +77,8 @@ What the rework changed structurally (read PLAN.md + docs/REWORK.md before touch
   11 capability flags (`src/server/capabilities.ts`); `getSessionUser()` resolves the
   sticky **acting household** (`potluck_household` cookie) behind the legacy `householdId`
   shape, so every consumer still reads `ctx.user.householdId` (now = acting household).
-- **`Connection`** (pairwise, two directional grant sets, PENDING/ACTIVE/SEVERED) is the
+- **`Connection`** (pairwise, PENDING/ACTIVE/SEVERED; each side assigns the other into
+  one of its own **circles**, whose six flags are the directional grants) is the
   visibility+reach primitive; **`src/server/authz.ts`** is the choke point
   (`requireCapability`, `hasActiveGrant`, `activeConnectionsOf`, `loadAccessiblePantry`).
   Error convention: missing capability = 403, missing visibility = 404 (never leak
@@ -85,15 +105,16 @@ Migrations: `20260703100000_network_core` (the big data-preserving one),
 append-only ledger survived untouched** — shares/recipes/planner add zero money paths
 (gifts post $0 takes, shopping's add-to-order calls the existing `order.addToCart`).
 
-Do not start large autonomous workflows without an explicit ask. The deferred list
-(notifications round — now incl. ledger events + a persisted Activity feed for
-push/email; minors + the waiting-on-an-adult handoff state; staples/stores/menus/queue;
-federation build-out; connection-scoped image serving; per-invite grant presets; the
-pre-existing /ledger React #418 hydration warning) lives in REWORK.md + PLAN.md's
-round notes — resume from there.
+Do not start large autonomous workflows without an explicit ask. The **canonical
+deferred list** lives in docs/REWORK.md (blockquote after the Round plan: minors + the
+waiting-on-an-adult handoff state; staples/stores/menus/queue; federation build-out;
+connection-scoped image serving; the /ledger React #418 hydration warning; …); the
+near-term items are hoisted to "Outstanding work" at the top of PLAN.md — resume from
+there. (Notifications and per-invite grant presets used to be on this list; both have
+shipped.)
 
-**SPEC.md was rewritten and the blueprints amended for Round 1 (R1S5)** — they describe
-the running app again. Rebrand notes: cookies are `potluck_session`/`potluck_household`
+**SPEC.md, the blueprints, and README were re-synced to the running app 2026-07-07**
+(post-Rounds Q–T; SPEC was first rewritten at Round 1/R1S5). Rebrand notes: cookies are `potluck_session`/`potluck_household`
 and the manifest is "Potluck", but `/data/coop.db`, the `coop-data` volume, and the repo
 directory deliberately keep their names (renaming would orphan existing deployments'
 data; repo rename is Aaron's call). Demo seed emails stay `@demo.coop` (fixtures, keyed
@@ -102,7 +123,7 @@ by upsert). The jar brand mark stayed — a new mark can ride the domain hunt.
 ## Read first
 
 - **[SPEC.md](./SPEC.md)** — the scope contract: domain model, flows, money invariants, out-of-scope guardrails. Deliberately small; keep it that way.
-- **[PLAN.md](./PLAN.md)** — per-slice progress notes, deliberate deferrals, and the outstanding-work list. Append dated notes for any change.
+- **[PLAN.md](./PLAN.md)** — newest-first per-round build records, with the outstanding-work list at the top. Append dated notes for any change. Pre-Phase-2 history (v1 slices, rework Rounds 1–4) is archived in [docs/plan-archive.md](./docs/plan-archive.md).
 - **[README.md](./README.md)** — how to run it, and the "Go live" deploy runbook (bootstrap the first household, TLS reverse proxy, secrets).
 - **[docs/blueprint/](./docs/blueprint/)** — 00 overview, 01 data model + money invariants, 02 UX flows, 03 design system, 04 infra. Authoritative for money/lifecycle questions.
 

@@ -1,4 +1,4 @@
-# 01 — Data model & money invariants (slices 2–6, amended for Potluck Round 1)
+# 01 — Data model & money invariants (slices 2–6, amended through Phase 3)
 
 Extends the live slice-1 schema (`prisma/schema.prisma`). One migration per slice, additive only.
 SQLite via Prisma 7: **no native enums** — enum-ish columns are `String`, validated by zod at the
@@ -6,8 +6,11 @@ tRPC boundary with exported string-literal unions in `src/server/domain.ts`.
 
 **Round 1 (network core, shipped 2026-07-04) amendments are folded in below** — see the
 "Round 1 deltas" section for the new models and the attribution rule, the rewritten authz
-matrix, and the amended invariants 3/4/5/10. The v1 model snippets are kept as history;
-`prisma/schema.prisma` is the source of truth.
+matrix, and the amended invariants 3/4/5/10. **Later delta sections (updated 2026-07-07)
+carry Rounds 2–4 (shares · recipes · planner), Phase 2 (circles · contact — which REPLACED
+Round 1's per-connection grant sets and shared flags), and Phase 3 (mail · auth · MFA ·
+notifications).** The v1 model snippets are kept as history; `prisma/schema.prisma` is the
+source of truth.
 
 ## Decisions (rationale inline below)
 
@@ -155,7 +158,14 @@ model Loan {
 }
 ```
 
-Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_ledger` (Take, LedgerEntry) · `slice4_adjustments` (Adjustment, `LedgerSeen`) · `slice5_extraction` (3 nullable columns on Restock + `RestockImage.originalSha256 String?` for fixture-mode extraction, 04 §3) · `slice6_lending` (Item, Loan) · `slice7_push` (PushSubscription) · `tax_fees_receipt_text` (2026-07-03 polish: tax/fee/excluded columns) · `orders_reserved` (2026-07-03: `Lot.reservedCount`, `Order`, `OrderLine`; D9) · `20260703100000_network_core` (Round 1: Membership/Connection/InstanceSettings, username/slug, per-household Product with duplication backfill, shared flags, attribution snapshots, LedgerSeen re-key — data-preserving, proven against a live volume) · `20260703120000_household_invites` (`Invite.kind` + `grantsJson`) · `20260704090000_shares` (Round 2: SharePost/SharePostLot/ShareClaim + `Take.shareClaimId` — the gift-take marker; see invariant 4). Back-relations on Household/User/Pantry added in the same migration that needs them.
+**Snippet drift (noted 2026-07-07):** beyond the deltas below, the live schema differs from the
+historical snippets above in small ways — `Lot.productId` is now **nullable** (null only for
+`excluded` non-inventory receipt lines from the tax/fees round), `Lot` grew
+`taxable`/`excluded`/`receiptText`/`taxCentsAllocated`/`feeCentsAllocated`/`reservedCount`, the
+money-writing models carry `clientKey` idempotency columns (rule #2), and the `Loan.conditionOut`
+column shown above **never actually shipped** — only `conditionReturned` exists.
+
+Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_ledger` (Take, LedgerEntry) · `slice4_adjustments` (Adjustment, `LedgerSeen`) · `slice5_extraction` (3 nullable columns on Restock + `RestockImage.originalSha256 String?` for fixture-mode extraction, 04 §3) · `slice6_lending` (Item, Loan) · `slice7_push` (PushSubscription) · `tax_fees_receipt_text` (2026-07-03 polish: tax/fee/excluded columns) · `orders_reserved` (2026-07-03: `Lot.reservedCount`, `Order`, `OrderLine`; D9) · `20260703100000_network_core` (Round 1: Membership/Connection/InstanceSettings, username/slug, per-household Product with duplication backfill, shared flags, attribution snapshots, LedgerSeen re-key — data-preserving, proven against a live volume) · `20260703120000_household_invites` (`Invite.kind` + `grantsJson`) · `20260704090000_shares` (Round 2: SharePost/SharePostLot/ShareClaim + `Take.shareClaimId` — the gift-take marker; see invariant 4) · `20260704110000_recipes` (Round 3: Recipe/RecipeIngredient/IngredientLink) · `20260704130000_planner` (Round 4: PlanEntry/ShoppingItem/CategoryAssignment) · `20260704150000_circles` (Phase 2 Round B: **rebuilds Connection/Pantry/Item** — Circle + PantryCircle/ItemCircle/MembershipCircle replace the per-connection `aGrants*`/`bGrants*` columns and the `shared` booleans; data-preserving, behavior-equivalent grants proven by `scripts/verify-circles-migration.mjs`) · `20260704170000_contact` (Phase 2 Round C: `User.photoPath/phone/bio`, `Household.address/pickupNotes` — plain additive) · `20260705100000_mail` (Phase 3 Round A: CapturedEmail, MailSuppression) · `20260705140000_auth` (Round B: EmailVerificationToken/PasswordResetToken/MfaBackupCode/EmailMfaCode + the User security columns) · `20260705180000_notifications` (Round C: NotificationPreference + the User notification columns) · `20260705200000_digest_cadence` (User rebuild: boolean `digestOptOut` → `digestCadence`/`digestHour`/`digestWeekday`, data-preserving) · `20260706120000_plan_shopping_tracking` (Round S: `PlanEntry.addedToShoppingAt`). Phase 3 Round D (deep links) added **no migration** — nav tokens are stateless HMAC. Back-relations on Household/User/Pantry added in the same migration that needs them.
 
 ## Round 1 deltas (network core, 2026-07-04)
 
@@ -168,13 +178,21 @@ New models — see `prisma/schema.prisma` for full definitions; REWORK.md for ra
   (cookie, validated against live memberships) behind the legacy `ctx.user.householdId`
   shape.
 - **`Connection`** (canonical pair `householdAId < householdBId`, unique; status
-  `PENDING | ACTIVE | SEVERED`) with two directional grant sets (`aGrants*`/`bGrants*`:
-  pantry, lending, recipes, shareTo, shareFrom, reshare). The grant/capability choke
-  point is `src/server/authz.ts`. Severing auto-cancels open orders across the pair and
-  releases reservations in the same transaction (B6); ledger history and net survive.
+  `PENDING | ACTIVE | SEVERED`) ~~with two directional grant sets (`aGrants*`/`bGrants*`:
+  pantry, lending, recipes, shareTo, shareFrom, reshare)~~ — **amended 2026-07-04 (Phase 2
+  Round B):** grants no longer live on the edge. Each side assigns the OTHER household
+  into one of ITS OWN **circles** (`aCircleId`/`bCircleId`, nullable — the nullability
+  carries PENDING; ACTIVE ⇒ both non-null, enforced in the accept handler), and that
+  circle's six grant booleans ARE the directional grant set — same six grants, same
+  directionality, re-assigned unilaterally. See the Phase 2 deltas below. The
+  grant/capability choke point is still `src/server/authz.ts` (`grantsFrom` resolves the
+  circle behind the unchanged GrantSet shape). Severing auto-cancels open orders across
+  the pair and releases reservations in the same transaction (B6); ledger history and
+  net survive.
 - **`InstanceSettings`** (singleton `id='instance'`) + `User.isInstanceAdmin` +
   `User.username` / `Household.slug` (unique, `[a-z0-9_-]`) + `Invite.kind`/`grantsJson`
-  (member vs found-a-household invites) + `Pantry.shared`/`Item.shared` +
+  (member vs found-a-household invites) + ~~`Pantry.shared`/`Item.shared`~~ (both became
+  circle-scoped three-mode `visibility` columns in Phase 2 — see below) +
   `Product.householdId` (catalog owner = the household whose pantry holds its lots).
 
 **The attribution rule (supersedes the "household derived via taker/borrower" comments
@@ -187,10 +205,186 @@ explicit). `LedgerSeen` is keyed `(userId, ownHouseholdId, counterpartyHousehold
 Undo/return authz reads the snapshots.
 
 **Reach is re-verified at the money moment**, not only at draft/submit time: order
-pickup asserts the pantry grant is still ACTIVE; restock finalize asserts the purchaser
-connection is still ACTIVE before posting the credit; settle/adjust require a connection
-edge in ANY status (severed pairs stay settleable per B6; never-connected households are
-unreachable and read as 404).
+pickup asserts the pantry grant still holds (post-Phase-2: the connection is ACTIVE and
+the owner's circle for the requester still carries `grantsPantry`); restock finalize
+asserts the purchaser connection is still ACTIVE before posting the credit; settle/adjust
+require a connection edge in ANY status (severed pairs stay settleable per B6;
+never-connected households are unreachable and read as 404).
+
+## Rounds 2–4 deltas (shares · recipes · planner, 2026-07-04)
+
+Three connection-scoped feature families, all riding the same authz choke point,
+**all adding zero money paths** — see `prisma/schema.prisma` for full definitions,
+REWORK.md §§F/G/H for rationale.
+
+**Shares (Round 2, REWORK F).** A post is a NEED or a SURPLUS; **shares are gifts (C1)
+and never touch the ledger** — a tracked SURPLUS handoff records $0 Takes for the audit
+trail only (invariant 4's carve-out). ValueFlows correspondence (E3, names only): post ≈
+Intent/Proposal, claim ≈ Commitment, gift take ≈ EconomicEvent.
+
+```prisma
+model SharePost {
+  id            String    @id @default(cuid())
+  clientKey     String?   @unique
+  type          String    // "NEED" | "SURPLUS"
+  householdId   String    // the POSTING household — for a reshare copy, the RESHARER
+  title         String
+  quantity      Int?      // null = whole-thing/unspecified; unit is free text
+  remaining     Int?      // ticks down as claims CONFIRM; stored ONLY on origin posts
+  expiresAt     DateTime  // required; defaults SURPLUS +3d, NEED +14d
+  status        String    @default("OPEN") // OPEN | CLAIMED | FULFILLED | WITHDRAWN (expiry derived, never stored)
+  originPostId  String?   // reshare chain: root id; null = this IS the origin
+  parentPostId  String?   // the post this copy reshared
+  hopsRemaining Int       @default(1) // poster-set 0..3; copies get parent−1
+  // + createdById, description, photoPath (kind "shares"), unit, createdAt
+}
+model ShareClaim {
+  id          String  @id @default(cuid())
+  clientKey   String? @unique
+  postId      String
+  householdId String  // the CLAIMING household — snapshot, never re-derived
+  quantity    Int?    // required iff the post carries a quantity
+  status      String  @default("PENDING") // PENDING | CONFIRMED | RELEASED | CANCELED
+  // + createdById, note, createdAt, resolvedAt
+}
+```
+
+`SharePostLot` (unique `[postId, lotId]`) is the provenance link: which tracked lots a
+SURPLUS origin offers (own-household, FINALIZED, non-excluded). Confirming a claim (the
+poster's `fulfill` moment) draws the $0 gift takes from those lots — one confirm can gift
+from several lots, so `Take.shareClaimId` is indexed, **not** unique. Gift takes honor
+`reservedCount` (invariant 4). Reshares copy the post under the resharer's household with
+the origin **anonymized** beyond the direct edge; `remaining` lives only on the origin
+and mirrors down at read time (F4, single source of truth).
+
+**Recipes (Round 3, REWORK G).** `Recipe` (PTE-shaped: only `title` required; free-vocab
+course/cuisine/tags; `private` flag, default visible-to-granted) + `RecipeIngredient`
+(positioned lines, `kind` "item" | "heading"; **`amount` is raw text, never parsed
+server-side** — scaling is a display concern) + `IngredientLink` (the LEARNED
+per-household `normalizedName → productId` map, unique per pair; written only on explicit
+user confirmation, resolved at read time for every recipe; quantities NEVER convert
+across the link). Cross-household browsing rides the `recipes` circle grant over an
+ACTIVE edge; saving a foreign recipe **forks** it (browse-live, fork-on-save) — fork
+attribution (`forkedFromTitle`/`forkedFromHouseholdName`) is a **snapshot, deliberately
+not FKs**: the source may be deleted/unshared/severed later and the copy stands alone.
+NO money, NO ledger anywhere in this family.
+
+**Planner + shopping (Round 4, REWORK H; amended Round S 2026-07-06).** `PlanEntry`
+(household calendar: local `date` "YYYY-MM-DD", `meal` breakfast|lunch|dinner|snack,
+`kind` "recipe" | "item" | "note", `servingsOverride` per instance). `recipeId` is
+**`onDelete: SetNull`** — deleting a recipe leaves a "(deleted recipe)" tombstone entry,
+never a silently emptied slot. Round S added `addedToShoppingAt`: stamped when the
+entry's ingredients were sent to the list (`shopping.generate` / `shopping.addFromEntry`);
+a deliberate "was sent" marker, NOT a live link. `ShoppingItem` is the one persistent
+per-household list: rows are **never silently removed** (H2) — generation UPSERTS on the
+merge key `[householdId, normalizedName, unit]` (unit ''-normalized so the unique is
+real; NO cross-unit math — same-unit numeric amounts sum, unparseable ones join), only
+explicit user actions delete. `CategoryAssignment` mirrors IngredientLink's
+learned-on-explicit-action pattern for aisle categories. The list's add-to-order hands a
+suggested lot to the EXISTING order flow (`order.addToCart`) — the planner itself posts
+no money.
+
+## Phase 2 deltas (circles + contact layer, 2026-07-04/05)
+
+**Circles (Round B, REWORK P4 — the big one).** Named per-household visibility/grant
+groups REPLACE per-connection grant editing entirely (no per-connection override; a
+bespoke connection gets a circle of one). **A circle IS a grant bundle** — the six
+directional grants that used to live on the Connection edge:
+
+```prisma
+model Circle {
+  id          String @id @default(cuid())
+  householdId String
+  name        String              // unique per household; seeded: Neighbors / Friends / Family
+  position    Int    @default(0)  // display order
+
+  grantsPantry    Boolean @default(false)
+  grantsLending   Boolean @default(false)
+  grantsRecipes   Boolean @default(false)
+  grantsShareTo   Boolean @default(false)
+  grantsShareFrom Boolean @default(false)
+  grantsReshare   Boolean @default(false)
+}
+```
+
+Each side of a connection assigns the OTHER household into one of ITS OWN circles
+(`Connection.aCircleId` = the circle A placed B into = A's outgoing grants toward B;
+`bCircleId` the mirror). Directionality is preserved; either side re-assigns unilaterally
+("resource owner is authoritative"). Resource scoping targets circles too:
+`Pantry.visibility` and `Item.visibility` (which replaced the `shared` booleans) and
+`Membership.visibility` are `"ALL" | "SELECT" | "PRIVATE"` — SELECT consults the
+`PantryCircle` / `ItemCircle` / `MembershipCircle` join rows (ignored under ALL/PRIVATE;
+circle and resource always belong to the SAME household). A connection still needs its
+circle's grant flag on top of visibility, and `authz.ts` (`grantsFrom`,
+`visibleUnderCircle`) resolves all of it behind the unchanged GrantSet API — grant loss
+uniformly reads **404**. The `20260704150000_circles` migration was data-preserving:
+preset circles seeded per household, each connection side's grant tuple mapped to a
+matching preset or a custom circle, `shared=1 → 'ALL'` / `shared=0 → 'PRIVATE'`
+(behavior-equivalent, proven by `scripts/verify-circles-migration.mjs`).
+
+**Contact layer (Round C, REWORK P5).** Plain additive columns, no new tables:
+`User.photoPath` ("avatars"-kind image) / `phone` (free text; UI renders tel:/sms:) /
+`bio` — the person's card, all optional; visibility on a household card is governed by
+`Membership.visibility` + circles, never by field presence. `Household.address`
+(free-text multiline) + `pickupNotes` ("side door, text when 5 min out" — the
+focus-group's top-ranked field) — visible to any ACTIVE-connected household; **the
+connection itself is the gate** (P5).
+
+## Phase 3 deltas (mail · auth · MFA · notifications, 2026-07-05; digest cadence 2026-07-06)
+
+Account-plumbing only — **no model in this phase touches money or the ledger**. See
+REWORK.md "Phase 3" (N1–N11) for the decision record.
+
+**Mail (Round A, N1/N3/N9).** Two pipelines behind one swappable transport:
+`sendTransactional` (never consults prefs/suppression, no unsubscribe, always sends) vs
+`sendSubscription` (prefs + suppression + RFC-8058 one-click unsub). `CapturedEmail`
+audits **every message either pipeline TRIED to send** — written whether or not SMTP was
+touched (on a capture-mode stack it is the only record; dev/e2e read it back):
+`toAddress` = the ACTUAL recipient after the fail-closed dev filter, `originalTo` = the
+intended recipient, `delivered` = true only when a real SMTP send happened.
+`MailSuppression` (email PK, reason) is the hard-suppression list for **subscription mail
+only** — a bounced digest must never block a password reset.
+
+**Auth + MFA (Round B, N8/N10).** New `User` columns: `emailVerifiedAt` (null =
+unverified; banners, never blocks login), `totpSecret` (**AES-256-GCM-encrypted** at
+rest) / `totpEnabledAt` (set only after a live code confirms enrollment) / `totpLastStep`
+(highest consumed time-step — replay-reject watermark), `mfaEmailEnabled` (emailed codes
+= a labeled *convenience* factor; email is also the reset channel, circular trust). Four
+token tables, all `onDelete: Cascade` with the user: `EmailVerificationToken` and
+`PasswordResetToken` (sha256 **hash** of the token stored — the raw value lives solely in
+the emailed link; single-use `usedAt`, short-TTL; consuming a reset revokes sessions and,
+if TOTP is enrolled, ALSO requires a live TOTP/backup code — a reset is not a TOTP
+bypass), `MfaBackupCode` (8–10 per user, argon2id-hashed, shown once, single-use),
+`EmailMfaCode` (6-digit, hashed, short-TTL, attempt-capped; at most one live row per
+user). TOTP is required for the instance-admin account (enforced in the router, not
+schema).
+
+**Notifications (Rounds C/D, N4–N7; cadence round 2026-07-06).** Per-category channel
+choices are one row per category the user has TUNED — **an absent row means the
+conservative category default** (pickups push+email ON; circle OFF/OFF; ledger OFF/OFF),
+so a fresh account carries zero rows and still behaves correctly:
+
+```prisma
+model NotificationPreference {
+  userId   String
+  category String  // "pickups" | "circle" | "ledger" — "account"/transactional is never stored, never unsubscribable
+  push     Boolean
+  email    Boolean
+  @@id([userId, category])
+}
+```
+
+Single-valued prefs live on `User`: `timezone` (IANA; null → instance default/UTC),
+`digestCadence` `'off'|'daily'|'weekly'` + `digestHour` (0–23 local) + `digestWeekday`
+(0=Sun; weekly only) — the cadence round replaced the boolean `digestOptOut`, defaulting
+to **daily** (timely beats batched for perishable shares); `showDetails` (default **off**
+— opt in to the counterparty household NAME in a notification body; still never
+dollars/addresses, N4); `lastDigestAt` (per-user digest idempotency watermark);
+`notifyOnboardedAt` (first-run "how should Potluck reach you?" consent seen). The
+`notify()` layer enforces N4's category-only content rule; every notification is stamped
+with its household and tapping switches the acting household. Round D's deep links are
+**navigation-only stateless HMAC tokens — no table, no migration**: they route +
+mark-read; acting always requires a live session (N7).
 
 ## Key server logic (canonical snippets)
 
@@ -239,33 +433,40 @@ const [{ net }] = await db.$queryRaw<[{ net: number | null }]>`
      OR (creditorHouseholdId = ${them} AND debtorHouseholdId = ${me})`;
 ```
 
-## Authz matrix (rewritten for Round 1: capability × grant × shared flag)
+## Authz matrix (rewritten for Round 1: capability × grant × visibility — grant mechanics re-based on circles in Phase 2)
 
 The v1 premise "everyone sees everything" is gone (REWORK B4). **Reads** are
 connection-scoped: your households' data, plus what ACTIVE connections grant (their
-SHARED pantries/items under the pantry/lending grants; a pair's ledger visible only to
-its two households). Visibility failures read as **404** (existence never leaks);
-capability failures on visible things are **403**. **Writes** ("acting" = the acting
-household's membership flags):
+visible pantries/items under the pantry/lending grants; a pair's ledger visible only to
+its two households). Since Phase 2 a "grant" below means: the counterparty household's
+**circle for you** carries the flag AND the resource's `visibility` admits you (`ALL`, or
+`SELECT` with a scope row for that circle; `PRIVATE` never crosses). Visibility failures
+read as **404** (existence never leaks); capability failures on visible things are
+**403**. **Writes** ("acting" = the acting household's membership flags):
 
 | Operation | Capability (acting membership) | Cross-household reach |
 | --- | --- | --- |
 | Create/edit/finalize/abandon a DRAFT restock; removeImage; setUnitPhoto | `receiveStock`, **acting household must own the pantry** (a connected purchaser is credited via `purchaserHouseholdId`, not by driving the wizard) | purchaser must be the acting household or an ACTIVELY connected one; re-verified at finalize |
 | Correct a RESTOCK_CREDIT / void-in-error | `settleMoney`, member of purchaser **or** pantry-owner household | — |
-| Order draft/edit/cancel | `placeOrders` | pantry grant + `Pantry.shared` (via `loadOrderableLot`) |
+| Order draft/edit/cancel | `placeOrders` | pantry circle grant + pantry visibility (via `loadOrderableLot`) |
 | Order submit, and any edit to a SUBMITTED cross-household order | `spend` (own-pantry: `placeOrders`) | pantry grant, re-verified at pickup |
 | Order startPicking / markReady / decline | `fulfill`, pantry-owner household | — |
 | Order pickup (THE money event) | requester side: `spend` (cross) / `placeOrders` (own); owner side: `fulfill` | pantry grant re-asserted before posting |
 | Undo a take | `placeOrders`, acting household = `Take.householdId` snapshot | — |
 | Recount / write-off | `adjustInventory`, pantry-owner household only | — |
 | Manual ADJUSTMENT / SETTLEMENT | `settleMoney`, own household one of the pair | connection edge in ANY status (severed pairs settleable, B6) |
-| Create/edit Item | `lendBorrow`, owner household; fee > 0 / fee changes add `settleMoney`; shared-flag changes add `manageHousehold` | — |
-| Loan checkout (borrower = acting user) | `lendBorrow`; + `spend` when a fee posts cross-household | lending grant + `Item.shared` |
+| Create/edit Item | `lendBorrow`, owner household; fee > 0 / fee changes add `settleMoney`; visibility changes add `manageHousehold` | — |
+| Loan checkout (borrower = acting user) | `lendBorrow`; + `spend` when a fee posts cross-household | lending circle grant + item visibility |
 | Loan return / undo checkout | `lendBorrow`, borrower-snapshot or owner household | works across a severed edge (loans run to return) |
+| Share post/withdraw/reshare · claim/cancel-claim | `postShares` | shareTo/shareFrom circle grants pick the audience; reshare adds the `grantsReshare` flag + `hopsRemaining > 0` |
+| Share respond — confirm (posts the $0 gift takes) or release | `fulfill`, posting-household side | — (the gift is the sanctioned no-money cross-household take; invariant 4) |
+| Recipe / planner / shopping-list writes | `editRecipes`, own household | browsing a connected book = recipes circle grant + per-recipe `private` flag; saving forks |
+| Circle create/edit/delete · connection circle assignment | `manageConnections`; own circles only, edited unilaterally | — |
 | Member invites | `manageHousehold` | — |
 | Household invites (found a new household) | `manageConnections` + the instance-admin growth toggle | accepted invite mints the ACTIVE first edge |
-| Connection request/respond/setGrants/sever | `manageConnections`; grants edited unilaterally, own side only | — |
-| Pantry create / shared flag | `manageHousehold`, own household | — |
+| Connection request/respond/assign/sever | `manageConnections`; each side assigns its own circle unilaterally | — |
+| Pantry create / visibility | `manageHousehold`, own household | — |
+| Profile card, notification prefs, MFA enrollment | the user themself (account-scoped, no capability) | — |
 | Instance settings (growth toggle) / admin usage view | instance admin (`User.isInstanceAdmin`) | sees operational usage only, never content |
 
 ## Immutability once referenced

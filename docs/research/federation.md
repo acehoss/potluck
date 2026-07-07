@@ -1,5 +1,11 @@
 # Federation protocol survey (2026-07-03)
 
+> **Historical research snapshot.** Federation itself is still deferred (nothing here is
+> contradicted by shipped work), but the section-(c) "do-now" checklist is no longer a
+> live TODO — items 2 (username/slug addressing) and 4 (first-class `Connection` rows
+> gating authz) shipped in Round 1/Phase 2, and the remaining items are honored design
+> constraints.
+
 Research for the mutual-aid rework's federation branch (see ../REWORK.md §E). Question:
 which existing federation protocol (if any) fits the model — households as nodes, private
 pairwise connections with capabilities (pantry browsing + at-cost orders on an append-only

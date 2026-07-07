@@ -2,10 +2,13 @@
 
 **Status:** Living spec. v1 scope agreed 2026-07-02 (as "Private Coop"); the mutual-aid
 network rework ("Potluck") was designed 2026-07-03 — see [docs/REWORK.md](./docs/REWORK.md)
-for the full decision log — and its **Round 1 (network core) shipped 2026-07-04**. This
-document was rewritten then and describes the running app. Rounds 2–4 (needs &
-surpluses → recipes → planner/shopping) are designed but not built; their contracts live
-in REWORK.md until they ship.
+for the full decision log. Everything below is **built and shipped**: Round 1 (network
+core) and Rounds 2–4 (needs & surpluses · recipes · planner/shopping) 2026-07-04, Phase 2
+(workflow IA · circles · contact layer) 2026-07-04/05, Phase 3 (email · notifications ·
+auth flows · deep links) 2026-07-05, and Rounds Q–T (navigation model, recipe read/Cook
+views, plan→shopping tracking, circle-picker invites) 2026-07-06. This document describes
+the running app; per-round build records live in [PLAN.md](./PLAN.md). Last synced
+2026-07-07.
 **History:** The 2025 attempts live in branches `archive/2025-main` and `archive/2025-take2` — reference only. Their `local_only/design_discussions/RAW_REQUIREMENTS.md` is the ancestral spec; this document is its deliberate reduction. Do not import design docs or code patterns from the archive branches without scrutiny.
 
 ## 1. What this is
@@ -25,8 +28,8 @@ outgrows it, we'll extend a working system rather than pre-build for scale.
 
 1. **At cost, always.** No markup, no fees except explicit loan fees (which default to $0).
 2. **Orders are at-cost; shares are gifts.** Money moves only through the order/loan/
-   settlement machinery. Needs-and-surpluses sharing (Round 2) never touches the ledger —
-   a tracked handoff records a $0 transfer for the audit trail, nothing more.
+   settlement machinery. Needs-and-surpluses sharing never touches the ledger — a tracked
+   handoff records a $0 transfer for the audit trail, nothing more.
 3. **Transparent within your connections' granted scope.** Each household unilaterally
    controls what every connection may see and do with *its* resources (the resource owner
    is authoritative). A pair's ledger and balance are visible only to its two households —
@@ -55,16 +58,17 @@ registration (ever) · friend-of-friend discovery or network browsing (connectio
 target an exact household handle exchanged out-of-band) · quota machinery for shared
 operator resources (trust + the admin usage view instead).
 
-**Designed but not yet built** (contracts in REWORK.md): needs & surpluses with
-hop-limited resharing (Round 2) · recipes (Round 3) · meal planner + shopping lists
-(Round 4) · the notifications round (push/email/in-app panel/prefs — order lifecycle,
-share/claim, and connection events accumulate as triggers until then) · federation
-build-out (custom Coop↔Coop protocol target recorded in docs/research/federation.md).
+**Designed but not yet built** (contracts in REWORK.md): federation build-out (custom
+Coop↔Coop protocol target recorded in docs/research/federation.md) · minors & the
+waiting-on-an-adult handoff state (REWORK P6/N11). The rest of the deferred backlog
+(staples/stores/menus/queue, connection-scoped image serving, …) lives in REWORK.md.
 
-Doors deliberately left open (schema/design should not preclude): per-connection pantry/
-item lists · per-invite capability presets · per-action acting-household override ·
-shared write-off offers · label printing · SKU merging · BYO extraction key and admin
-caps · a read-only ActivityPub surface for public surplus feeds.
+Doors deliberately left open (schema/design should not preclude): per-action
+acting-household override · shared write-off offers · label printing · SKU merging ·
+BYO extraction key and admin caps · a read-only ActivityPub surface for public surplus
+feeds. (Two earlier doors have since shipped: circle-scoped pantry/item lists arrived
+with Phase 2's SELECT visibility, and per-invite grant presets arrived with Round T's
+circle-picker household invite.)
 
 ## 4. Domain model
 
@@ -85,25 +89,33 @@ caps · a read-only ActivityPub surface for public surplus feeds.
   lendBorrow, postShares, editRecipes, settleMoney). Named roles (Owner/Adult/Teen/Child)
   are UI presets over the flags, individually tunable. Every authz check in code is a
   typed capability test. Every household keeps ≥1 manageHousehold holder.
+- **Circle** — a household's named grant bundle (Phase 2; replaces per-connection grant
+  sets). A circle carries the six directional grant flags — pantry, lending, recipes,
+  shareTo, shareFrom, reshare. Three preset circles are seeded per household — Neighbors
+  (shares only), Friends (+pantry/lending/recipes), Family (everything, incl. onward
+  resharing) — renameable, tunable, and extendable. Circles also scope visibility:
+  pantries, items, and member cards are `ALL` / `SELECT[circles]` / `PRIVATE`.
 - **Connection** — a pairwise household↔household edge, `PENDING → ACTIVE → SEVERED`
-  (severing is unilateral). Carries **two directional grant sets** (pantry, lending,
-  recipes, shareTo, shareFrom, reshare): each side controls what the *other* may do with
-  its resources and may tighten at any time without consent. Presets: Neighbor
-  (shares only), Friend (+pantry/lending/recipes), Family (everything). Severing blocks
-  new activity immediately (open orders auto-cancel, reservations release); active loans
-  run to return; ledger history and the net **survive forever** and settlement still
-  works. Missing visibility reads as 404 — existence never leaks; missing capability on
-  a visible thing is 403.
+  (severing is unilateral). Grants do **not** live on the edge: each side assigns the
+  *other* household into one of **its own circles**, and that circle's flags are what the
+  other may do with its resources — re-assignable at any time without consent (the
+  resource owner is authoritative). Severing blocks new activity immediately (open orders
+  auto-cancel, reservations release); active loans run to return; ledger history and the
+  net **survive forever** and settlement still works. Missing visibility reads as 404 —
+  existence never leaks; missing capability on a visible thing is 403.
 - **Invite** — single-use, 7-day. Two kinds: **member** (join my household; a signed-in
   user accepting one gains an additional membership) and **household** (found a NEW
-  household whose first connection edge is the inviter's — how instances grow). The
+  household whose first connection edge is the inviter's — how instances grow; the
+  inviter picks the circle the newcomer lands in, grants snapshotted at mint). The
   instance admin may restrict household invites to admin-only.
 
 **Goods and money (mechanics unchanged from v1 — blueprint 01 is authoritative):**
 
-- **Pantry** — a storage location owned by a household, with a **shared/private flag**:
-  a private pantry is invisible to every connection; a shared one is visible identically
-  to every pantry-granted connection. Owner household owns every lot in it.
+- **Pantry** — a storage location owned by a household, with circle-scoped
+  **visibility** (`ALL` / `SELECT[circles]` / `PRIVATE`): private is invisible to every
+  connection; SELECT is visible only to connections sitting in the chosen circles; a
+  visible pantry still requires the viewer's circle to carry the pantry grant. Owner
+  household owns every lot in it.
 - **Product** — **per-household catalog** (name, optional UPC, derived photo). Products
   belong to the household whose pantry their lots live in; search and UPC matching are
   scoped to the acting household; browsing a connected pantry shows the *owner's* names.
@@ -119,8 +131,8 @@ caps · a read-only ActivityPub surface for public surplus feeds.
   (lock) → READY → PICKED_UP / CANCELED`. Requires placeOrders; cross-household
   submission (and any edit to a submitted cross-household order) requires **spend**; the
   owner side requires **fulfill**; browsing/ordering a connected pantry requires its
-  owner's pantry grant + the pantry being shared — re-verified at pickup, where the money
-  posts. Availability everywhere = remaining − reserved.
+  owner's circle-granted pantry access + the pantry being visible to you — re-verified at
+  pickup, where the money posts. Availability everywhere = remaining − reserved.
 - **Take** — the immutable record created at pickup, one per order line, carrying the
   requester household as a snapshot (never re-derived from the user, whose memberships
   can change). Cross-household → TAKE ledger entry at `quantity × frozen unit cost`;
@@ -128,18 +140,47 @@ caps · a read-only ActivityPub surface for public surplus feeds.
 - **Ledger** — append-only, pairwise, relation-free entries; balances displayed net per
   pair. Settlements and manual adjustments require **settleMoney** and a connection edge
   in any status (severed pairs stay settleable; unconnected households are unreachable).
-- **Item / Loan** — durable equipment with a shared/private flag; borrowing a connected
-  household's shared item rides the lending grant (+spend when a fee posts). The loan
-  snapshots the borrowing household. Fee posts at checkout, at the snapshot amount.
+- **Item / Loan** — durable equipment with the same circle-scoped visibility as pantries;
+  borrowing a connected household's visible item rides the lending grant (+spend when a
+  fee posts). The loan snapshots the borrowing household. Fee posts at checkout, at the
+  snapshot amount.
 - **Adjustment** — recount / write-off (adjustInventory, owner household only); never
   touches the ledger in v1.
 - **InstanceSettings** — singleton: the household-invite growth toggle (more later).
 
+**Sharing, recipes, planning (Rounds 2–4 — connection-scoped, zero new money paths):**
+
+- **SharePost / ShareClaim** — needs & surpluses. Claiming a surplus hands off as a
+  **$0 gift take** (`Take.shareClaimId`; no ledger entry — the one sanctioned
+  cross-household no-money take, blueprint-01 invariant 4). Reshares are anonymized and
+  hop-limited, riding the reshare grant.
+- **Recipe / RecipeIngredient / IngredientLink** — browse-live/fork-on-save over the
+  recipes grant; paste-to-parse and SSRF-guarded URL import (with server-side photo
+  download); a read view plus a step-by-step **Cook view** (scaling, wake-lock); a
+  learned ingredient→product link map.
+- **PlanEntry / ShoppingItem / CategoryAssignment** — week planner plus a persistent
+  shopping list that is never silently pruned; conservative merging; "Add from Plan"
+  (idempotent, per-entry or whole-week); learned categories; cross-pantry availability
+  badges feed the existing order flow.
+
+**Contact & notifications (Phases 2–3):**
+
+- **Contact layer** — member profiles (photo/phone/bio) and household address + pickup
+  notes, shown per `Membership.visibility` circles; member cards offer tel:/sms: and
+  "Save contact to device" (vCard). An active connection is the gate.
+- **NotificationPreference** — a per-user matrix: categories pickups/circle/ledger ×
+  push+email, digest cadence (daily default / weekly / off), show-details toggle.
+  Content rule: category-only — a notification stamps your own household, never a
+  counterparty name/amount/address. Email splits into **transactional** (never carries
+  unsubscribe) and **subscription** (RFC-8058 one-click `/unsub`). Deep links are
+  navigation-only HMAC tokens: `/go` switches the acting household and routes; email
+  links route-then-login-to-act, never authenticate.
+
 ## 5. Key flows
 
-**Connect:** get a household's handle out-of-band → More → Connections → request with a
-grant preset → they accept with their own preset → each side tunes its grants (or severs)
-unilaterally, any time.
+**Connect:** get a household's handle out-of-band → More → Connections → request, picking
+which of **your** circles they sit in → they accept, picking theirs → either side
+re-assigns the circle (or severs) unilaterally, any time.
 
 **Onboard:** a member invite adds a person to your household (new account, or a second
 membership for an existing one). A household invite founds a new household — named by the
@@ -174,7 +215,12 @@ screen re-scopes.
   per-account, and per-IP), invite-token registration. Identity is
   username-per-instance (`[a-z0-9_-]{3,30}`); email required but not identity. The
   acting household rides its own long-lived cookie, validated against live memberships
-  on every request.
+  on every request. Phase 3 added email verification, enumeration-safe session-revoking
+  password reset (no TOTP bypass), and MFA: TOTP (AES-256-GCM-encrypted secret + backup
+  codes) and rate-limited emailed codes; instance admins must hold TOTP.
+- **Email:** swappable SMTP transport behind two pipelines (transactional vs
+  subscription); `MAIL_MODE=capture` is the default outside production — a fail-closed
+  dev filter and a `CapturedEmail` audit table keep dev sends off the wire.
 - **Money:** USD, integer cents, no floats. Every multi-write money operation goes
   through `dbTransaction` (the app-level lock — never raw `$transaction`); every
   money-writing mutation carries a `clientKey` for idempotency; the ledger is
@@ -184,8 +230,9 @@ screen re-scopes.
 - **Receipt extraction:** multimodal LLM API, operator's key, advisory only, degrades to
   manual entry. The admin usage view keeps per-household consumption visible (trust +
   conversation, not quotas).
-- **PWA:** installable, mobile-first, camera barcode scanning, web push (two events in
-  v1: settlement recorded, manual adjustment posted).
+- **PWA:** installable, mobile-first, camera barcode scanning, web push behind the
+  per-user notification matrix (pickups/circle/ledger categories), plus email and a
+  daily/weekly digest driven by an in-process scheduler.
 - **Testing:** Playwright e2e against the real compose stack, both engines
   (chromium-light + webkit-dark), is the definition of done. Gates surface playwright's
   real exit code. Unit tests where logic warrants them — no coverage quotas.
@@ -194,8 +241,11 @@ screen re-scopes.
 
 v1 shipped 2026-07-02 in seven vertical slices (skeleton → receiving → takes/ledger →
 settlements/adjustments → VLM extraction → lending → PWA), then two iteration rounds
-(receiving tweaks; orders & reservations). The Potluck rework runs in four rounds
-([docs/REWORK.md](./docs/REWORK.md) §Round plan): **Round 1 — network core — shipped
-2026-07-04** (schema/data migration, capability × grant authz, connection management,
-onboarding + admin, rebrand). Rounds 2–4: needs & surpluses → recipes → planner/shopping.
-Progress notes live in [PLAN.md](./PLAN.md); no external ticketing.
+(receiving tweaks; orders & reservations). The Potluck rework ran in four rounds
+([docs/REWORK.md](./docs/REWORK.md) §Round plan), all shipped 2026-07-03/04: network
+core → needs & surpluses → recipes → planner/shopping. Then **Phase 2** (2026-07-04/05:
+workflow IA with Neighbors·Plan·Home·More tabs, circles, contact layer; REWORK P1–P7),
+**Phase 3** (2026-07-05: mail, auth flows + MFA, notification matrix + digest, deep
+links; REWORK N1–N11), and **Rounds Q–T** (2026-07-06: navigation model, recipe
+read/Cook views, plan→shopping tracking, circle-picker invites). Progress notes live in
+[PLAN.md](./PLAN.md); no external ticketing.

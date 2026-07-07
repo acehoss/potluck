@@ -13,6 +13,17 @@ direction stated below.
 > as-built behavior + gates: PLAN.md's "Round 1 slice N" sections (pointer at the foot of
 > this file).
 
+> **After the Round-1 freeze (dated pointers — PLAN.md/REWORK.md own the detail).**
+> **Rework Rounds 2–4 + Phase 2 (2026-07-04/05):** shares · recipes · planner+shopping,
+> then the workflow IA flip (tabs Neighbors · Plan · Home · More), **circles** as the
+> entire permissions model, and the contact layer — REWORK.md "Phase 2" (P1–P7).
+> **Phase 3 (2026-07-05):** mail transport, email verification + password reset + MFA,
+> the notification preference matrix + digest, RFC-8058 `/unsub`, nav-only `/go` deep
+> links — REWORK.md "Phase 3" (N1–N11); decision 9 below is amended accordingly.
+> **Rounds Q–T (2026-07-06):** device-feedback polish — history-aware back navigation,
+> recipe read + Cook views, URL-import photo download, plan↔shopping wiring, dvh tab
+> bar, contact vCard — PLAN.md's per-round records (newest first).
+
 ## Section index
 
 | File | Owns |
@@ -20,7 +31,7 @@ direction stated below.
 | `01-data-model.md` | Prisma models, money math (D1–D8), authz matrix, immutability rules, the 12 money invariants. **Authoritative for all money/lifecycle questions.** |
 | `02-ux-flows.md` | Navigation shell, every screen/sheet, tap budgets, per-slice Playwright anchors. Cites 01 for math/lifecycle. |
 | `03-design-system.md` | Semantic color tokens (light/dark via `prefers-color-scheme`), Tailwind v4 conventions, component recipes, verified WCAG contrast. |
-| `04-infra.md` | Image pipeline, barcode scanning, VLM extraction (modes: off/fixture/live), PWA/push, container/compose changes, env vars. |
+| `04-infra.md` | Image pipeline, barcode scanning, VLM extraction (modes: off/fixture/live), PWA/push, mail transport (+ capture mode), MFA/auth-flow infra, the notification layer + in-process digest scheduler, HMAC deep links, container/compose changes, env vars. |
 
 ## Ten load-bearing decisions
 
@@ -32,10 +43,21 @@ direction stated below.
 6. **Semantic tokens only (03):** Tailwind default palette deleted; `bg-surface`/`text-text` etc., dark mode is a token swap (never `dark:`), grep-enforced in CI.
 7. **Client-side image pipeline (04 §1):** canvas downscale to ≤2048px JPEG, multipart upload to a route handler (not Server Actions), authenticated image serving. No sharp, no native deps.
 8. **Extraction is advisory (04 §3):** Claude structured outputs behind `EXTRACTION_MODE=off|fixture|live`; failures degrade to manual entry, never block. Fixture mode keys on client-computed sha of the *original* file.
-9. **Push is minimal (02/04):** exactly two events — settlement recorded, manual ledger
-   adjustment. Recipients resolve via **Membership** rows with **per-user dedupe** (a person
-   who is a member of both pair households gets one push, not two; the acting user is
-   excluded) — no longer "all users of both households." No schedulers, no background jobs anywhere.
+9. **Notifications are a preference matrix (rewritten 2026-07-05, Phase 3; was "push is
+   minimal: exactly two events — settlement recorded, manual ledger adjustment — no
+   schedulers, no background jobs anywhere").** `notify()` (`src/server/push.ts` over
+   `src/server/notify/`) fans each event out per recipient across **three opt-out
+   categories × two channels** — pickups / circle / ledger × push + email (defaults:
+   pickups both ON, circle push-only, ledger all-OFF — money noise is opt-in). Content is
+   **category-only** (N4): stamped with the recipient's OWN household name, never a
+   counterparty name/$/address (the counterparty *name* only behind the per-user
+   `showDetails` opt-in). Recipients still resolve via **Membership** rows with per-user
+   dedupe + actor exclusion. Notification email rides the RFC-8058 one-click-unsubscribe
+   pipeline (`/unsub`). And one background job now exists: `src/instrumentation.ts` arms an
+   **in-process digest scheduler** at boot (a ~10-min `setInterval`, `unref`'d,
+   `DIGEST_SCHEDULER=off` falls back to the cron `run-digest` script) driving the per-user
+   daily/weekly digest, plus a boot-time orphan-image sweep — still no external cron/queue
+   infra.
 10. **Capability × grant authz (rewritten 2026-07-04; was "trust-but-gate: everyone sees
     everything, money writes household/creator-gated").** Authz is now two independent axes ×
     a visibility flag: **Membership capability flags** (11 — `src/server/capabilities.ts`;

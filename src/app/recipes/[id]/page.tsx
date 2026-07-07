@@ -3,9 +3,10 @@ import { getSessionUser } from '@/server/auth';
 import { RecipeDetail } from './recipe-detail';
 
 /**
- * Recipe detail — own recipe opens the editor, a shared one the read-only view.
- * Server shell: auth redirect; visibility (and the mine flag that picks the
- * view) is resolved in the recipe.get query.
+ * Recipe detail — the unified read view for own AND shared recipes (Round R);
+ * the editor lives at /recipes/[id]/edit. Server shell: auth redirect;
+ * visibility (and the mine flag that picks Edit vs. fork actions) is resolved
+ * in the recipe.get query.
  */
 export default async function RecipePage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser();

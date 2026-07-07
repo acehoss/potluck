@@ -408,8 +408,10 @@ export const shareRouter = router({
       });
       // Post-commit: notify every connected household that can SEE this new post
       // (poster's ACTIVE connections filtered by shareVisible — both directions).
-      // category circle (ambient neighborhood activity, default push/email OFF —
-      // it's the digest's home); generic content (N4). Skipped on clientKey replay.
+      // category circle (ambient neighborhood activity, default push ON /
+      // email OFF — the push lands while the leftovers are still good; the
+      // daily digest is the email path, see notify/defaults.ts); generic
+      // content (N4). Skipped on clientKey replay.
       if (result.created) {
         const poster = ctx.user.householdId;
         const conns = await db.connection.findMany({
