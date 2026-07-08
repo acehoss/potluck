@@ -29,7 +29,6 @@ const TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
 // Control chars (0x00–0x1f), space (0x20), and DEL (0x7f) — none belong in a
 // path we redirect to; a raw space/newline is an encoding or smuggling smell.
-// eslint-disable-next-line no-control-regex
 const CONTROL_OR_SPACE = /[\x00-\x20\x7f]/;
 
 function deeplinkKey(): Buffer {

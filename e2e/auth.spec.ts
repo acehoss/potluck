@@ -138,6 +138,7 @@ function codeFromEmail(textBody: string): string {
 /** POST a tRPC mutation on a context; return the raw {status, body} envelope. */
 async function rpc(ctx: APIRequestContext, proc: string, data: Record<string, unknown>) {
   const res = await ctx.post(`/api/trpc/${proc}`, { data });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- specs assert ad-hoc envelope shapes
   return { status: res.status(), body: (await res.json().catch(() => null)) as any };
 }
 

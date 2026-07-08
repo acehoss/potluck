@@ -214,7 +214,7 @@ test('CRUD + structure: title-only minimal (G1), ordered heading/item body, repl
   }
 });
 
-test('parseText assist (G4): structured lines, mixed + unicode quantities, heading + trailing directions', async ({}, testInfo) => {
+test('parseText assist (G4): structured lines, mixed + unicode quantities, heading + trailing directions', async () => {
   const aaron = await apiLogin('aaron');
 
   // A realistic paste: one ingredient block (with a colon heading and a unicode
@@ -419,7 +419,7 @@ test('ingredient links (G2): learned map resolves across recipes, per-viewer-hou
   }
 });
 
-test('importUrl SSRF surface (G4): every unsafe URL degrades to { status: "unavailable" }, no fetch', async ({}, testInfo) => {
+test('importUrl SSRF surface (G4): every unsafe URL degrades to { status: "unavailable" }, no fetch', async () => {
   const aaron = await apiLogin('aaron');
 
   // importUrl is advisory: the SSRF guard (safeImportUrl) rejects these BEFORE
