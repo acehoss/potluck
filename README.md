@@ -150,6 +150,10 @@ server {
     ssl_certificate     /etc/letsencrypt/live/coop.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/coop.example.com/privkey.pem;
 
+    # nginx's DEFAULT limit is 1m, which 413s photo (~1-3MB after client-side
+    # downscale) and PDF-attachment (<=20MiB) uploads before the app sees them.
+    client_max_body_size 25m;
+
     location / {
         proxy_pass         http://127.0.0.1:3000;
         proxy_set_header   Host $host;
@@ -161,7 +165,11 @@ server {
 
 `$proxy_add_x_forwarded_for` **appends** the real client IP to the right, which
 is exactly the hop the rate limiter trusts — never let the proxy pass a
-client-supplied `X-Forwarded-For` through unmodified.
+client-supplied `X-Forwarded-For` through unmodified. The
+`client_max_body_size 25m` line is load-bearing: without it nginx's 1MiB
+default rejects uploads with a bare 413 (the app's own caps are 8MiB for
+images, 20MiB for PDF attachments). Caddy needs no equivalent — it has no
+default body limit.
 
 ### 4. Rotate secrets
 

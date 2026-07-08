@@ -45,6 +45,11 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
 - **Gate — green**: tsc/eslint/lint:tokens clean, unit 216/216, full both-engine e2e on
   a rebuilt stack **376 passed / 2 flaky (retry-green, pre-existing) / 6 skipped / 0
   failed**.
+- **Deploy postscript (same day):** Aaron's production upload hit a bare **413** — the
+  README's nginx example never set `client_max_body_size`, and nginx's 1MiB default
+  rejects photo/PDF uploads at the proxy. Runbook example now carries
+  `client_max_body_size 25m` (app caps: 8MiB images / 20MiB attachments; Caddy has no
+  default limit, needs nothing).
 
 ## Media round — product/item galleries, attachments, linkified notes (2026-07-07)
 
