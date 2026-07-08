@@ -7,7 +7,7 @@ import { gotoStable, login, openHome } from './helpers';
  * CANCELED(release) lifecycle, proven against the real compose stack. The
  * lifecycle mutations are driven through the tRPC API (the requester/owner UI
  * arrives in Slices C/D); reservation is OBSERVED through the rendered pantry
- * availability (remainingCount − reservedCount) and the money through the
+ * availability (stock count − reserved count) and the money through the
  * ledger hero — both real browser reads.
  *
  * Both engines share one accumulating DB, so every balance/availability
@@ -36,7 +36,7 @@ async function openOwnPantry(page: Page) {
 async function receiveLot(
   page: Page,
   opts: { product: string; units: number; total: string; date?: string; existingProduct?: boolean },
-): Promise<{ restockId: string; pantryId: string; lotId: string }> {
+): Promise<{ restockId: string; pantryId: string; lotId: string; stockId: string }> {
   await openOwnPantry(page);
   await page.getByTestId('receive-fab').click();
   await page.getByLabel('Retailer').fill(`Orders-${RUN}`);
@@ -72,8 +72,8 @@ async function receiveLot(
   const got = await page.request.get(
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
-  const lotId = (await got.json()).result.data.lots[0].id as string;
-  return { restockId, pantryId: realPantryId, lotId };
+  const lot = (await got.json()).result.data.lots[0] as { id: string; stockId: string };
+  return { restockId, pantryId: realPantryId, lotId: lot.id, stockId: lot.stockId };
 }
 
 /** Signed net with the (single) counterparty, in cents, from /ledger's hero. */
@@ -469,7 +469,11 @@ test('open-order reservations block a below-reserved write-off/recount and a res
   const product = uniq('GuardGrain', P);
 
   await login(page, 'dana');
-  const { restockId, pantryId, lotId } = await receiveLot(page, { product, units: 5, total: '10.00' });
+  const { restockId, pantryId, lotId, stockId } = await receiveLot(page, {
+    product,
+    units: 5,
+    total: '10.00',
+  });
 
   const ctx = await browser.newContext({ baseURL: BASE });
   const aaron = await ctx.newPage();
@@ -483,17 +487,17 @@ test('open-order reservations block a below-reserved write-off/recount and a res
 
     // Owner can't drop physical stock below the 3 reserved units.
     const wo = await page.request.post('/api/trpc/adjustment.writeOff', {
-      data: { lotId, count: 3, reason: 'spoiled', clientKey: clientKey('wo1') },
+      data: { stockId, count: 3, reason: 'spoiled', clientKey: clientKey('wo1') },
     });
     expect(wo.status(), 'write-off below reserved is rejected').toBe(409);
     const rc = await page.request.post('/api/trpc/adjustment.recount', {
-      data: { lotId, countAfter: 1, clientKey: clientKey('rc1') },
+      data: { stockId, countAfter: 1, clientKey: clientKey('rc1') },
     });
     expect(rc.status(), 'recount below reserved is rejected').toBe(409);
 
     // A write-off within the free stock (2) is allowed.
     const woOk = await page.request.post('/api/trpc/adjustment.writeOff', {
-      data: { lotId, count: 2, reason: 'spoiled', clientKey: clientKey('wo2') },
+      data: { stockId, count: 2, reason: 'spoiled', clientKey: clientKey('wo2') },
     });
     expect(woOk.ok()).toBe(true);
 

@@ -79,8 +79,8 @@ async function receiveLotApi(page: Page, retailer: string) {
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
   expect(got.ok()).toBe(true);
-  const lots = (await got.json()).result.data.lots as { id: string }[];
-  return { pantryId, restockId, lotId: lots[0].id };
+  const lots = (await got.json()).result.data.lots as { id: string; stockId: string }[];
+  return { pantryId, restockId, lotId: lots[0].id, stockId: lots[0].stockId };
 }
 
 test('multi-membership: the switcher re-scopes the whole app; single-membership users never see it', async ({
@@ -250,7 +250,7 @@ test('Teen capabilities: draft yes, cross-household submit no; money and invento
   await login(page, 'aaron');
   const own = await receiveLotApi(page, uniq('Teen Recount', P));
   const recount = await rpc(theo, 'adjustment.recount', {
-    lotId: own.lotId,
+    stockId: own.stockId,
     countAfter: 1,
   });
   expect(recount.status).toBe(403);

@@ -18,6 +18,7 @@ import {
 import { imageFileExists, isStoredImagePath } from '../images';
 import { notify } from '../push';
 import { apportionFifo, defaultExpiresAt, MAX_EXPIRY_MS } from '../shares';
+import { availableOf, consumeFreeStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -112,30 +113,41 @@ async function fulfillSubtree(tx: Prisma.TransactionClient, postId: string) {
 /**
  * The $0 gift transfer for a confirmed SURPLUS claim (C1). Draws `claim.quantity`
  * (or, for an uncounted post, everything available) FIFO across the origin's
- * linked lots by purchase date, decrementing remainingCount ONLY (reservations
+ * linked placements by purchase date, decrementing free stock only (reservations
  * stay honored). Each touched lot records a $0 Take with shareClaimId — NEVER a
  * LedgerEntry. A shortfall after exhausting the lots throws 409, rolling back
  * the whole confirm.
  */
 async function giftFromLots(
   tx: Prisma.TransactionClient,
-  postLots: { lotId: string; lot: { restock: { purchasedAt: Date } } }[],
+  postLots: { lotId: string; stockId: string; lot: { restock: { purchasedAt: Date } } }[],
   claim: { id: string; createdById: string; householdId: string; quantity: number | null },
   clientKey: string | null,
 ): Promise<number> {
   const ordered = [...postLots].sort(
     (a, b) => a.lot.restock.purchasedAt.getTime() - b.lot.restock.purchasedAt.getTime(),
   );
-  const fresh: { id: string; remainingCount: number; reservedCount: number }[] = [];
+  const fresh: {
+    id: string;
+    lotId: string;
+    pantryId: string;
+    count: number;
+    reservedCount: number;
+  }[] = [];
   for (const pl of ordered) {
-    fresh.push(
-      await tx.lot.findUniqueOrThrow({
-        where: { id: pl.lotId },
-        select: { id: true, remainingCount: true, reservedCount: true },
-      }),
-    );
+    const stock = await tx.stock.findUniqueOrThrow({
+      where: { id: pl.stockId },
+      select: { id: true, lotId: true, pantryId: true, count: true, reservedCount: true },
+    });
+    if (stock.lotId !== pl.lotId) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Share stock no longer matches its lot.',
+      });
+    }
+    fresh.push(stock);
   }
-  const avails = fresh.map((l) => Math.max(0, l.remainingCount - l.reservedCount));
+  const avails = fresh.map((s) => Math.max(0, availableOf(s)));
   const totalAvail = avails.reduce((s, a) => s + a, 0);
   const need = claim.quantity ?? totalAvail; // whole-thing for an uncounted post
   const taken = apportionFifo(avails, need);
@@ -146,23 +158,18 @@ async function giftFromLots(
   for (let i = 0; i < fresh.length; i++) {
     const qty = taken[i];
     if (qty <= 0) continue;
-    const l = fresh[i];
-    const hit = await tx.lot.updateMany({
-      where: { id: l.id, remainingCount: { gte: l.reservedCount + qty } },
-      data: { remainingCount: { decrement: qty } },
-    });
-    if (hit.count === 0) {
-      throw new TRPCError({ code: 'CONFLICT', message: 'The linked lots no longer cover this claim.' });
-    }
+    const s = fresh[i];
+    await consumeFreeStock(tx, s.id, qty);
     await tx.take.create({
       data: {
-        lotId: l.id,
+        lotId: s.lotId,
         takerId: claim.createdById,
         householdId: claim.householdId, // snapshot recipient household (relation-free, like ledger)
+        pantryId: s.pantryId,
         quantity: qty,
         costCents: 0, // gifts are free — no ledger entry, ever (C1)
         shareClaimId: claim.id,
-        clientKey: clientKey ? `${clientKey}:gift:${l.id}` : null,
+        clientKey: clientKey ? `${clientKey}:gift:${s.id}` : null,
       },
     });
     gifted += qty;
@@ -199,7 +206,9 @@ async function loadOwnShareableLot(
   const lot = await tx.lot.findUnique({
     where: { id: lotId },
     include: {
-      restock: { select: { status: true, voidedAt: true, pantry: { select: { householdId: true } } } },
+      restock: {
+        select: { pantryId: true, status: true, voidedAt: true, pantry: { select: { householdId: true } } },
+      },
     },
   });
   if (
@@ -213,6 +222,49 @@ async function loadOwnShareableLot(
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not available to share.' });
   }
   return lot;
+}
+
+async function loadOwnShareableStock(
+  tx: Prisma.TransactionClient,
+  user: SessionUser,
+  stockId: string,
+) {
+  const stock = await tx.stock.findUnique({
+    where: { id: stockId },
+    include: {
+      pantry: { select: { householdId: true } },
+      lot: {
+        include: {
+          restock: { select: { status: true, voidedAt: true } },
+        },
+      },
+    },
+  });
+  if (
+    !stock ||
+    stock.pantry.householdId !== user.householdId ||
+    stock.lot.restock.status !== 'FINALIZED' ||
+    stock.lot.restock.voidedAt !== null ||
+    stock.lot.excluded ||
+    stock.lot.unitCostCents === null
+  ) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not available to share.' });
+  }
+  return { id: stock.id, lotId: stock.lotId };
+}
+
+async function resolveOwnShareableLotStock(
+  tx: Prisma.TransactionClient,
+  user: SessionUser,
+  lotId: string,
+) {
+  const lot = await loadOwnShareableLot(tx, user, lotId);
+  const stock = await tx.stock.findUnique({
+    where: { lotId_pantryId: { lotId, pantryId: lot.restock.pantryId } },
+    select: { id: true, lotId: true },
+  });
+  if (!stock) throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not available to share.' });
+  return stock;
 }
 
 /** Load an OWN circle by id, else 404 (same convention as connection/circle routers). */
@@ -373,6 +425,7 @@ export const shareRouter = router({
         unit: z.string().trim().min(1).max(20).optional(),
         expiresAt: z.string().min(1).max(40).optional(),
         hopsAllowance: z.number().int().min(0).max(HOP_MAX).default(1),
+        stockIds: z.array(z.string().min(1)).max(20).optional(),
         lotIds: z.array(z.string().min(1)).max(20).optional(),
         circleIds: circleIdsSchema,
         photoPath: z.string().min(1).max(300).optional(),
@@ -384,7 +437,7 @@ export const shareRouter = router({
       if (input.unit && input.quantity == null) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'A unit needs a quantity.' });
       }
-      if (input.lotIds?.length && input.type !== 'SURPLUS') {
+      if ((input.lotIds?.length || input.stockIds?.length) && input.type !== 'SURPLUS') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only a surplus can offer stock.' });
       }
       const now = new Date();
@@ -412,8 +465,27 @@ export const shareRouter = router({
           if (prior) return { id: prior.id, created: false, visibility: prior.visibility, scopeCircleIds: [] };
         }
         if (input.photoPath) await assertFreshShareImage(tx, input.photoPath);
-        const lotIds = input.type === 'SURPLUS' ? input.lotIds ?? [] : [];
-        for (const lotId of lotIds) await loadOwnShareableLot(tx, ctx.user, lotId);
+        // Dedupe by PLACEMENT (the unique key on SharePostLot): a lot sitting
+        // in two pantries is two distinct offers, but the same shelf selected
+        // twice (or once as stockId and once via the legacy lotId form) is one.
+        const stockRefs: { id: string; lotId: string }[] = [];
+        const seenStockIds = new Set<string>();
+        if (input.type === 'SURPLUS') {
+          for (const stockId of input.stockIds ?? []) {
+            const stock = await loadOwnShareableStock(tx, ctx.user, stockId);
+            if (!seenStockIds.has(stock.id)) {
+              seenStockIds.add(stock.id);
+              stockRefs.push(stock);
+            }
+          }
+          for (const lotId of input.lotIds ?? []) {
+            const stock = await resolveOwnShareableLotStock(tx, ctx.user, lotId);
+            if (!seenStockIds.has(stock.id)) {
+              seenStockIds.add(stock.id);
+              stockRefs.push(stock);
+            }
+          }
+        }
         for (const circleId of scopeCircleIds) {
           await requireOwnCircle(tx, ctx.user.householdId, circleId);
         }
@@ -436,8 +508,10 @@ export const shareRouter = router({
             hopsRemaining: input.hopsAllowance,
           },
         });
-        for (const lotId of lotIds) {
-          await tx.sharePostLot.create({ data: { postId: post.id, lotId } });
+        for (const stock of stockRefs) {
+          await tx.sharePostLot.create({
+            data: { postId: post.id, lotId: stock.lotId, stockId: stock.id },
+          });
         }
         for (const circleId of scopeCircleIds) {
           await tx.sharePostCircle.create({ data: { sharePostId: post.id, circleId } });
@@ -668,7 +742,13 @@ export const shareRouter = router({
         if (!claim) throw new TRPCError({ code: 'NOT_FOUND', message: 'Claim not found.' });
         const post = await tx.sharePost.findUnique({
           where: { id: claim.postId },
-          include: { lots: { include: { lot: { select: { restock: { select: { purchasedAt: true } } } } } } },
+          include: {
+            lots: {
+              include: {
+                lot: { select: { restock: { select: { purchasedAt: true } } } },
+              },
+            },
+          },
         });
         if (!post) throw new TRPCError({ code: 'NOT_FOUND', message: 'Post not found.' });
         // The claim's post must belong to the acting household (404/403 convention).

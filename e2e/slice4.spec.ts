@@ -32,7 +32,7 @@ async function openOwnPantry(page: Page) {
 
 /**
  * Receive one product into the signed-in user's own pantry (photos skipped)
- * and return the restock id, code, and first lot id.
+ * and return the restock id, code, first lot id, and placement id.
  */
 async function receiveLot(
   page: Page,
@@ -69,8 +69,8 @@ async function receiveLot(
   const got = await page.request.get(
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
-  const lotId = (await got.json()).result.data.lots[0].id as string;
-  return { restockId, code, lotId, pantryId };
+  const lot = (await got.json()).result.data.lots[0] as { id: string; stockId: string };
+  return { restockId, code, lotId: lot.id, stockId: lot.stockId, pantryId };
 }
 
 /**
@@ -218,7 +218,7 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
   const product = uniq('Recount Peas', P);
 
   await login(page, 'aaron');
-  const { lotId, code, pantryId } = await receiveLot(page, { product, units: 5, total: '5.00' });
+  const { stockId, code, pantryId } = await receiveLot(page, { product, units: 5, total: '5.00' });
   const before = await netCents(page);
   await openOwnPantry(page);
   const row = page.getByTestId('product-row').filter({ hasText: product });
@@ -261,7 +261,7 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
   const dana = await danaContext.newPage();
   await login(dana, 'dana');
   const foreign = await dana.request.post('/api/trpc/adjustment.recount', {
-    data: { lotId, countAfter: 0 },
+    data: { stockId, countAfter: 0 },
   });
   expect(foreign.status()).toBe(403);
   // Dana browses Heise's pantry by its (visibility-gated) URL — the Round-E IA
@@ -277,7 +277,7 @@ test('recount fixes drift up and down, is owner-only, and never touches the ledg
 
   // Bad counts are rejected before any write.
   const negative = await page.request.post('/api/trpc/adjustment.recount', {
-    data: { lotId, countAfter: -1 },
+    data: { stockId, countAfter: -1 },
   });
   expect(negative.status()).toBe(400);
 });
@@ -289,7 +289,7 @@ test('write-off requires a reason, decrements, and the owner eats the cost', asy
   const product = uniq('Writeoff Salsa', P);
 
   await login(page, 'aaron');
-  const { lotId, code } = await receiveLot(page, { product, units: 4, total: '8.00' });
+  const { stockId, code } = await receiveLot(page, { product, units: 4, total: '8.00' });
   const before = await netCents(page);
   await openOwnPantry(page);
   const row = page.getByTestId('product-row').filter({ hasText: product });
@@ -322,19 +322,19 @@ test('write-off requires a reason, decrements, and the owner eats the cost', asy
 
   // Reason is required; counts are guarded (0 → 400, > remaining → 409).
   const noReason = await page.request.post('/api/trpc/adjustment.writeOff', {
-    data: { lotId, count: 1 },
+    data: { stockId, count: 1 },
   });
   expect(noReason.status()).toBe(400);
   const blankReason = await page.request.post('/api/trpc/adjustment.writeOff', {
-    data: { lotId, count: 1, reason: '   ' },
+    data: { stockId, count: 1, reason: '   ' },
   });
   expect(blankReason.status()).toBe(400);
   const zero = await page.request.post('/api/trpc/adjustment.writeOff', {
-    data: { lotId, count: 0, reason: 'Expired' },
+    data: { stockId, count: 0, reason: 'Expired' },
   });
   expect(zero.status()).toBe(400);
   const tooMany = await page.request.post('/api/trpc/adjustment.writeOff', {
-    data: { lotId, count: 99, reason: 'Expired' },
+    data: { stockId, count: 99, reason: 'Expired' },
   });
   expect(tooMany.status()).toBe(409);
 });
@@ -532,7 +532,7 @@ test('settle, adjust, and write-off replays with the same clientKey post once', 
   const product = uniq('Idem Yogurt', P);
 
   await login(page, 'aaron');
-  const { restockId, lotId } = await receiveLot(page, { product, units: 4, total: '4.00' });
+  const { restockId, stockId } = await receiveLot(page, { product, units: 4, total: '4.00' });
   const got = await page.request.get(
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
@@ -590,7 +590,7 @@ test('settle, adjust, and write-off replays with the same clientKey post once', 
   // corrupt inventory: the replay returns the original adjustment and the
   // lot decrements once (4 → 3, not 2).
   const writeOffBody = {
-    lotId,
+    stockId,
     count: 1,
     reason: 'Expired',
     clientKey: `idem-writeoff-${P}-${RUN}`,
@@ -619,9 +619,9 @@ test('recount and write-off are rejected while the restock is a draft', async ({
   const P = testInfo.project.name;
   const product = uniq('Draft Gate Beans', P);
 
-  // A draft restock with one line: its lot exists but is not adjustable —
-  // finalize will overwrite remainingCount, so adjustments against it would
-  // record counts that never described the shelf (invariant 9).
+  // A draft restock with one line has no stock placement yet, so adjustments
+  // cannot address it or record counts that never described the shelf
+  // (invariant 9).
   await login(page, 'aaron');
   await openOwnPantry(page);
   await page.getByTestId('receive-fab').click();
@@ -639,16 +639,16 @@ test('recount and write-off are rejected while the restock is a draft', async ({
   const got = await page.request.get(
     `/api/trpc/restock.get?input=${encodeURIComponent(JSON.stringify({ id: restockId }))}`,
   );
-  const lotId = (await got.json()).result.data.lots[0].id as string;
+  const draftLotId = (await got.json()).result.data.lots[0].id as string;
 
   const recount = await page.request.post('/api/trpc/adjustment.recount', {
-    data: { lotId, countAfter: 1 },
+    data: { stockId: draftLotId, countAfter: 1 },
   });
-  expect(recount.status()).toBe(412);
+  expect(recount.status()).toBe(404);
   const writeOff = await page.request.post('/api/trpc/adjustment.writeOff', {
-    data: { lotId, count: 1, reason: 'Expired' },
+    data: { stockId: draftLotId, count: 1, reason: 'Expired' },
   });
-  expect(writeOff.status()).toBe(412);
+  expect(writeOff.status()).toBe(404);
 
   // Clean up so the draft doesn't linger in later runs' resume banners.
   const del = await page.request.post('/api/trpc/restock.deleteDraft', { data: { restockId } });

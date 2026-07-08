@@ -2,13 +2,14 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { requireCapability } from '../authz';
 import { dbTransaction } from '../db';
+import { restoreStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 // The take is now the record of an ORDER pickup (a Take + its TAKE ledger entry
 // are created inside order.pickup — the only path that hands goods over now that
 // "everything is a request"). There is no instant-take mutation: a stand-alone
-// take.create guarded only on remainingCount would oversell units already held
-// by an open order's reservation (it ignored reservedCount). What survives here
+// take.create guarded only on physical count would oversell units already held
+// by an open order's reservation. What survives here
 // is undo — the append-only return path for a take, reachable from the restock
 // detail (own-household takes) and the ledger detail (cross-household).
 export const takeRouter = router({
@@ -46,10 +47,17 @@ export const takeRouter = router({
           throw new TRPCError({ code: 'CONFLICT', message: 'Already undone.' });
         }
 
-        await tx.lot.update({
-          where: { id: take.lotId },
-          data: { remainingCount: { increment: take.quantity } },
+        const stock = await tx.stock.findUnique({
+          where: { lotId_pantryId: { lotId: take.lotId, pantryId: take.pantryId } },
+          select: { id: true },
         });
+        if (!stock) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Original stock placement is missing.',
+          });
+        }
+        await restoreStock(tx, stock.id, take.quantity);
 
         const entry = await tx.ledgerEntry.findUnique({ where: { takeId: take.id } });
         if (entry) {

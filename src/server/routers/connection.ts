@@ -4,6 +4,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import { circleToGrantSet, getConnection, grantsFrom, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
 import { notify } from '../push';
+import { releaseStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -62,10 +63,7 @@ async function cancelOpenOrdersAcross(
     });
     if (moved.count === 0) continue;
     for (const line of order.lines) {
-      await tx.lot.updateMany({
-        where: { id: line.lotId, reservedCount: { gte: line.quantity } },
-        data: { reservedCount: { decrement: line.quantity } },
-      });
+      await releaseStock(tx, line.stockId, line.quantity);
     }
   }
   return open.length;

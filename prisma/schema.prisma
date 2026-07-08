@@ -485,6 +485,7 @@ model Pantry {
   restocks  Restock[]
   orders    Order[]
   circles   PantryCircle[]
+  stocks    Stock[]
 }
 
 // ---- slice 2: receiving (blueprint 01) ------------------------------------
@@ -613,6 +614,10 @@ model Take {
   // (this amends blueprint-01 invariant 4). NOT unique: one confirm can gift
   // from several linked lots → several takes, all carrying the same claim id.
   shareClaimId String?
+  // Phase 4 (S2): which pantry the units left — snapshotted at take time from
+  // the Stock row drawn down (relation-free like householdId; a placement's
+  // future moves must not rewrite where a historical take happened).
+  pantryId     String
   takenAt      DateTime  @default(now())
   reversedAt   DateTime?
   reversedById String?
@@ -674,12 +679,6 @@ model Lot {
   // of "unit cost incl. tax"); null while DRAFT.
   taxCentsAllocated Int?
   feeCentsAllocated Int?
-  remainingCount Int       @default(0) // set to receivedCount at finalize (D3)
-  // Units held by open orders (REQUESTED/PICKING/READY). Availability shown and
-  // guarded everywhere is remainingCount − reservedCount; a soft hold that never
-  // touches the ledger. Bumped on request, released on cancel/edit-down, and
-  // decremented (with remainingCount) at pickup.
-  reservedCount  Int       @default(0)
   bestBy         DateTime?
   unitPhotoPath  String?
 
@@ -689,9 +688,44 @@ model Lot {
   adjustments  Adjustment[]
   orderLines   OrderLine[]
   sharePostLots SharePostLot[]
+  stocks       Stock[]
 
   @@unique([restockId, position])
   @@index([productId])
+}
+
+// ---- Phase 4 (REWORK S1/A-series): stock placements --------------------------
+
+// Where a lot's units are NOW. A Lot is the receive event (receipt lineage,
+// frozen cost, bestBy, photo); a Stock row is the units of that lot currently
+// sitting in one pantry. Finalize materializes one row per non-excluded lot in
+// the restock's pantry; transfers and per-line receive splits (Round 2) fan a
+// lot across pantries. Rows are durable once created — count may reach 0 but
+// the row stays, because OrderLine/Adjustment/SharePostLot history points here.
+// count/reservedCount move ONLY through src/server/stock.ts (the choke point).
+// Availability shown and guarded everywhere is count − reservedCount;
+// reservedCount is the soft order hold that used to live on Lot (bumped on
+// request, released on cancel/edit-down, decremented with count at pickup —
+// never the ledger). Money stays on Lot: unitCostCents prices takes wherever
+// the units sit.
+model Stock {
+  id            String   @id @default(cuid())
+  lotId         String
+  pantryId      String
+  count         Int      @default(0)
+  reservedCount Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  lot    Lot    @relation(fields: [lotId], references: [id])
+  pantry Pantry @relation(fields: [pantryId], references: [id])
+
+  orderLines    OrderLine[]
+  adjustments   Adjustment[]
+  sharePostLots SharePostLot[]
+
+  @@unique([lotId, pantryId])
+  @@index([pantryId])
+  @@index([lotId])
 }
 
 // ---- slice 4: adjustments (settlement is a LedgerEntry, blueprint 01 D5) ----
@@ -705,6 +739,9 @@ model Adjustment {
   // twice), so a replay returns the original adjustment instead.
   clientKey   String?  @unique
   lotId       String
+  // Phase 4 (S2): the placement this adjustment recounted/wrote off — counts
+  // are per (lot, pantry) now. lotId stays for product/cost lineage.
+  stockId     String
   type        String // "RECOUNT" | "WRITE_OFF"
   countBefore Int // read by the SERVER inside the tx — never client-supplied
   countAfter  Int // RECOUNT: the physical count (≥ 0); WRITE_OFF: before − writtenOff
@@ -712,9 +749,11 @@ model Adjustment {
   createdById String
   createdAt   DateTime @default(now())
 
-  lot Lot @relation(fields: [lotId], references: [id])
+  lot   Lot   @relation(fields: [lotId], references: [id])
+  stock Stock @relation(fields: [stockId], references: [id])
 
   @@index([lotId])
+  @@index([stockId])
 }
 
 // ---- slice 6: lending (blueprint 01) -----------------------------------------
@@ -853,14 +892,19 @@ model OrderLine {
   id       String  @id @default(cuid())
   orderId  String
   lotId    String
+  // Phase 4 (S2): the placement this line draws from — always a Stock row of
+  // this line's lot in the order's pantry. The reservation lives there.
+  stockId  String
   quantity Int // > 0 while the line exists (0 removes it)
   takeId   String? @unique
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
   lot   Lot   @relation(fields: [lotId], references: [id])
+  stock Stock @relation(fields: [stockId], references: [id])
 
   @@index([orderId])
   @@index([lotId])
+  @@index([stockId])
 }
 
 // ---- Round 2: needs & surpluses (REWORK F) ----------------------------------
@@ -922,14 +966,21 @@ model SharePostCircle {
 // Provenance link: which tracked lots a SURPLUS origin offers (own-household,
 // FINALIZED, non-excluded lots). The $0 transfer draws from these on confirm.
 model SharePostLot {
-  id     String @id @default(cuid())
-  postId String
-  lotId  String
+  id      String @id @default(cuid())
+  postId  String
+  lotId   String
+  // Phase 4 (S2): the placement the gift draws from — once a lot can sit in
+  // several pantries, "which shelf is offered" must be explicit, and the
+  // uniqueness is per placement (two shelves of one lot = two links).
+  stockId String
 
-  post SharePost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  lot  Lot       @relation(fields: [lotId], references: [id])
+  post  SharePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  lot   Lot       @relation(fields: [lotId], references: [id])
+  stock Stock     @relation(fields: [stockId], references: [id])
 
-  @@unique([postId, lotId])
+  @@unique([postId, stockId])
+  @@index([lotId])
+  @@index([stockId])
 }
 
 model ShareClaim {

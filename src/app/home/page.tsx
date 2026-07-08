@@ -28,21 +28,15 @@ export default async function HomePage() {
     select: { id: true, name: true },
   });
 
-  // Live unit counts: sum of finalized-lot remainders per own pantry.
-  const remainders = await db.lot.groupBy({
-    by: ['restockId'],
-    where: { restock: { status: 'FINALIZED', pantry: { householdId: me } } },
-    _sum: { remainingCount: true },
+  // Live unit counts: sum of available stock per own pantry.
+  const stockCounts = await db.stock.groupBy({
+    by: ['pantryId'],
+    where: { pantry: { householdId: me }, lot: { restock: { status: 'FINALIZED' } } },
+    _sum: { count: true, reservedCount: true },
   });
-  const restocks = await db.restock.findMany({
-    where: { id: { in: remainders.map((r) => r.restockId) } },
-    select: { id: true, pantryId: true },
-  });
-  const pantryOf = new Map(restocks.map((r) => [r.id, r.pantryId]));
   const unitsByPantry = new Map<string, number>();
-  for (const r of remainders) {
-    const pantryId = pantryOf.get(r.restockId)!;
-    unitsByPantry.set(pantryId, (unitsByPantry.get(pantryId) ?? 0) + (r._sum.remainingCount ?? 0));
+  for (const r of stockCounts) {
+    unitsByPantry.set(r.pantryId, (r._sum.count ?? 0) - (r._sum.reservedCount ?? 0));
   }
 
   const members = (

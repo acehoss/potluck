@@ -35,26 +35,33 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
     if (!visible) notFound();
   }
 
-  const rawLots = await db.lot.findMany({
+  const rawStocks = await db.stock.findMany({
     where: {
-      restock: { pantryId: pantry.id, status: 'FINALIZED' },
-      receivedCount: { gt: 0 },
-      productId: { not: null },
+      pantryId: pantry.id,
+      lot: {
+        restock: { status: 'FINALIZED', voidedAt: null },
+        excluded: false,
+        receivedCount: { gt: 0 },
+        productId: { not: null },
+        unitCostCents: { not: null },
+      },
     },
     include: {
-      product: { select: { id: true, name: true, upc: true } },
-      restock: { select: { dateCode: true, seq: true, purchasedAt: true } },
+      lot: {
+        include: {
+          product: { select: { id: true, name: true, upc: true } },
+          restock: { select: { dateCode: true, seq: true, purchasedAt: true } },
+        },
+      },
     },
   });
-  // receivedCount > 0 already excludes non-inventory lines; the productId guard
-  // narrows the type (excluded lines have a null product).
-  const lots = rawLots.filter(
-    (l): l is typeof l & { productId: string; product: NonNullable<typeof l.product> } =>
-      l.product !== null,
-  );
 
   // D8: product display photo = newest lot of the product with a unit photo.
-  const productIds = [...new Set(lots.map((l) => l.productId))];
+  const productIds = [
+    ...new Set(
+      rawStocks.flatMap((s) => (s.lot.productId && s.lot.product ? [s.lot.productId] : [])),
+    ),
+  ];
   const [photoLots, productImages] = await Promise.all([
     db.lot.findMany({
       where: { productId: { in: productIds }, unitPhotoPath: { not: null } },
@@ -75,7 +82,9 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
   }
 
   const groups = new Map<string, ProductGroup>();
-  for (const lot of lots) {
+  for (const stock of rawStocks) {
+    const lot = stock.lot;
+    if (!lot.productId || !lot.product) continue;
     let group = groups.get(lot.productId);
     if (!group) {
       group = {
@@ -92,11 +101,12 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
     // "Orders & requests"). Everything downstream (the "N left" label, the
     // group total, the > 0 filters, the take/order stepper caps) reads this,
     // so reservations propagate everywhere. max(0, …) is defensive; correct
-    // accounting keeps reserved ≤ remaining.
-    const available = Math.max(0, lot.remainingCount - lot.reservedCount);
+    // accounting keeps reserved ≤ count.
+    const available = Math.max(0, stock.count - stock.reservedCount);
     group.total += available;
     group.lots.push({
       id: lot.id,
+      stockId: stock.id,
       restockId: lot.restockId,
       code: restockCode(lot.restock.dateCode!, lot.restock.seq!),
       remaining: available,

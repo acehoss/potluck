@@ -5,6 +5,11 @@ import type { SessionUser } from '../auth';
 import { hasActiveGrant, reachesResource, requireCapability } from '../authz';
 import { dbTransaction } from '../db';
 import { notify } from '../push';
+import {
+  consumeReservedStock,
+  releaseStock,
+  reserveStock,
+} from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -13,7 +18,7 @@ import { protectedProcedure, router } from '../trpc';
  * instant-take:
  *   DRAFT → REQUESTED (reserve) → PICKING (lock) → READY → PICKED_UP (Takes +
  *   ledger post here) / CANCELED (release; ledger untouched).
- * Availability everywhere is remainingCount − reservedCount. Reservation is a
+ * Availability everywhere is stock.count − stock.reservedCount. Reservation is a
  * soft hold that never touches the ledger; money posts only at pickup, exactly
  * mirroring take.create (money rule #2, invariants 3/4). The ledger stays
  * append-only — a post-pickup return is take.undo's swapped-party REVERSAL.
@@ -23,42 +28,45 @@ import { protectedProcedure, router } from '../trpc';
 const EDITABLE = new Set(['DRAFT', 'REQUESTED']);
 
 /**
- * Load a lot and assert it is orderable from this pantry BY this user's
+ * Load a stock placement and assert it is orderable from this pantry BY this user's
  * acting household: finalized, a real inventory line (not excluded), unit
  * cost frozen — and the pantry reachable (own, or shared + ACTIVE pantry
  * grant from its owner, REWORK B2/B3; unreachable reads as not-found).
  * Returns the lot plus the pantry-owning ("store") household.
  */
-async function loadOrderableLot(
+async function loadOrderableStock(
   tx: Prisma.TransactionClient,
   user: SessionUser,
   lotId: string,
   pantryId: string,
 ) {
-  const lot = await tx.lot.findUnique({
-    where: { id: lotId },
+  const stock = await tx.stock.findUnique({
+    where: { lotId_pantryId: { lotId, pantryId } },
     include: {
-      restock: {
-        select: {
-          pantryId: true,
-          status: true,
-          voidedAt: true,
-          pantry: { select: { householdId: true, visibility: true } },
+      pantry: { select: { householdId: true, visibility: true } },
+      lot: {
+        include: {
+          restock: {
+            select: {
+              status: true,
+              voidedAt: true,
+            },
+          },
         },
       },
     },
   });
-  if (!lot || lot.restock.pantryId !== pantryId) {
+  if (!stock) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Item not found in this pantry.' });
   }
-  const ownerHouseholdId = lot.restock.pantry.householdId;
+  const ownerHouseholdId = stock.pantry.householdId;
   if (ownerHouseholdId !== user.householdId) {
     const visible = await reachesResource(
       tx,
       ownerHouseholdId,
       user.householdId,
       'pantry',
-      lot.restock.pantry,
+      stock.pantry,
       (circleId) =>
         tx.pantryCircle
           .findUnique({ where: { pantryId_circleId: { pantryId, circleId } } })
@@ -69,48 +77,39 @@ async function loadOrderableLot(
     }
   }
   if (
-    lot.restock.status !== 'FINALIZED' ||
-    lot.restock.voidedAt !== null ||
-    lot.excluded ||
-    lot.unitCostCents === null
+    stock.lot.restock.status !== 'FINALIZED' ||
+    stock.lot.restock.voidedAt !== null ||
+    stock.lot.excluded ||
+    stock.lot.unitCostCents === null
   ) {
     throw new TRPCError({ code: 'CONFLICT', message: 'That item is not available to order.' });
   }
-  return { lot, ownerHouseholdId };
+  return { stock, lot: stock.lot, ownerHouseholdId };
 }
 
-/**
- * Reserve `qty` units on a lot: bump reservedCount when availability
- * (remainingCount − reservedCount) covers it. Prisma's WHERE can't compare two
- * columns, so read then guard the updateMany on the read values (the app-wide
- * lock in dbTransaction makes a miss impossible; the retry is belt-and-braces,
- * mirroring adjustment.guardedRecount).
- */
-async function reserve(tx: Prisma.TransactionClient, lotId: string, qty: number) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const lot = await tx.lot.findUniqueOrThrow({
-      where: { id: lotId },
-      select: { remainingCount: true, reservedCount: true },
-    });
-    if (lot.remainingCount - lot.reservedCount < qty) {
-      throw new TRPCError({ code: 'CONFLICT', message: 'Not enough left to reserve.' });
-    }
-    const hit = await tx.lot.updateMany({
-      where: { id: lotId, remainingCount: lot.remainingCount, reservedCount: lot.reservedCount },
-      data: { reservedCount: { increment: qty } },
-    });
-    if (hit.count === 1) return;
-  }
-  throw new TRPCError({ code: 'CONFLICT', message: 'That item changed underneath you — try again.' });
-}
-
-/** Release `qty` reserved units. Guards reservedCount ≥ qty so it never goes negative. */
-async function release(tx: Prisma.TransactionClient, lotId: string, qty: number) {
-  if (qty <= 0) return;
-  await tx.lot.updateMany({
-    where: { id: lotId, reservedCount: { gte: qty } },
-    data: { reservedCount: { decrement: qty } },
+async function loadLineStock(tx: Prisma.TransactionClient, line: { lotId: string; stockId: string }, pantryId: string) {
+  const stock = await tx.stock.findUnique({
+    where: { id: line.stockId },
+    include: {
+      lot: {
+        include: {
+          restock: { select: { status: true, voidedAt: true } },
+        },
+      },
+    },
   });
+  if (
+    !stock ||
+    stock.lotId !== line.lotId ||
+    stock.pantryId !== pantryId ||
+    stock.lot.restock.status !== 'FINALIZED' ||
+    stock.lot.restock.voidedAt !== null ||
+    stock.lot.excluded ||
+    stock.lot.unitCostCents === null
+  ) {
+    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Lot is not finalized.' });
+  }
+  return stock;
 }
 
 export const orderRouter = router({
@@ -130,7 +129,7 @@ export const orderRouter = router({
     .mutation(async ({ ctx, input }) => {
       requireCapability(ctx.user, 'placeOrders');
       return dbTransaction(async (tx) => {
-        const { lot } = await loadOrderableLot(tx, ctx.user, input.lotId, input.pantryId);
+        const { stock, lot } = await loadOrderableStock(tx, ctx.user, input.lotId, input.pantryId);
         let order = await tx.order.findFirst({
           where: { pantryId: input.pantryId, householdId: ctx.user.householdId, status: 'DRAFT' },
         });
@@ -148,7 +147,9 @@ export const orderRouter = router({
         if (existing) {
           await tx.orderLine.update({ where: { id: existing.id }, data: { quantity: input.quantity } });
         } else {
-          await tx.orderLine.create({ data: { orderId: order.id, lotId: lot.id, quantity: input.quantity } });
+          await tx.orderLine.create({
+            data: { orderId: order.id, lotId: lot.id, stockId: stock.id, quantity: input.quantity },
+          });
         }
         const lineCount = await tx.orderLine.count({ where: { orderId: order.id } });
         return { orderId: order.id, lineCount };
@@ -180,7 +181,7 @@ export const orderRouter = router({
         if (!EDITABLE.has(order.status)) {
           throw new TRPCError({ code: 'CONFLICT', message: 'This order can no longer be changed.' });
         }
-        const { lot, ownerHouseholdId } = await loadOrderableLot(
+        const { stock, lot, ownerHouseholdId } = await loadOrderableStock(
           tx,
           ctx.user,
           input.lotId,
@@ -197,15 +198,17 @@ export const orderRouter = router({
         const oldQty = existing?.quantity ?? 0;
         const delta = input.quantity - oldQty;
         if (order.status === 'REQUESTED' && delta !== 0) {
-          if (delta > 0) await reserve(tx, lot.id, delta);
-          else await release(tx, lot.id, -delta);
+          if (delta > 0) await reserveStock(tx, stock.id, delta);
+          else await releaseStock(tx, stock.id, -delta);
         }
         if (input.quantity === 0) {
           if (existing) await tx.orderLine.delete({ where: { id: existing.id } });
         } else if (existing) {
           await tx.orderLine.update({ where: { id: existing.id }, data: { quantity: input.quantity } });
         } else {
-          await tx.orderLine.create({ data: { orderId: order.id, lotId: lot.id, quantity: input.quantity } });
+          await tx.orderLine.create({
+            data: { orderId: order.id, lotId: lot.id, stockId: stock.id, quantity: input.quantity },
+          });
         }
         const lineCount = await tx.orderLine.count({ where: { orderId: order.id } });
         return { orderId: order.id, lineCount };
@@ -249,8 +252,8 @@ export const orderRouter = router({
           return { orderId: order.id, submitted: false, ownerHouseholdId: order.pantry.householdId };
         }
         for (const line of order.lines) {
-          await loadOrderableLot(tx, ctx.user, line.lotId, order.pantryId);
-          await reserve(tx, line.lotId, line.quantity);
+          await loadOrderableStock(tx, ctx.user, line.lotId, order.pantryId);
+          await reserveStock(tx, line.stockId, line.quantity);
         }
         return { orderId: order.id, submitted: true, ownerHouseholdId: order.pantry.householdId };
       });
@@ -334,7 +337,7 @@ export const orderRouter = router({
 
   /**
    * Mark a READY order PICKED_UP — the money event. Either household may do it.
-   * Per line: consume the reservation (decrement remainingCount AND reservedCount
+   * Per line: consume the reservation (decrement count AND reservedCount
    * together), log a Take, and — cross-household only — post the TAKE ledger
    * entry at quantity × frozen unitCost (invariant 3). One dbTransaction: all
    * lines commit or none. The READY→PICKED_UP status guard + clientKey make it
@@ -406,36 +409,20 @@ export const orderRouter = router({
         if (moved.count === 0) throw new TRPCError({ code: 'CONFLICT', message: 'Order is not ready for pickup.' });
 
         for (const line of order.lines) {
-          const lot = await tx.lot.findUnique({
-            where: { id: line.lotId },
-            include: { restock: { select: { status: true } } },
-          });
-          if (!lot || lot.restock.status !== 'FINALIZED' || lot.unitCostCents === null) {
-            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Lot is not finalized.' });
-          }
-          const hit = await tx.lot.updateMany({
-            where: {
-              id: line.lotId,
-              remainingCount: { gte: line.quantity },
-              reservedCount: { gte: line.quantity },
-            },
-            data: {
-              remainingCount: { decrement: line.quantity },
-              reservedCount: { decrement: line.quantity },
-            },
-          });
-          if (hit.count === 0) throw new TRPCError({ code: 'CONFLICT', message: 'Not enough left.' });
+          const stock = await loadLineStock(tx, line, order.pantryId);
+          await consumeReservedStock(tx, stock.id, line.quantity);
 
           const cross = debtorHouseholdId !== ownerHouseholdId;
-          const costCents = cross ? line.quantity * lot.unitCostCents : 0;
+          const costCents = cross ? line.quantity * stock.lot.unitCostCents! : 0;
           const take = await tx.take.create({
             data: {
-              lotId: line.lotId,
+              lotId: stock.lotId,
               takerId: order.createdById, // requester's user who built the order
               // The household the goods transferred to — the order's
               // requester household, snapshotted so undo authz and history
               // never re-derive it from a user's (mutable) memberships.
               householdId: order.householdId,
+              pantryId: stock.pantryId,
               quantity: line.quantity,
               costCents,
               clientKey: input.clientKey ? `${input.clientKey}:${line.id}` : null,
@@ -500,7 +487,7 @@ export const orderRouter = router({
           throw new TRPCError({ code: 'CONFLICT', message: 'This order can no longer be canceled.' });
         }
         if (wasReserved) {
-          for (const line of order.lines) await release(tx, line.lotId, line.quantity);
+          for (const line of order.lines) await releaseStock(tx, line.stockId, line.quantity);
         }
         return { ok: true };
       });

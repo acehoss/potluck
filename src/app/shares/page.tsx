@@ -17,32 +17,38 @@ export default async function SharesPage() {
   const user = await getSessionUser();
   if (!user) redirect('/login');
 
-  const rawLots = await db.lot.findMany({
+  const rawStocks = await db.stock.findMany({
     where: {
-      excluded: false,
-      unitCostCents: { not: null },
-      restock: {
-        status: 'FINALIZED',
-        voidedAt: null,
-        pantry: { householdId: user.householdId },
+      pantry: { householdId: user.householdId },
+      lot: {
+        excluded: false,
+        unitCostCents: { not: null },
+        restock: {
+          status: 'FINALIZED',
+          voidedAt: null,
+        },
       },
     },
     include: {
-      product: { select: { name: true } },
-      restock: { select: { dateCode: true, seq: true, purchasedAt: true } },
+      lot: {
+        include: {
+          product: { select: { name: true } },
+          restock: { select: { dateCode: true, seq: true, purchasedAt: true } },
+        },
+      },
     },
-    orderBy: { restock: { purchasedAt: 'asc' } }, // oldest first, mirrors FIFO gifting
   });
+  rawStocks.sort((a, b) => a.lot.restock.purchasedAt.getTime() - b.lot.restock.purchasedAt.getTime());
 
-  const lots: ShareableLot[] = rawLots
-    .map((l) => ({
-      id: l.id,
-      productName: l.product?.name ?? 'Untitled',
+  const lots: ShareableLot[] = rawStocks
+    .map((s) => ({
+      id: s.id,
+      productName: s.lot.product?.name ?? 'Untitled',
       code:
-        l.restock.dateCode && l.restock.seq !== null
-          ? restockCode(l.restock.dateCode, l.restock.seq)
+        s.lot.restock.dateCode && s.lot.restock.seq !== null
+          ? restockCode(s.lot.restock.dateCode, s.lot.restock.seq)
           : '—',
-      available: l.remainingCount - l.reservedCount,
+      available: s.count - s.reservedCount,
     }))
     .filter((l) => l.available > 0);
 

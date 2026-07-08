@@ -30,10 +30,53 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
   any public deployment.
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
-- **Phase 4 designed, not built** (2026-07-08): stock-placement layer (Lot stops
-  implying location), pantry-to-pantry transfer, per-line receive splits, reconcile
-  draft sessions with a blocking freeze. Decision record: REWORK.md "Phase 4" (S1–S7);
-  starts with a Round-0 focus group on the reconcile flow (S7 open questions).
+- **Phase 4 in flight** (2026-07-08): Round 0 (focus group) + Round 1 (placement
+  model) are DONE — see the round records below. Remaining: Round 2 (transfer cart +
+  per-line receive splits), Round 3 (reconcile draft sessions per REWORK A1–A8).
+  Observation from Round 1 review (not a regression — pre-existing): pantry/shopping
+  availability filters on `receivedCount > 0`, so a credit-corrected-to-zero lot hides
+  from inventory even with physical stock; revisit when reconcile lands.
+
+## Phase 4 Round 1 — stock placements (2026-07-08)
+
+The bandaid rip (REWORK Phase 4 S1/S2, Round-0 A-series): inventory counts moved off
+`Lot` onto **`Stock`** — the units of one lot currently in one pantry. Lot keeps
+receipt lineage + frozen cost; a lot can now (Round 2+) sit in N pantries. Zero UI
+delta this round. Team: Fable (schema · migration · `src/server/stock.ts` choke point ·
+verifier · integration) + GPT-5.5/codex (consumer sweep) + codex review + a 5-persona
+focus group (Round 0, synthesis in REWORK "Round 0").
+
+- **Schema** — `Stock {lotId, pantryId, count, reservedCount}` (unique lot+pantry,
+  durable rows — history FKs point here); `OrderLine.stockId`, `Adjustment.stockId`,
+  `SharePostLot.stockId` (+ unique now (postId, stockId): two shelves of one lot = two
+  offers), `Take.pantryId` snapshot (relation-free). Lot loses remaining/reservedCount.
+- **Migration** `20260708150000_stock_placements` — table rebuilds with deterministic
+  `stk-<lotId>` backfill ids (one placement per finalized non-excluded lot at its
+  restock's pantry); preflight CHECK-abort if any history row references a
+  placement-less lot (unseen deployments must fail loud, never dangle). Proven by
+  `scripts/verify-stock-migration.mjs` (synthetic pathological world + preflight-abort
+  case) AND by live migration of the real volume DB (827/827 placements, zero dangles,
+  clean foreign_key_check) before the volume reset.
+- **Choke point** — `src/server/stock.ts`: `reserveStock/releaseStock/
+  consumeReservedStock/consumeFreeStock/restoreStock/guardedRecountStock/ensureStock`,
+  all on the proven guarded read-check-write pattern; `assertStockMutable` is the
+  no-op Round-3 freeze seam (cutoff model A2 documented at the seam). No count math
+  exists outside this module — and tsc now enforces the model wholesale (the old Lot
+  columns are gone from the generated client).
+- **Sweep** — order (cart/reserve/pickup per placement; Take.pantryId snapshotted),
+  take.undo (restores the original placement by (lotId, pantryId)), shares (posts link
+  placements; gift = consumeFreeStock, still $0/no-ledger), adjustments (stockId
+  inputs, rows carry lot+stock), restock finalize (ensureStock birth) / void (zeroes
+  placements, reservation guard intact), connection sever release, shopping FIFO
+  badges, four SSR pages + inventory-view. Money paths byte-for-byte semantics.
+- **e2e teardown fix** — raw-SQL cleanups in contacts/onboarding specs now delete
+  Stock rows before Lot/Restock (Stock RESTRICTs Lot deletion).
+- **Gate — green:** unit 219/219 · tsc/eslint/lint:tokens clean · verifier all-ok ·
+  full both-engine e2e vs fresh rebuilt stack **386 passed / 0 failed / 2 flaky
+  (retry-green, pre-existing) / 6 skipped**. Codex review findings (preflight, share
+  unique key, teardowns) folded in; deferred: legacy adjustment clientKey replay
+  across the deploy boundary (accepted risk), receivedCount-filter observation
+  (hoisted above).
 
 ## Share circle-scoping — per-post audience override (2026-07-08)
 

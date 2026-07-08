@@ -29,11 +29,15 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
       household: { select: { name: true } },
       lines: {
         include: {
+          stock: {
+            select: {
+              count: true,
+              reservedCount: true,
+            },
+          },
           lot: {
             select: {
               id: true,
-              remainingCount: true,
-              reservedCount: true,
               unitCostCents: true,
               product: { select: { name: true } },
               restock: { select: { dateCode: true, seq: true } },
@@ -53,7 +57,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const lines = order.lines
     .filter((l) => l.lot.product) // orderable lots always carry a product
     .map((l) => {
-      const available = l.lot.remainingCount - l.lot.reservedCount;
+      const available = l.stock.count - l.stock.reservedCount;
       return {
         id: l.id,
         lotId: l.lotId,

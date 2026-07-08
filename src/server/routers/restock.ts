@@ -22,6 +22,7 @@ import {
 import { deleteImageFile, imageFileExists, isStoredImagePath, readImageFile } from '../images';
 import { getActiveRestockCredit, pickActiveRestockCredit } from '../ledger';
 import { checkRateLimit } from '../rate-limit';
+import { ensureStock, guardedRecountStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 /** Upper bound for money inputs: keeps values inside Prisma's Int range. */
@@ -363,7 +364,10 @@ export const restockRouter = router({
         images: { orderBy: { position: 'asc' } },
         lots: {
           orderBy: { position: 'asc' },
-          include: { product: { select: { id: true, name: true } } },
+          include: {
+            product: { select: { id: true, name: true } },
+            stocks: { select: { id: true, pantryId: true, count: true, reservedCount: true } },
+          },
         },
       },
     });
@@ -426,6 +430,7 @@ export const restockRouter = router({
         unitCostCents: l.unitCostCents,
         taxCentsAllocated: l.taxCentsAllocated,
         feeCentsAllocated: l.feeCentsAllocated,
+        stockId: l.stocks.find((s) => s.pantryId === restock.pantryId)?.id ?? null,
         bestBy: l.bestBy?.toISOString().slice(0, 10) ?? null,
         unitPhotoPath: l.unitPhotoPath,
         // Null for an excluded (non-inventory) line.
@@ -846,7 +851,7 @@ export const restockRouter = router({
             }
 
             // Fold receipt tax/fees into each lot's landed cost (D1 freeze, now
-            // tax-inclusive), then freeze the unit costs and remaining counts.
+            // tax-inclusive), then freeze the unit costs and stock placements.
             const allocations = allocateReceipt(
               restock.lots.map((l) => ({
                 lineTotalCents: l.lineTotalCents,
@@ -876,9 +881,12 @@ export const restockRouter = router({
                   unitCostCents: a.unitCostCents,
                   taxCentsAllocated: a.taxCentsAllocated,
                   feeCentsAllocated: a.feeCentsAllocated,
-                  remainingCount: lot.excluded ? 0 : lot.receivedCount,
                 },
               });
+              if (!lot.excluded) {
+                const stock = await ensureStock(tx, lot.id, restock.pantryId);
+                await guardedRecountStock(tx, stock.id, () => lot.receivedCount);
+              }
             }
 
             const varianceCents = reconcileVariance(
@@ -980,7 +988,7 @@ export const restockRouter = router({
    *
    * `receivedCount` is the money basis and is persisted here so invariant 5
    * stays literally true — this is the sanctioned exception to its post-finalize
-   * immutability (like `Take.reversedAt`). It does NOT touch `remainingCount`:
+   * immutability (like `Take.reversedAt`). It does NOT touch Stock counts:
    * physical inventory drift is corrected independently by the owner's recount
    * (invariant 9), and double-correcting here would desync the two.
    */
@@ -1102,8 +1110,8 @@ export const restockRouter = router({
   /**
    * Void a finalized restock entered by mistake (auditable "undo"). FINALIZED is
    * terminal and stays so — this reverses the active purchaser credit (swapped
-   * parties, `reversesId`, same `restockId`) and zeroes every lot's
-   * remainingCount so the phantom stock leaves inventory, then stamps
+   * parties, `reversesId`, same `restockId`) and zeroes every placement for
+   * this restock's lots so the phantom stock leaves inventory, then stamps
    * `voidedAt`. Gated to the purchaser or pantry-owning household (same standing
    * as correctCredit). ALLOWED ONLY WHILE NO TAKE references a lot — once
    * someone has pulled from these lots, the honest fix is to undo those takes or
@@ -1147,14 +1155,14 @@ export const restockRouter = router({
           });
         }
         // Reservations are not takes (a Take is only created at pickup), so the
-        // takeCount gate above misses an open order holding these lots. Zeroing
-        // remainingCount would strand that reservation and wedge the order at
+        // takeCount gate above misses an open order holding these placements.
+        // Zeroing count would strand that reservation and wedge the order at
         // pickup. Block until those orders are canceled or completed.
-        const reserved = await tx.lot.aggregate({
-          where: { restockId: restock.id },
-          _sum: { reservedCount: true },
+        const stocks = await tx.stock.findMany({
+          where: { lot: { restockId: restock.id } },
+          select: { id: true, reservedCount: true },
         });
-        if ((reserved._sum.reservedCount ?? 0) > 0) {
+        if (stocks.some((s) => s.reservedCount > 0)) {
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
             message: 'Open orders have reserved items from this restock — cancel or complete those first.',
@@ -1176,10 +1184,7 @@ export const restockRouter = router({
             },
           });
         }
-        await tx.lot.updateMany({
-          where: { restockId: restock.id },
-          data: { remainingCount: 0 },
-        });
+        for (const stock of stocks) await guardedRecountStock(tx, stock.id, () => 0);
         await tx.restock.update({
           where: { id: restock.id },
           data: { voidedAt: new Date() },

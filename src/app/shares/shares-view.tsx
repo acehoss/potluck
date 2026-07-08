@@ -651,7 +651,7 @@ function ComposeSheet({
             // Scoped posts can't be reshared — store 0 hops so the row matches
             // what the composer showed (the server refuses reshare regardless).
             hopsAllowance: shareToCircles.length > 0 && audience === 'SELECT' ? 0 : hops,
-            lotIds: type === 'SURPLUS' && selectedLots.size ? [...selectedLots] : undefined,
+            stockIds: type === 'SURPLUS' && selectedLots.size ? [...selectedLots] : undefined,
             photoPath: photo?.path,
             circleIds:
               shareToCircles.length > 0 && audience === 'SELECT'

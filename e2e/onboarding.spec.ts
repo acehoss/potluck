@@ -49,6 +49,7 @@ const sweep = `
     db.prepare("DELETE FROM OrderLine WHERE orderId IN (SELECT id FROM \\"Order\\" WHERE householdId = ?)").run(id);
     db.prepare("DELETE FROM \\"Order\\" WHERE householdId = ?").run(id);
     db.prepare("DELETE FROM Invite WHERE householdId = ?").run(id);
+    db.prepare("DELETE FROM Stock WHERE pantryId IN (SELECT id FROM Pantry WHERE householdId = ?)").run(id);
     db.prepare("DELETE FROM Lot WHERE restockId IN (SELECT r.id FROM Restock r JOIN Pantry p ON p.id = r.pantryId WHERE p.householdId = ?)").run(id);
     db.prepare("DELETE FROM Restock WHERE purchaserHouseholdId = ? OR pantryId IN (SELECT id FROM Pantry WHERE householdId = ?)").run(id, id);
     db.prepare("DELETE FROM Product WHERE householdId = ?").run(id);

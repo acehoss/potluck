@@ -530,11 +530,17 @@ test('UI smoke: profile edit, In-Laws contact card + detail sheet, and READY-ord
   } finally {
     await rpc(api, 'profile.update', { phone: before.phone });
     // A READY order can't cancel (guard is DRAFT/REQUESTED) — SQL-drop the order
-    // (cascades OrderLine, releasing the hold) and the ephemeral restock (cascades
-    // its lots), so no money posts and no seeded inventory is touched.
+    // (cascades OrderLine, releasing the hold), the lots' placements (Stock
+    // RESTRICTs Lot deletion), then the ephemeral restock (cascades its lots),
+    // so no money posts and no seeded inventory is touched.
     const parts: string[] = [];
     if (orderId) parts.push(`db.prepare("DELETE FROM \\"Order\\" WHERE id='${orderId}'").run();`);
-    if (restockId) parts.push(`db.prepare("DELETE FROM Restock WHERE id='${restockId}'").run();`);
+    if (restockId) {
+      parts.push(
+        `db.prepare("DELETE FROM Stock WHERE lotId IN (SELECT id FROM Lot WHERE restockId='${restockId}')").run();`,
+      );
+      parts.push(`db.prepare("DELETE FROM Restock WHERE id='${restockId}'").run();`);
+    }
     if (parts.length) {
       execInApp(
         `const D=require('better-sqlite3');const db=new D(process.env.DATABASE_URL.replace(/^file:/,''));` +

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { requireCapability } from '../authz';
 import { dbTransaction } from '../db';
+import { guardedRecountStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 /**
@@ -14,38 +15,39 @@ import { protectedProcedure, router } from '../trpc';
  */
 
 /**
- * Load the lot and gate: finalized restock, viewer belongs to the
+ * Load the placement and gate: finalized restock, viewer belongs to the
  * pantry-owning household.
  */
-async function getAdjustableLot(
+async function getAdjustableStock(
   tx: Prisma.TransactionClient,
-  lotId: string,
+  stockId: string,
   user: { householdId: string },
 ) {
-  const lot = await tx.lot.findUnique({
-    where: { id: lotId },
-    include: { restock: { include: { pantry: { select: { householdId: true } } } } },
+  const stock = await tx.stock.findUnique({
+    where: { id: stockId },
+    include: {
+      pantry: { select: { householdId: true } },
+      lot: { include: { restock: { select: { status: true } } } },
+    },
   });
-  if (!lot) throw new TRPCError({ code: 'NOT_FOUND', message: 'Lot not found.' });
-  if (lot.restock.status !== 'FINALIZED') {
+  if (!stock) throw new TRPCError({ code: 'NOT_FOUND', message: 'Lot not found.' });
+  if (stock.lot.restock.status !== 'FINALIZED') {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restock is still a draft.' });
   }
-  if (lot.restock.pantry.householdId !== user.householdId) {
+  if (stock.pantry.householdId !== user.householdId) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Only the pantry-owning household can adjust its lots.',
     });
   }
-  return lot;
+  return stock;
 }
 
 /**
  * B3 pattern (blueprint 01): the client sends the target only; the server
- * reads remainingCount in-tx as countBefore and writes via a guarded
- * updateMany conditioned on that same countBefore, retrying the read+write on
- * a miss — a take interleaved during user think-time can never make
- * invariant 9 false. (Under dbTransaction's app-wide lock a miss is already
- * impossible; the retry is the belt to that suspender.)
+ * reads the placement count in-tx as countBefore and writes through the stock
+ * choke point so a take interleaved during user think-time can never make
+ * invariant 9 false.
  */
 /**
  * Replay of a committed recount/write-off (same clientKey): return the
@@ -59,62 +61,28 @@ async function findReplayedAdjustment(
   tx: Prisma.TransactionClient,
   clientKey: string | undefined,
   type: 'RECOUNT' | 'WRITE_OFF',
-  input: { lotId: string },
+  input: { stockId: string },
   userId: string,
 ) {
   if (!clientKey) return null;
   const existing = await tx.adjustment.findUnique({ where: { clientKey } });
   if (!existing) return null;
-  if (existing.createdById !== userId || existing.lotId !== input.lotId || existing.type !== type) {
+  if (existing.createdById !== userId || existing.stockId !== input.stockId || existing.type !== type) {
     throw new TRPCError({ code: 'CONFLICT', message: 'Duplicate request key.' });
   }
   return existing;
 }
 
-async function guardedRecount(
-  tx: Prisma.TransactionClient,
-  lotId: string,
-  nextCount: (countBefore: number) => number,
-): Promise<{ countBefore: number; countAfter: number }> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const lot = await tx.lot.findUniqueOrThrow({
-      where: { id: lotId },
-      select: { remainingCount: true, reservedCount: true },
-    });
-    const countBefore = lot.remainingCount;
-    const countAfter = nextCount(countBefore);
-    if (countAfter < 0) {
-      throw new TRPCError({ code: 'CONFLICT', message: 'Not enough left.' });
-    }
-    // A recount/write-off must not drop physical stock below the units already
-    // reserved by open orders — that would strand the reservation and wedge the
-    // order at pickup (whose guard needs remainingCount ≥ its quantity). The
-    // owner has to cancel or complete those orders first.
-    if (countAfter < lot.reservedCount) {
-      throw new TRPCError({
-        code: 'CONFLICT',
-        message: `${lot.reservedCount} unit(s) are held by open orders — cancel or complete those first.`,
-      });
-    }
-    const hit = await tx.lot.updateMany({
-      where: { id: lotId, remainingCount: countBefore, reservedCount: lot.reservedCount },
-      data: { remainingCount: countAfter },
-    });
-    if (hit.count === 1) return { countBefore, countAfter };
-  }
-  throw new TRPCError({ code: 'CONFLICT', message: 'Lot changed underneath — try again.' });
-}
-
 export const adjustmentRouter = router({
   /**
-   * Recount: set a lot's remaining count to what was physically counted.
+   * Recount: set a placement's count to what was physically counted.
    * For count drift only — spoilage/damage should be a write-off so the
    * Adjustment types stay distinct in history.
    */
   recount: protectedProcedure
     .input(
       z.object({
-        lotId: z.string().min(1),
+        stockId: z.string().min(1),
         countAfter: z.number().int().min(0).max(10_000),
         // Idempotency key, generated once per recount sheet.
         clientKey: z.string().min(8).max(64).optional(),
@@ -137,16 +105,17 @@ export const adjustmentRouter = router({
             countAfter: replayed.countAfter,
           };
         }
-        await getAdjustableLot(tx, input.lotId, ctx.user);
-        const { countBefore, countAfter } = await guardedRecount(
+        const stock = await getAdjustableStock(tx, input.stockId, ctx.user);
+        const { countBefore, countAfter } = await guardedRecountStock(
           tx,
-          input.lotId,
+          input.stockId,
           () => input.countAfter,
         );
         const adjustment = await tx.adjustment.create({
           data: {
             clientKey: input.clientKey ?? null,
-            lotId: input.lotId,
+            lotId: stock.lotId,
+            stockId: input.stockId,
             type: 'RECOUNT',
             countBefore,
             countAfter,
@@ -165,7 +134,7 @@ export const adjustmentRouter = router({
   writeOff: protectedProcedure
     .input(
       z.object({
-        lotId: z.string().min(1),
+        stockId: z.string().min(1),
         count: z.number().int().min(1).max(10_000),
         reason: z.string().trim().min(1).max(200),
         // Idempotency key, generated once per write-off sheet — a replay must
@@ -190,16 +159,17 @@ export const adjustmentRouter = router({
             countAfter: replayed.countAfter,
           };
         }
-        await getAdjustableLot(tx, input.lotId, ctx.user);
-        const { countBefore, countAfter } = await guardedRecount(
+        const stock = await getAdjustableStock(tx, input.stockId, ctx.user);
+        const { countBefore, countAfter } = await guardedRecountStock(
           tx,
-          input.lotId,
+          input.stockId,
           (before) => before - input.count,
         );
         const adjustment = await tx.adjustment.create({
           data: {
             clientKey: input.clientKey ?? null,
-            lotId: input.lotId,
+            lotId: stock.lotId,
+            stockId: input.stockId,
             type: 'WRITE_OFF',
             countBefore,
             countAfter,

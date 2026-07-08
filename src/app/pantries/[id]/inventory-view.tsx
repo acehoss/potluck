@@ -21,6 +21,7 @@ export type ProductGroup = {
   total: number;
   lots: {
     id: string;
+    stockId: string;
     restockId: string;
     code: string;
     remaining: number;
@@ -887,7 +888,7 @@ function RecountSheet({
             type="button"
             data-testid="recount-submit"
             disabled={recount.isPending}
-            onClick={() => recount.mutate({ lotId: lotRef.lot.id, countAfter: count, clientKey })}
+            onClick={() => recount.mutate({ stockId: lotRef.lot.stockId, countAfter: count, clientKey })}
             className={sheetPrimaryBtn}
           >
             {recount.isPending ? 'Saving…' : 'Save'}
@@ -1018,7 +1019,7 @@ function WriteOffSheet({
             disabled={writeOff.isPending || lotRef.lot.remaining === 0}
             onClick={() =>
               writeOff.mutate({
-                lotId: lotRef.lot.id,
+                stockId: lotRef.lot.stockId,
                 count,
                 reason: [reason, note.trim()].filter(Boolean).join(' — '),
                 clientKey,

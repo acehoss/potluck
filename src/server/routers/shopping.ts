@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { activeConnectionsOf, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
 import { normalizeIngredientName } from '../recipe-parse';
+import { availableOf } from '../stock';
 import {
   bucketPlanEntries,
   planEntryRecipeInclude,
@@ -51,7 +52,7 @@ type AvailabilityRow = {
 export const shoppingRouter = router({
   /**
    * The household's list with, per item: its learned product link (G2), and —
-   * only when linked — availability badges. Availability sums remaining−reserved
+   * only when linked — availability badges. Availability sums stock count−reserved
    * per reachable pantry and preselects the FIFO-oldest orderable lot
    * (suggestedLotId), mirroring the pantry scan flow's oldest-first suggestion.
    * Sort: unchecked first, then category (nulls last, alpha), then title.
@@ -133,29 +134,36 @@ export const shoppingRouter = router({
     const avail = new Map<string, Map<string, AvailabilityRow>>();
     const haveLinked = ownProductToNames.size > 0 || counterpartyNameToNames.size > 0;
     if (haveLinked && pantryInfo.size > 0) {
-      const lots = await db.lot.findMany({
+      const stocks = await db.stock.findMany({
         where: {
-          excluded: false,
-          receivedCount: { gt: 0 },
-          unitCostCents: { not: null },
-          productId: { not: null },
-          restock: {
-            status: 'FINALIZED',
-            voidedAt: null,
-            pantryId: { in: [...pantryInfo.keys()] },
+          pantryId: { in: [...pantryInfo.keys()] },
+          lot: {
+            excluded: false,
+            receivedCount: { gt: 0 },
+            unitCostCents: { not: null },
+            productId: { not: null },
+            restock: {
+              status: 'FINALIZED',
+              voidedAt: null,
+            },
           },
         },
         include: {
-          product: { select: { name: true } },
-          restock: { select: { pantryId: true, purchasedAt: true, pantry: { select: { householdId: true } } } },
+          lot: {
+            include: {
+              product: { select: { name: true } },
+              restock: { select: { purchasedAt: true } },
+            },
+          },
         },
-        orderBy: { restock: { purchasedAt: 'asc' } }, // oldest-first → first seen is the FIFO suggestion
       });
+      stocks.sort((a, b) => a.lot.restock.purchasedAt.getTime() - b.lot.restock.purchasedAt.getTime());
 
-      for (const lot of lots) {
-        const available = lot.remainingCount - lot.reservedCount;
+      for (const stock of stocks) {
+        const available = availableOf(stock);
         if (available <= 0) continue;
-        const pantryId = lot.restock.pantryId;
+        const lot = stock.lot;
+        const pantryId = stock.pantryId;
         const info = pantryInfo.get(pantryId);
         if (!info) continue;
         // Own pantry → productId match; counterparty pantry → product-name match.
