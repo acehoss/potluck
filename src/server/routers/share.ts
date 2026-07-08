@@ -4,7 +4,17 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from '../auth';
 import { getConnection, grantsFrom, requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
-import { shareVisible, type Dbc } from '../share-reach';
+import {
+  chainEdgesAlive,
+  HOP_MAX,
+  loadScopeCircleIds,
+  posterSideCircleId,
+  postVisibleToConnection,
+  postVisibleToHousehold,
+  sharePosterReachByHousehold,
+  shareVisibleOnConnection,
+  type Dbc,
+} from '../share-reach';
 import { imageFileExists, isStoredImagePath } from '../images';
 import { notify } from '../push';
 import { apportionFifo, defaultExpiresAt, MAX_EXPIRY_MS } from '../shares';
@@ -28,7 +38,7 @@ import { protectedProcedure, router } from '../trpc';
 
 type PostRow = Prisma.SharePostGetPayload<Record<string, never>>;
 
-const HOP_MAX = 3;
+const CONNECTION_WITH_CIRCLES = { aCircle: true, bCircle: true } as const;
 
 /** OPEN/CLAIMED and not past expiry — the base "still on the board" test. */
 function feedLive(post: { status: string; expiresAt: Date }, now: Date): boolean {
@@ -42,23 +52,6 @@ async function originOf(dbc: Dbc, post: PostRow): Promise<PostRow> {
 }
 
 /**
- * A reshare copy stays live only while every hop up to the origin still holds:
- * at each hop the broker (that copy's household) must still share-see its
- * PARENT post's household. Severing any upstream edge kills the chain
- * downstream (B6/F4). Capped at the hard reshare depth.
- */
-async function chainEdgesAlive(dbc: Dbc, copy: PostRow): Promise<boolean> {
-  let current: PostRow = copy;
-  for (let hop = 0; hop <= HOP_MAX && current.parentPostId; hop++) {
-    const parent = await dbc.sharePost.findUnique({ where: { id: current.parentPostId } });
-    if (!parent) return false;
-    if (!(await shareVisible(dbc, parent.householdId, current.householdId))) return false;
-    current = parent;
-  }
-  return true;
-}
-
-/**
  * Load a post the acting household may interact with, resolving its origin and
  * whether it is still feed-live for this household. Throws 404 when the post
  * doesn't exist or isn't visible at all (own, or share-visible). `mine`/`live`
@@ -68,7 +61,7 @@ async function loadVisiblePost(dbc: Dbc, user: SessionUser, postId: string) {
   const post = await dbc.sharePost.findUnique({ where: { id: postId } });
   if (!post) throw new TRPCError({ code: 'NOT_FOUND', message: 'Post not found.' });
   const mine = post.householdId === user.householdId;
-  if (!mine && !(await shareVisible(dbc, post.householdId, user.householdId))) {
+  if (!mine && !(await postVisibleToHousehold(dbc, post, user.householdId))) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Post not found.' });
   }
   const origin = await originOf(dbc, post);
@@ -222,7 +215,21 @@ async function loadOwnShareableLot(
   return lot;
 }
 
+/** Load an OWN circle by id, else 404 (same convention as connection/circle routers). */
+async function requireOwnCircle(
+  tx: Prisma.TransactionClient,
+  householdId: string,
+  circleId: string,
+) {
+  const circle = await tx.circle.findUnique({ where: { id: circleId } });
+  if (!circle || circle.householdId !== householdId) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No such circle.' });
+  }
+  return circle;
+}
+
 const clientKeySchema = z.string().min(8).max(64).optional();
+const circleIdsSchema = z.array(z.string().min(1)).min(1).max(20).optional();
 
 export const shareRouter = router({
   /**
@@ -239,20 +246,40 @@ export const shareRouter = router({
     const graceStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const householdSelect = { select: { id: true, name: true } } as const;
 
-    const ownPosts = await db.sharePost.findMany({
-      where: { householdId: H, status: { not: 'WITHDRAWN' }, expiresAt: { gt: graceStart } },
-      include: { household: householdSelect },
-    });
-    const candidates = await db.sharePost.findMany({
-      where: { householdId: { not: H }, status: { in: ['OPEN', 'CLAIMED'] }, expiresAt: { gt: now } },
-      include: { household: householdSelect },
-    });
+    const [ownPosts, candidates, connections] = await Promise.all([
+      db.sharePost.findMany({
+        where: { householdId: H, status: { not: 'WITHDRAWN' }, expiresAt: { gt: graceStart } },
+        include: { household: householdSelect },
+      }),
+      db.sharePost.findMany({
+        where: { householdId: { not: H }, status: { in: ['OPEN', 'CLAIMED'] }, expiresAt: { gt: now } },
+        include: { household: householdSelect },
+      }),
+      db.connection.findMany({
+        where: { status: 'ACTIVE', OR: [{ householdAId: H }, { householdBId: H }] },
+        include: CONNECTION_WITH_CIRCLES,
+      }),
+    ]);
+    const reachByPoster = sharePosterReachByHousehold(connections, H);
+    const scopeIdsByPost = await loadScopeCircleIds(
+      db,
+      candidates.filter((p) => p.visibility === 'SELECT').map((p) => p.id),
+    );
 
     type Rendered = { post: (typeof ownPosts)[number]; origin: PostRow; mine: boolean };
     const rendered: Rendered[] = [];
     for (const p of ownPosts) rendered.push({ post: p, origin: await originOf(db, p), mine: true });
     for (const p of candidates) {
-      if (!(await shareVisible(db, p.householdId, H))) continue;
+      const reach = reachByPoster.get(p.householdId);
+      if (!reach) continue;
+      if (
+        !postVisibleToConnection(
+          { visibility: p.visibility, scopeCircleIds: scopeIdsByPost.get(p.id) ?? [] },
+          reach.posterSideCircleId,
+        )
+      ) {
+        continue;
+      }
       const origin = await originOf(db, p);
       if (!feedLive(origin, now)) continue; // origin drives status/expiry
       if (p.originPostId && !(await chainEdgesAlive(db, p))) continue;
@@ -291,8 +318,8 @@ export const shareRouter = router({
     const posts = [];
     for (const { post: p, origin, mine } of rendered) {
       let canReshare = false;
-      if (!mine && p.hopsRemaining > 0 && !resharedParents.has(p.id)) {
-        const conn = await getConnection(db, p.householdId, H);
+      if (!mine && p.visibility !== 'SELECT' && p.hopsRemaining > 0 && !resharedParents.has(p.id)) {
+        const conn = reachByPoster.get(p.householdId)?.connection;
         canReshare =
           !!conn && conn.status === 'ACTIVE' && grantsFrom(conn, p.householdId).reshare;
       }
@@ -303,6 +330,7 @@ export const shareRouter = router({
         title: p.title,
         description: p.description,
         photoPath: p.photoPath,
+        visibility: p.visibility,
         quantity: origin.quantity,
         unit: origin.unit,
         remaining: origin.remaining,
@@ -346,6 +374,7 @@ export const shareRouter = router({
         expiresAt: z.string().min(1).max(40).optional(),
         hopsAllowance: z.number().int().min(0).max(HOP_MAX).default(1),
         lotIds: z.array(z.string().min(1)).max(20).optional(),
+        circleIds: circleIdsSchema,
         photoPath: z.string().min(1).max(300).optional(),
         clientKey: clientKeySchema,
       }),
@@ -374,15 +403,20 @@ export const shareRouter = router({
       } else {
         expiresAt = defaultExpiresAt(input.type, now);
       }
+      const scopeCircleIds = input.circleIds ? [...new Set(input.circleIds)] : [];
+      const visibility = scopeCircleIds.length > 0 ? 'SELECT' : 'ALL';
 
       const result = await dbTransaction(async (tx) => {
         if (input.clientKey) {
           const prior = await tx.sharePost.findUnique({ where: { clientKey: input.clientKey } });
-          if (prior) return { id: prior.id, created: false };
+          if (prior) return { id: prior.id, created: false, visibility: prior.visibility, scopeCircleIds: [] };
         }
         if (input.photoPath) await assertFreshShareImage(tx, input.photoPath);
         const lotIds = input.type === 'SURPLUS' ? input.lotIds ?? [] : [];
         for (const lotId of lotIds) await loadOwnShareableLot(tx, ctx.user, lotId);
+        for (const circleId of scopeCircleIds) {
+          await requireOwnCircle(tx, ctx.user.householdId, circleId);
+        }
 
         const post = await tx.sharePost.create({
           data: {
@@ -393,6 +427,7 @@ export const shareRouter = router({
             title: input.title,
             description: input.description ?? null,
             photoPath: input.photoPath ?? null,
+            visibility,
             quantity: input.quantity ?? null,
             unit: input.quantity != null ? input.unit ?? null : null,
             remaining: input.quantity ?? null,
@@ -404,7 +439,10 @@ export const shareRouter = router({
         for (const lotId of lotIds) {
           await tx.sharePostLot.create({ data: { postId: post.id, lotId } });
         }
-        return { id: post.id, created: true };
+        for (const circleId of scopeCircleIds) {
+          await tx.sharePostCircle.create({ data: { sharePostId: post.id, circleId } });
+        }
+        return { id: post.id, created: true, visibility, scopeCircleIds };
       });
       // Post-commit: notify every connected household that can SEE this new post
       // (poster's ACTIVE connections filtered by shareVisible — both directions).
@@ -416,11 +454,21 @@ export const shareRouter = router({
         const poster = ctx.user.householdId;
         const conns = await db.connection.findMany({
           where: { status: 'ACTIVE', OR: [{ householdAId: poster }, { householdBId: poster }] },
+          include: CONNECTION_WITH_CIRCLES,
         });
         const audience: string[] = [];
         for (const c of conns) {
           const other = c.householdAId === poster ? c.householdBId : c.householdAId;
-          if (await shareVisible(db, poster, other)) audience.push(other);
+          if (!shareVisibleOnConnection(c, poster, other)) continue;
+          if (
+            !postVisibleToConnection(
+              { visibility: result.visibility, scopeCircleIds: result.scopeCircleIds },
+              posterSideCircleId(c, poster),
+            )
+          ) {
+            continue;
+          }
+          audience.push(other);
         }
         if (audience.length > 0) {
           void notify({
@@ -451,7 +499,7 @@ export const shareRouter = router({
         const post = await tx.sharePost.findUnique({ where: { id: input.postId } });
         if (!post) throw new TRPCError({ code: 'NOT_FOUND', message: 'Post not found.' });
         if (post.householdId !== H) {
-          const visible = await shareVisible(tx, post.householdId, H);
+          const visible = await postVisibleToHousehold(tx, post, H);
           throw new TRPCError({
             code: visible ? 'FORBIDDEN' : 'NOT_FOUND',
             message: visible ? 'Only the posting household can withdraw this.' : 'Post not found.',
@@ -625,7 +673,7 @@ export const shareRouter = router({
         if (!post) throw new TRPCError({ code: 'NOT_FOUND', message: 'Post not found.' });
         // The claim's post must belong to the acting household (404/403 convention).
         if (post.householdId !== H) {
-          const visible = await shareVisible(tx, post.householdId, H);
+          const visible = await postVisibleToHousehold(tx, post, H);
           throw new TRPCError({
             code: visible ? 'FORBIDDEN' : 'NOT_FOUND',
             message: visible ? 'Only the posting household can answer this.' : 'Claim not found.',
@@ -653,6 +701,13 @@ export const shareRouter = router({
           post.expiresAt <= now ||
           origin.expiresAt <= now
         ) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'This post is no longer open.' });
+        }
+        // A reshare copy whose upstream chain died (severed edge, or the broker
+        // re-assigned out of a scoped parent's circles) is dead everywhere the
+        // feed is concerned — answering its pending claims must fail the same
+        // way, or a dead branch could still be driven to FULFILLED (B6/F4).
+        if (post.parentPostId && !(await chainEdgesAlive(tx, post))) {
           throw new TRPCError({ code: 'CONFLICT', message: 'This post is no longer open.' });
         }
 
@@ -730,6 +785,9 @@ export const shareRouter = router({
         const { post: source, mine, live } = await loadVisiblePost(tx, ctx.user, input.postId);
         if (mine) throw new TRPCError({ code: 'BAD_REQUEST', message: "You can't reshare your own post." });
         if (!live) throw new TRPCError({ code: 'CONFLICT', message: 'This post is no longer available.' });
+        if (source.visibility === 'SELECT') {
+          throw new TRPCError({ code: 'CONFLICT', message: "This post can't be reshared." });
+        }
         const conn = await getConnection(tx, source.householdId, H);
         if (!conn || conn.status !== 'ACTIVE' || !grantsFrom(conn, source.householdId).reshare) {
           throw new TRPCError({ code: 'FORBIDDEN', message: "They haven't allowed resharing this." });
@@ -752,6 +810,9 @@ export const shareRouter = router({
             title: source.title,
             description: source.description,
             photoPath: source.photoPath,
+            // A reshare recomputes audience from the resharer's own connections;
+            // origin circle scope cannot be carried across households.
+            visibility: 'ALL',
             quantity: source.quantity,
             unit: source.unit,
             remaining: null, // resolved from the origin at read time (F4)

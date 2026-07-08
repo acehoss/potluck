@@ -28,6 +28,7 @@ type FeedPost = {
   remaining: number | null;
   expiresAt: string;
   status: 'OPEN' | 'CLAIMED' | 'FULFILLED' | 'EXPIRED';
+  visibility: string;
   mine: boolean;
   isReshare: boolean;
   poster: { householdId: string; householdName: string };
@@ -243,6 +244,15 @@ function ShareCard({
                 className="shrink-0 rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted"
               >
                 {post.status.toLowerCase()}
+              </span>
+            )}
+            {post.mine && post.visibility === 'SELECT' && (
+              <span
+                data-testid="share-limited-chip"
+                className="shrink-0 rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted"
+                title="Only some of your circles can see this post"
+              >
+                Some circles
               </span>
             )}
           </div>
@@ -567,6 +577,15 @@ function ComposeSheet({
   const [photo, setPhoto] = useState<{ path: string; preview: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Audience: default ALL (reach every circle we grant shareTo — today's
+  // behavior, no circleIds sent). SELECT scopes to a chosen subset.
+  const [audience, setAudience] = useState<'ALL' | 'SELECT'>('ALL');
+  const [audienceCircles, setAudienceCircles] = useState<Set<string>>(new Set());
+
+  // circle.names is any-member; filter client-side to circles that actually
+  // carry the shareTo grant — the only ones a post can reach.
+  const circles = useQuery(trpc.circle.names.queryOptions());
+  const shareToCircles = (circles.data?.circles ?? []).filter((c) => c.shareTo);
 
   const create = useMutation(
     trpc.share.create.mutationOptions({
@@ -600,6 +619,9 @@ function ComposeSheet({
   }
 
   const hasQty = qty.trim() !== '';
+  // In SELECT mode a post must reach at least one circle, or it reaches nobody.
+  const audienceIncomplete =
+    shareToCircles.length > 0 && audience === 'SELECT' && audienceCircles.size === 0;
   const typeBtn = (active: boolean) =>
     `min-h-11 flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
       active
@@ -626,9 +648,15 @@ function ComposeSheet({
             quantity,
             unit: hasQty && unit.trim() ? unit.trim() : undefined,
             expiresAt: dateInputToIso(expiry),
-            hopsAllowance: hops,
+            // Scoped posts can't be reshared — store 0 hops so the row matches
+            // what the composer showed (the server refuses reshare regardless).
+            hopsAllowance: shareToCircles.length > 0 && audience === 'SELECT' ? 0 : hops,
             lotIds: type === 'SURPLUS' && selectedLots.size ? [...selectedLots] : undefined,
             photoPath: photo?.path,
+            circleIds:
+              shareToCircles.length > 0 && audience === 'SELECT'
+                ? [...audienceCircles]
+                : undefined,
             clientKey,
           });
         }}
@@ -726,18 +754,87 @@ function ComposeSheet({
 
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
           May connections pass this on?
+          {/* A circle-scoped post can never be reshared (the server refuses),
+              so the hops choice is moot in SELECT mode — disable it rather
+              than let "Family only + 2 hops" read as a contradiction. */}
           <select
             data-testid="share-hops"
-            value={hops}
+            value={audience === 'SELECT' ? 0 : hops}
+            disabled={audience === 'SELECT'}
             onChange={(e) => setHops(Number(e.target.value))}
-            className={inputClass}
+            className={`${inputClass} disabled:opacity-50`}
           >
-            <option value={0}>No — direct connections only</option>
+            <option value={0}>
+              {audience === 'SELECT' ? 'No — limited posts stay put' : 'No — direct connections only'}
+            </option>
             <option value={1}>1 hop</option>
             <option value={2}>2 hops</option>
             <option value={3}>3 hops</option>
           </select>
         </label>
+
+        {/* Audience — scope the post to specific sharing circles. Hidden when the
+            household grants shareTo to no circle (a scoped post would reach nobody). */}
+        {shareToCircles.length > 0 && (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-sm font-medium text-text">Audience</legend>
+            <div className="flex flex-col gap-2" role="radiogroup" aria-label="Audience">
+              <label className="flex min-h-11 items-center gap-3 rounded-lg border border-border px-3 text-sm text-text">
+                <input
+                  type="radio"
+                  name="share-audience-mode"
+                  data-testid="share-audience-mode-all"
+                  checked={audience === 'ALL'}
+                  onChange={() => setAudience('ALL')}
+                  className="size-5 accent-[var(--color-accent)]"
+                />
+                All sharing circles
+              </label>
+              <label className="flex min-h-11 items-center gap-3 rounded-lg border border-border px-3 text-sm text-text">
+                <input
+                  type="radio"
+                  name="share-audience-mode"
+                  data-testid="share-audience-mode-select"
+                  checked={audience === 'SELECT'}
+                  onChange={() => setAudience('SELECT')}
+                  className="size-5 accent-[var(--color-accent)]"
+                />
+                Only these circles…
+              </label>
+            </div>
+
+            {audience === 'SELECT' && (
+              <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+                <ul className="flex flex-col gap-1">
+                  {shareToCircles.map((c) => (
+                    <li key={c.id}>
+                      <label
+                        data-testid="share-audience-circle"
+                        className="flex min-h-11 items-center gap-3 text-sm text-text"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={audienceCircles.has(c.id)}
+                          onChange={(e) =>
+                            setAudienceCircles((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(c.id);
+                              else next.delete(c.id);
+                              return next;
+                            })
+                          }
+                          className="size-5 accent-[var(--color-accent)]"
+                        />
+                        <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-text-muted">Limited posts can&apos;t be reshared.</p>
+              </div>
+            )}
+          </fieldset>
+        )}
 
         {/* Photo */}
         <div className="flex items-center gap-3">
@@ -834,6 +931,9 @@ function ComposeSheet({
             {error}
           </p>
         )}
+        {audienceIncomplete && (
+          <p className="text-xs text-text-muted">Pick at least one circle, or post to all.</p>
+        )}
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className={secondaryBtn}>
             Cancel
@@ -841,7 +941,7 @@ function ComposeSheet({
           <button
             type="submit"
             data-testid="share-compose-submit"
-            disabled={create.isPending || uploading}
+            disabled={create.isPending || uploading || audienceIncomplete}
             className={primaryBtn}
           >
             {create.isPending ? 'Posting…' : 'Post'}

@@ -237,6 +237,7 @@ model Circle {
   connectionsAsB   Connection[]       @relation("connectionBCircle")
   pantryScopes     PantryCircle[]
   itemScopes       ItemCircle[]
+  sharePostScopes  SharePostCircle[]
   membershipScopes MembershipCircle[]
 
   @@unique([householdId, name])
@@ -877,6 +878,10 @@ model SharePost {
   title         String
   description   String?
   photoPath     String?   // IMAGES_DIR kind "shares"
+  // Share visibility (REWORK P4 circle-scoped visibility model): "ALL" reaches
+  // every share-visible connection; "SELECT" additionally requires a
+  // SharePostCircle match against the poster-side circle.
+  visibility    String    @default("ALL")
   // Optional quantity (F1): null = whole-thing/unspecified. unit is free text.
   quantity      Int?
   unit          String?
@@ -895,10 +900,23 @@ model SharePost {
   household Household      @relation(fields: [householdId], references: [id])
   lots      SharePostLot[]
   claims    ShareClaim[]
+  circles   SharePostCircle[]
 
   @@index([householdId])
   @@index([originPostId])
   @@index([parentPostId])
+}
+
+model SharePostCircle {
+  id          String @id @default(cuid())
+  sharePostId String
+  circleId    String
+
+  post   SharePost @relation(fields: [sharePostId], references: [id], onDelete: Cascade)
+  circle Circle    @relation(fields: [circleId], references: [id], onDelete: Cascade)
+
+  @@unique([sharePostId, circleId])
+  @@index([circleId])
 }
 
 // Provenance link: which tracked lots a SURPLUS origin offers (own-household,

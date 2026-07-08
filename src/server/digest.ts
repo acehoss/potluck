@@ -27,10 +27,16 @@ import { deepLinkPath, mintDeepLinkToken } from './deeplink';
 import { netByCounterparty } from './ledger';
 import { sendSubscription } from './mail';
 import { openLoopsFor } from './open-loops';
-import { shareVisible } from './share-reach';
+import {
+  chainEdgesAlive,
+  loadScopeCircleIds,
+  postVisibleToConnection,
+  sharePosterReachByHousehold,
+} from './share-reach';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CONNECTION_WITH_CIRCLES = { aCircle: true, bCircle: true } as const;
 
 export type DigestCadence = 'off' | 'daily' | 'weekly';
 
@@ -163,24 +169,42 @@ async function sectionFor(
   const waitingOnYou = loops.actionableCount;
 
   // New shares this period from connections that this household can still see.
-  const candidates = await db.sharePost.findMany({
-    where: {
-      householdId: { not: householdId },
-      status: { in: ['OPEN', 'CLAIMED'] },
-      expiresAt: { gt: now },
-      createdAt: { gt: since },
-    },
-    select: { householdId: true },
-  });
+  const [candidates, connections] = await Promise.all([
+    db.sharePost.findMany({
+      where: {
+        householdId: { not: householdId },
+        status: { in: ['OPEN', 'CLAIMED'] },
+        expiresAt: { gt: now },
+        createdAt: { gt: since },
+      },
+      select: { id: true, householdId: true, visibility: true, parentPostId: true },
+    }),
+    db.connection.findMany({
+      where: { status: 'ACTIVE', OR: [{ householdAId: householdId }, { householdBId: householdId }] },
+      include: CONNECTION_WITH_CIRCLES,
+    }),
+  ]);
+  const reachByPoster = sharePosterReachByHousehold(connections, householdId);
+  const scopeIdsByPost = await loadScopeCircleIds(
+    db,
+    candidates.filter((c) => c.visibility === 'SELECT').map((c) => c.id),
+  );
   let newShares = 0;
-  const visibleCache = new Map<string, boolean>();
   for (const c of candidates) {
-    let vis = visibleCache.get(c.householdId);
-    if (vis === undefined) {
-      vis = await shareVisible(db, c.householdId, householdId);
-      visibleCache.set(c.householdId, vis);
+    const reach = reachByPoster.get(c.householdId);
+    if (!reach) continue;
+    if (
+      !postVisibleToConnection(
+        { visibility: c.visibility, scopeCircleIds: scopeIdsByPost.get(c.id) ?? [] },
+        reach.posterSideCircleId,
+      )
+    ) {
+      continue;
     }
-    if (vis) newShares += 1;
+    // A reshare copy whose upstream chain died is gone from the feed — don't
+    // count it in the digest either (mirrors the feed's chainEdgesAlive rule).
+    if (c.parentPostId && !(await chainEdgesAlive(db, c))) continue;
+    newShares += 1;
   }
 
   return { householdName, standings, netCents, waitingOnYou, newShares };

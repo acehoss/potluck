@@ -78,6 +78,7 @@ export const circleRouter = router({
         scopes:
           (await db.pantryCircle.count({ where: { circleId: c.id } })) +
           (await db.itemCircle.count({ where: { circleId: c.id } })) +
+          (await db.sharePostCircle.count({ where: { circleId: c.id } })) +
           (await db.membershipCircle.count({ where: { circleId: c.id } })),
       })),
     );
@@ -95,20 +96,25 @@ export const circleRouter = router({
   }),
 
   /**
-   * Circle NAMES only (id + name), for ANY member of the acting household — no
+   * Circle NAMES plus shareTo, for ANY member of the acting household — no
    * manageConnections gate (unlike `list`, which is connection administration).
-   * The member-visibility SELECT control (P5) needs to show a member their own
-   * household's circles to scope their card to, and hiding yourself needs no
-   * connection-management capability. Leaks nothing but the id+name a member
-   * already lives under.
+   * Member visibility needs id/name; the share composer also needs shareTo to
+   * offer only circles that can receive posts. The other grant flags stay
+   * manager-only.
    */
   names: protectedProcedure.query(async ({ ctx }) => {
     const circles = await db.circle.findMany({
       where: { householdId: ctx.user.householdId },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
-      select: { id: true, name: true },
+      select: { id: true, name: true, grantsShareTo: true },
     });
-    return { circles };
+    return {
+      circles: circles.map((c) => ({
+        id: c.id,
+        name: c.name,
+        shareTo: c.grantsShareTo,
+      })),
+    };
   }),
 
   /** Create a circle (name 1..40, unique per household → 409; six grant flags). */
@@ -182,8 +188,8 @@ export const circleRouter = router({
 
   /**
    * Delete a circle. 409 while any connection still sits in it OR any pantry/
-   * item/member is scoped to it — reassign/rescope first (deleting would drop a
-   * side's grants to nothing or orphan a SELECT scope silently).
+   * item/share/member is scoped to it — reassign/rescope first (deleting would
+   * drop a side's grants to nothing or orphan a SELECT scope silently).
    */
   delete: protectedProcedure
     .input(z.object({ circleId: z.string().min(1) }))
@@ -202,11 +208,12 @@ export const circleRouter = router({
         const scopes =
           (await tx.pantryCircle.count({ where: { circleId: input.circleId } })) +
           (await tx.itemCircle.count({ where: { circleId: input.circleId } })) +
+          (await tx.sharePostCircle.count({ where: { circleId: input.circleId } })) +
           (await tx.membershipCircle.count({ where: { circleId: input.circleId } }));
         if (scopes > 0) {
           throw new TRPCError({
             code: 'CONFLICT',
-            message: 'This circle still scopes a pantry, item, or member.',
+            message: 'This circle still scopes a pantry, item, share, or member.',
           });
         }
         await tx.circle.delete({ where: { id: input.circleId } });
