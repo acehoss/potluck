@@ -1,6 +1,6 @@
 import type { Prisma } from '@/generated/prisma/client';
 import { getConnection, grantsFrom } from './authz';
-import { db } from './db';
+import type { db } from './db';
 
 /**
  * The share-visibility primitive, in its own trpc-free module so background jobs
@@ -12,6 +12,10 @@ import { db } from './db';
 
 /** Either the base client or a transaction client — share checks run under both. */
 export type Dbc = Prisma.TransactionClient | typeof db;
+
+export function prismaForShareReach(dbc: Dbc): Prisma.TransactionClient {
+  return dbc as unknown as Prisma.TransactionClient;
+}
 
 type CircleGrants = {
   grantsPantry: boolean;
@@ -124,7 +128,7 @@ export function scopeCircleIdsByPost(rows: { sharePostId: string; circleId: stri
 export async function loadScopeCircleIds(dbc: Dbc, postIds: string[]) {
   if (postIds.length === 0) return new Map<string, string[]>();
   return scopeCircleIdsByPost(
-    await dbc.sharePostCircle.findMany({
+    await prismaForShareReach(dbc).sharePostCircle.findMany({
       where: { sharePostId: { in: postIds } },
       select: { sharePostId: true, circleId: true },
     }),
@@ -162,7 +166,9 @@ export async function chainEdgesAlive(
 ): Promise<boolean> {
   let current = copy;
   for (let hop = 0; hop <= HOP_MAX && current.parentPostId; hop++) {
-    const parent = await dbc.sharePost.findUnique({ where: { id: current.parentPostId } });
+    const parent = await prismaForShareReach(dbc).sharePost.findUnique({
+      where: { id: current.parentPostId },
+    });
     if (!parent) return false;
     if (!(await postVisibleToHousehold(dbc, parent, current.householdId))) return false;
     current = parent;

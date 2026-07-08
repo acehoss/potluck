@@ -40,16 +40,69 @@ export type StockMutationKind =
   | 'transfer-out'
   | 'transfer-in';
 
+/** DRAFT sessions idle past this are dead — their freeze no longer binds. */
+export const RECONCILE_STALE_ABANDON_MS = 24 * 60 * 60 * 1000;
+
 export async function assertStockMutable(
   tx: Prisma.TransactionClient,
   stockId: string,
   kind: StockMutationKind,
 ): Promise<void> {
-  // No reconcile sessions exist yet (Phase 4 Round 3); the seam keeps its
-  // final signature so filling it in is not an API change.
-  void tx;
-  void stockId;
-  void kind;
+  // The cutoff model (A2): consuming already-reserved units decrements count
+  // and reservedCount together, leaving free stock — the count baseline —
+  // untouched, so pickups ride through a freeze. Everything else moves FREE
+  // stock and is refused while a live DRAFT session scopes this placement.
+  if (kind === 'consume-reserved') return;
+  const line = await tx.reconcileLine.findFirst({
+    where: { stockId, session: { status: 'DRAFT' } },
+    select: { session: { select: { id: true, lastActivityAt: true } } },
+  });
+  if (!line) return;
+  // Lazy 24h auto-abandon (A3): a forgotten session must never strand stock.
+  // Flipping status here (not just ignoring the row) releases the whole
+  // session everywhere at once and shows up honestly in its history.
+  if (line.session.lastActivityAt.getTime() < Date.now() - RECONCILE_STALE_ABANDON_MS) {
+    await tx.reconcileSession.update({
+      where: { id: line.session.id },
+      data: { status: 'ABANDONED', abandonedAt: new Date() },
+    });
+    return;
+  }
+  throw new TRPCError({
+    code: 'PRECONDITION_FAILED',
+    message: 'This shelf is being counted — it will be back shortly.',
+  });
+}
+
+/**
+ * Pantry-level freeze companion to assertStockMutable: paths that CREATE
+ * placements (restock finalize, transfer destinations) would otherwise slip
+ * uncounted stock into a pantry mid-count — the new row has no ReconcileLine,
+ * so the per-placement check never fires. Reconcile's own scope growth
+ * (addLine) and commit-derived moves are exempt by construction: commit flips
+ * the session off DRAFT before it moves anything.
+ */
+export async function assertPantriesNotUnderCount(
+  tx: Prisma.TransactionClient,
+  pantryIds: string[],
+): Promise<void> {
+  if (pantryIds.length === 0) return;
+  const scope = await tx.reconcilePantry.findFirst({
+    where: { pantryId: { in: pantryIds }, session: { status: 'DRAFT' } },
+    select: { session: { select: { id: true, lastActivityAt: true } } },
+  });
+  if (!scope) return;
+  if (scope.session.lastActivityAt.getTime() < Date.now() - RECONCILE_STALE_ABANDON_MS) {
+    await tx.reconcileSession.update({
+      where: { id: scope.session.id },
+      data: { status: 'ABANDONED', abandonedAt: new Date() },
+    });
+    return;
+  }
+  throw new TRPCError({
+    code: 'PRECONDITION_FAILED',
+    message: 'That pantry is being counted — try again shortly.',
+  });
 }
 
 const CHANGED = 'That item changed underneath you — try again.';

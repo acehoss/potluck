@@ -177,6 +177,17 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
           select: { id: true, name: true },
         })
       : [];
+  // Reconcile scope options (Phase 4 S5/A1): every pantry the household owns
+  // (the current one is preselected in the scope sheet). Same adjustInventory
+  // gate as Move — creating a session requires it; empty ⇒ no Count entry.
+  const reconcilePantries =
+    isOwn && user.activeMembership.adjustInventory
+      ? await db.pantry.findMany({
+          where: { householdId: user.householdId },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true },
+        })
+      : [];
   const cartInfo =
     cart && cart.lines.length > 0
       ? {
@@ -201,6 +212,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       canManageVisibility={isOwn && user.activeMembership.manageHousehold}
       canEditProductPhotos={isOwn && user.activeMembership.receiveStock}
       movePantries={movePantries}
+      reconcilePantries={reconcilePantries}
     />
   );
 }

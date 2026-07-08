@@ -82,6 +82,7 @@ export function InventoryView({
   canManageVisibility,
   canEditProductPhotos,
   movePantries,
+  reconcilePantries,
 }: {
   pantry: { id: string; name: string; householdName: string };
   isOwn: boolean;
@@ -101,6 +102,10 @@ export function InventoryView({
   /** The household's OTHER pantries (own pantry + adjustInventory only); the
    *  destinations for a move. Empty ⇒ no Move entry points at all. */
   movePantries: { id: string; name: string }[];
+  /** Every pantry the household owns (own pantry + adjustInventory only); the
+   *  reconcile scope options, with this pantry preselected. Empty ⇒ no Count
+   *  entry point. */
+  reconcilePantries: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -132,6 +137,14 @@ export function InventoryView({
     initialLotId?: string;
   } | null>(null);
   const [moveNotice, setMoveNotice] = useState<string | null>(null);
+  // Reconcile (Phase 4 S5/A1): the stock-take escalation, own pantry only. The
+  // open-session probe decides whether the entry reads "Count…" or "Resume".
+  const canReconcile = reconcilePantries.length > 0;
+  const trpc = useTRPC();
+  const openSession = useQuery(
+    trpc.reconcile.open.queryOptions(undefined, { enabled: canReconcile, staleTime: 30_000 }),
+  );
+  const [scopeOpen, setScopeOpen] = useState(false);
 
   const visible = groups.filter((g) => g.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -215,6 +228,27 @@ export function InventoryView({
         >
           <span aria-hidden>↔</span> Move items
         </button>
+      )}
+
+      {canReconcile && !moveMode && (
+        openSession.data ? (
+          <Link
+            href={`/reconcile/${openSession.data.sessionId}`}
+            data-testid="reconcile-start"
+            className="flex min-h-11 items-center gap-1.5 self-start rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-sm font-medium text-warn transition-colors hover:bg-warn-soft/70"
+          >
+            <span aria-hidden>📋</span> Resume count
+          </Link>
+        ) : (
+          <button
+            type="button"
+            data-testid="reconcile-start"
+            onClick={() => setScopeOpen(true)}
+            className="flex min-h-11 items-center gap-1.5 self-start rounded-lg border border-border-strong px-3 py-2 text-sm font-medium text-text transition-colors hover:bg-surface-sunken"
+          >
+            <span aria-hidden>📋</span> Count this pantry…
+          </button>
+        )
       )}
 
       {moveNotice && (
@@ -400,6 +434,14 @@ export function InventoryView({
             }
           }}
           onClose={() => setScanOpen(false)}
+        />
+      )}
+
+      {scopeOpen && (
+        <ReconcileScopeSheet
+          pantries={reconcilePantries}
+          currentPantryId={pantry.id}
+          onClose={() => setScopeOpen(false)}
         />
       )}
 
@@ -1478,6 +1520,148 @@ function WriteOffSheet({
             className={sheetPrimaryBtn}
           >
             {writeOff.isPending ? 'Writing off…' : 'Write off'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Reconcile scope sheet (Phase 4 S5/A1/A4): pick which owned pantries this
+ * stock-take covers (this pantry preselected), whether counting is BLIND
+ * (default ON — the focus group's retail-ops veteran: counters who see
+ * "expected 5" write 5), and an optional note. Start creates the DRAFT session
+ * and jumps into the count screen. A pre-existing open session surfaces as a
+ * conflict message (the entry point should already read "Resume").
+ */
+function ReconcileScopeSheet({
+  pantries,
+  currentPantryId,
+  onClose,
+}: {
+  pantries: { id: string; name: string }[];
+  currentPantryId: string;
+  onClose: () => void;
+}) {
+  const trpc = useTRPC();
+  const router = useRouter();
+  const [selected, setSelected] = useState<Set<string>>(new Set([currentPantryId]));
+  const [blind, setBlind] = useState(true);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const create = useMutation(
+    trpc.reconcile.create.mutationOptions({
+      onSuccess: (session) => router.push(`/reconcile/${session.sessionId}`),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="scope-sheet"
+        className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <h2 className="text-lg font-semibold">Count stock</h2>
+        <p className="text-sm text-text-muted">
+          Pick which pantries to count. The counted items are held (no takes or order
+          changes) until you commit or abandon the count.
+        </p>
+
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-sm font-medium text-text">Pantries</legend>
+          {pantries.map((p) => {
+            const on = selected.has(p.id);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="checkbox"
+                aria-checked={on}
+                data-testid="scope-pantry"
+                onClick={() => toggle(p.id)}
+                className={`flex min-h-11 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm font-medium transition-colors ${
+                  on
+                    ? 'border-accent bg-accent-soft text-accent-strong'
+                    : 'border-border-strong text-text hover:bg-surface-sunken'
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                <span aria-hidden>{on ? '☑' : '☐'}</span>
+              </button>
+            );
+          })}
+        </fieldset>
+
+        <button
+          type="button"
+          role="switch"
+          aria-checked={blind}
+          data-testid="scope-blind"
+          onClick={() => setBlind((v) => !v)}
+          className="flex items-center justify-between gap-3 rounded-lg border border-border-strong px-3 py-2 text-left"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium text-text">Hide expected counts</span>
+            <span className="block text-xs text-text-muted">
+              Count blind — the app won&apos;t show what it thinks is on the shelf.
+            </span>
+          </span>
+          <span
+            aria-hidden
+            className={`flex h-6 w-10 shrink-0 items-center rounded-full px-0.5 transition-colors ${
+              blind ? 'justify-end bg-accent' : 'justify-start bg-surface-sunken'
+            }`}
+          >
+            <span className="size-5 rounded-full bg-surface-raised shadow-sm" />
+          </span>
+        </button>
+
+        <input
+          type="text"
+          value={note}
+          maxLength={200}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          data-testid="scope-note"
+          className={sheetInputClass}
+        />
+
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={sheetSecondaryBtn}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="scope-begin"
+            disabled={selected.size === 0 || create.isPending}
+            onClick={() => {
+              setError(null);
+              create.mutate({
+                pantryIds: [...selected],
+                blind,
+                note: note.trim() || undefined,
+              });
+            }}
+            className={sheetPrimaryBtn}
+          >
+            {create.isPending ? 'Starting…' : 'Start'}
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -23,6 +23,7 @@ type HeaderData = {
   activeHouseholdId: string;
   memberships: { householdId: string; householdName: string }[];
   canReceive: boolean;
+  canAdjust: boolean;
   pantries: { id: string; name: string }[];
 } | null;
 
@@ -68,6 +69,16 @@ export const GROUP_LABEL: Record<ActivityItem['type'], string> = {
 const iconBtn =
   'flex size-10 items-center justify-center rounded-lg text-xl text-text hover:bg-surface-sunken';
 
+/** Short "since when" for the reconcile freeze banner. */
+function reconcileAge(iso: string) {
+  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.floor(hrs / 24)}d`;
+}
+
 export function AppHeader({ data }: { data: HeaderData }) {
   const pathname = usePathname();
   const trpc = useTRPC();
@@ -79,6 +90,21 @@ export function AppHeader({ data }: { data: HeaderData }) {
     pathname.startsWith('/login') ||
     pathname.startsWith('/invite') ||
     pathname.includes('/receive/');
+
+  // Reconcile freeze banner (Phase 4 A3): a slim, household-only reminder that
+  // stock is being counted — with Open, and End for adjustInventory holders.
+  // Lightly polled; never leaks to other households (reconcile.open is
+  // acting-household-scoped).
+  const openCount = useQuery(
+    trpc.reconcile.open.queryOptions(undefined, {
+      enabled: !hidden,
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    }),
+  );
+  const abandon = useMutation(
+    trpc.reconcile.abandon.mutationOptions({ onSuccess: () => openCount.refetch() }),
+  );
 
   const activity = useQuery(
     trpc.activity.list.queryOptions(undefined, {
@@ -212,6 +238,42 @@ export function AppHeader({ data }: { data: HeaderData }) {
         </div>
       </div>
       </div>
+
+      {openCount.data && (
+        <div
+          data-testid="reconcile-banner"
+          className="border-t border-warn/30 bg-warn-soft"
+        >
+          <div className="mx-auto flex w-full max-w-2xl items-center gap-2 px-1 py-1.5">
+            <span aria-hidden className="pl-2 text-warn">📋</span>
+            <p className="min-w-0 flex-1 truncate text-xs font-medium text-warn">
+              Counting in progress —{' '}
+              {openCount.data.pantries.map((p) => p.name).join(', ')} ·{' '}
+              {reconcileAge(openCount.data.lastActivityAt)}
+            </p>
+            <Link
+              href={`/reconcile/${openCount.data.sessionId}`}
+              data-testid="banner-open"
+              className="min-h-9 shrink-0 rounded-lg border border-warn/40 px-2.5 py-1 text-xs font-medium text-warn hover:bg-warn-soft/60"
+            >
+              Open
+            </Link>
+            {data.canAdjust && (
+              <button
+                type="button"
+                data-testid="banner-abandon"
+                onClick={() => {
+                  if (window.confirm('End this count? Everything unfreezes and nothing is applied.'))
+                    abandon.mutate({ sessionId: openCount.data!.sessionId });
+                }}
+                className="min-h-9 shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-warn hover:bg-warn-soft/60"
+              >
+                End
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Household switcher sheet (reuses the More card's component). */}
       {switcherOpen && (

@@ -116,7 +116,9 @@ function cleanup(opts: { orderIds?: string[]; pantryIds?: string[]; restockIds?:
 
 test.describe('pantry transfers + receive splits', () => {
   test('single-pantry household shows no move entry points', async ({ page }) => {
-    await login(page, 'dana'); // Neighbors: one pantry, full capabilities
+    // nia's household keeps exactly one pantry — the transfer/reconcile specs
+    // add pantries to aaron's and dana's households, so those can't gate this.
+    await login(page, 'nia');
     const pantryId = await ownPantryId(page.request);
     await page.goto(`/pantries/${pantryId}`);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();

@@ -4,7 +4,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from '../auth';
 import { requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
-import { moveStock } from '../stock';
+import { assertPantriesNotUnderCount, moveStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 const lineSchema = z.object({
@@ -127,6 +127,10 @@ export const transferRouter = router({
         await assertOwnPantries(tx, ctx.user, input.fromPantryId, input.toPantryId);
         const replayed = await findReplayedTransfer(tx, input.clientKey, input, ctx.user);
         if (replayed) return replayed;
+        // Destination under a reconcile freeze: moveStock's per-placement
+        // check misses a CREATED destination placement (no scoped line), so
+        // the pantry-level gate refuses here. Sources are covered per line.
+        await assertPantriesNotUnderCount(tx, [input.toPantryId]);
 
         for (const line of input.lines) {
           await assertMovableStock(tx, ctx.user, line.stockId, input.fromPantryId);

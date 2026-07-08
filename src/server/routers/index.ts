@@ -19,6 +19,7 @@ import { productRouter } from './product';
 import { profileRouter } from './profile';
 import { pushRouter } from './push';
 import { recipeRouter } from './recipe';
+import { reconcileRouter } from './reconcile';
 import { shoppingRouter } from './shopping';
 import { restockRouter } from './restock';
 import { shareRouter } from './share';
@@ -47,6 +48,7 @@ export const appRouter = router({
   profile: profileRouter,
   push: pushRouter,
   recipe: recipeRouter,
+  reconcile: reconcileRouter,
   restock: restockRouter,
   share: shareRouter,
   shopping: shoppingRouter,

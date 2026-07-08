@@ -11,6 +11,7 @@ import {
   posterSideCircleId,
   postVisibleToConnection,
   postVisibleToHousehold,
+  prismaForShareReach,
   sharePosterReachByHousehold,
   shareVisibleOnConnection,
   type Dbc,
@@ -49,7 +50,7 @@ function feedLive(post: { status: string; expiresAt: Date }, now: Date): boolean
 /** The origin (root) post for any post: itself when it IS the origin. */
 async function originOf(dbc: Dbc, post: PostRow): Promise<PostRow> {
   if (!post.originPostId) return post;
-  return (await dbc.sharePost.findUnique({ where: { id: post.originPostId } })) ?? post;
+  return (await prismaForShareReach(dbc).sharePost.findUnique({ where: { id: post.originPostId } })) ?? post;
 }
 
 /**
@@ -59,7 +60,7 @@ async function originOf(dbc: Dbc, post: PostRow): Promise<PostRow> {
  * let callers apply the right 400/409.
  */
 async function loadVisiblePost(dbc: Dbc, user: SessionUser, postId: string) {
-  const post = await dbc.sharePost.findUnique({ where: { id: postId } });
+  const post = await prismaForShareReach(dbc).sharePost.findUnique({ where: { id: postId } });
   if (!post) throw new TRPCError({ code: 'NOT_FOUND', message: 'Post not found.' });
   const mine = post.householdId === user.householdId;
   if (!mine && !(await postVisibleToHousehold(dbc, post, user.householdId))) {

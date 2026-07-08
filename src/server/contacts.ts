@@ -15,6 +15,10 @@ import type { db } from './db';
 
 type Dbc = Prisma.TransactionClient | typeof db;
 
+function prisma(dbc: Dbc): Prisma.TransactionClient {
+  return dbc as unknown as Prisma.TransactionClient;
+}
+
 /** Own household always; otherwise the member's visibility over the ACTIVE edge. */
 async function memberVisibleTo(
   dbc: Dbc,
@@ -64,7 +68,8 @@ export async function loadContactHousehold(
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Household not found.' });
     }
   }
-  const household = await dbc.household.findUnique({
+  const client = prisma(dbc);
+  const household = await client.household.findUnique({
     where: { id: targetHouseholdId },
     include: {
       memberships: {
@@ -120,7 +125,8 @@ export async function resolveVcardTarget(
   viewerHouseholdId: string,
   targetUserId: string,
 ): Promise<VcardTarget | null> {
-  const user = await dbc.user.findUnique({
+  const client = prisma(dbc);
+  const user = await client.user.findUnique({
     where: { id: targetUserId },
     include: {
       memberships: {

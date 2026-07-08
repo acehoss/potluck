@@ -103,6 +103,7 @@ model User {
   restocksCreated   Restock[]
   takes             Take[]
   transfersCreated  Transfer[]
+  reconcileSessionsCreated ReconcileSession[]
   ledgerSeen        LedgerSeen[]
   loans             Loan[]
   pushSubscriptions PushSubscription[]
@@ -490,6 +491,7 @@ model Pantry {
   transfersOut   Transfer[]      @relation("transfersOut")
   transfersIn    Transfer[]      @relation("transfersIn")
   lotAllocations LotAllocation[]
+  reconcilePantries ReconcilePantry[]
 }
 
 // ---- slice 2: receiving (blueprint 01) ------------------------------------
@@ -720,6 +722,10 @@ model Stock {
   pantryId      String
   count         Int      @default(0)
   reservedCount Int      @default(0)
+  // Stamped whenever a reconcile confirms this placement (including exact
+  // matches — A4: match-confirms must not spam no-op Adjustment rows, but the
+  // app should still know when a shelf was last verified).
+  lastCountedAt DateTime?
   createdAt     DateTime @default(now())
 
   lot    Lot    @relation(fields: [lotId], references: [id])
@@ -730,6 +736,7 @@ model Stock {
   sharePostLots SharePostLot[]
   transferLinesFrom TransferLine[] @relation("fromStock")
   transferLinesTo   TransferLine[] @relation("toStock")
+  reconcileLines    ReconcileLine[]
 
   @@unique([lotId, pantryId])
   @@index([pantryId])
@@ -753,6 +760,10 @@ model Transfer {
   fromPantryId String
   toPantryId   String
   note         String?
+  // Set when this transfer was DERIVED by a reconcile commit's conservation
+  // math (A6) rather than physically observed — audit must not conflate the
+  // two. Relation-free on purpose (sessions are household housekeeping).
+  reconcileSessionId String?
   createdById  String
   createdAt    DateTime @default(now())
 
@@ -781,6 +792,80 @@ model TransferLine {
 
   @@index([transferId])
   @@index([lotId])
+}
+
+// ---- Phase 4 Round 3 (REWORK S5/S6 + A1–A8): reconcile draft sessions ---------
+
+// A blocking stock-take: scoped placements are FROZEN (src/server/stock.ts
+// assertStockMutable — the cutoff model: pickups of already-reserved units
+// ride through, everything touching FREE stock is refused) until commit or
+// abandon. Multi-user: any household member may count; commit/abandon need
+// adjustInventory. Nothing applies until commit (one tx: derived Transfers +
+// variance Adjustments + final counts + shortage resolutions). At most ONE
+// DRAFT session per household (enforced in code under the app lock). A DRAFT
+// idle past 24h is LAZILY auto-abandoned (checked wherever the session or its
+// freeze is consulted) so a forgotten phone can never strand a pantry.
+model ReconcileSession {
+  id              String    @id @default(cuid())
+  householdId     String
+  status          String    @default("DRAFT") // DRAFT | COMMITTED | ABANDONED
+  // A4: blind entry is the default; a session may opt into showing "app says N".
+  blind           Boolean   @default(true)
+  note            String?
+  createdById     String
+  createdAt       DateTime  @default(now())
+  // Touched by every count/scope mutation; drives staleness + lazy expiry.
+  lastActivityAt  DateTime  @default(now())
+  committedAt     DateTime?
+  abandonedAt     DateTime?
+  // Idempotency for the one money-adjacent moment (commit mutates stock,
+  // transfers, adjustments, orders): a replayed commit returns the original.
+  commitClientKey String?   @unique
+  // The exact summary the original commit returned (JSON) — replays must not
+  // reconstruct ordersAffected from the replay's own request payload.
+  commitSummary   String?
+
+  createdBy User               @relation(fields: [createdById], references: [id])
+  pantries  ReconcilePantry[]
+  lines     ReconcileLine[]
+
+  @@index([householdId, status])
+}
+
+// Scope + coordination: which pantries are in the session, and who claimed
+// each (a soft lock so two counters don't walk the same shelf).
+model ReconcilePantry {
+  id          String  @id @default(cuid())
+  sessionId   String
+  pantryId    String
+  claimedById String?
+
+  session ReconcileSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  pantry  Pantry           @relation(fields: [pantryId], references: [id])
+
+  @@unique([sessionId, pantryId])
+}
+
+// One scoped placement. expected* snapshot the moment the line entered scope
+// (A6 — mid-session scope growth safe); countedCount null = not yet counted,
+// 0 = explicit counted-zero. Commit math runs on LIVE stock values (pickups
+// are allowed through the freeze and shift count+reserved together); the
+// baseline is for display ("app said N when you started").
+model ReconcileLine {
+  id               String    @id @default(cuid())
+  sessionId        String
+  stockId          String
+  expectedCount    Int
+  expectedReserved Int
+  countedCount     Int?
+  countedById      String?
+  countedAt        DateTime?
+
+  session ReconcileSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  stock   Stock            @relation(fields: [stockId], references: [id])
+
+  @@unique([sessionId, stockId])
+  @@index([stockId])
 }
 
 // ---- Phase 4 Round 2 (REWORK S4): per-line receive destinations ---------------
@@ -818,6 +903,9 @@ model Adjustment {
   // Phase 4 (S2): the placement this adjustment recounted/wrote off — counts
   // are per (lot, pantry) now. lotId stays for product/cost lineage.
   stockId     String
+  // Set when this RECOUNT is a reconcile commit's residual variance (A6);
+  // relation-free like Transfer.reconcileSessionId.
+  reconcileSessionId String?
   type        String // "RECOUNT" | "WRITE_OFF"
   countBefore Int // read by the SERVER inside the tx — never client-supplied
   countAfter  Int // RECOUNT: the physical count (≥ 0); WRITE_OFF: before − writtenOff

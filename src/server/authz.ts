@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from './auth';
 import type { Capability } from './capabilities';
-import { db } from './db';
+import type { db } from './db';
 
 /**
  * Capability + connection-grant checks (REWORK A3a/B2) — the authz layer
@@ -26,6 +26,10 @@ import { db } from './db';
  */
 
 type Dbc = Prisma.TransactionClient | typeof db;
+
+function prisma(dbc: Dbc): Prisma.TransactionClient {
+  return dbc as unknown as Prisma.TransactionClient;
+}
 
 /** The acting membership must carry `capability`, else 403. */
 export function requireCapability(user: SessionUser, capability: Capability): void {
@@ -116,7 +120,7 @@ export function grantsFrom(
 /** The connection row for a pair (canonical order), any status, or null. */
 export function getConnection(dbc: Dbc, householdId1: string, householdId2: string) {
   const [householdAId, householdBId] = [householdId1, householdId2].sort();
-  return dbc.connection.findUnique({
+  return prisma(dbc).connection.findUnique({
     where: { householdAId_householdBId: { householdAId, householdBId } },
     include: CIRCLE_INCLUDE,
   });
@@ -194,7 +198,7 @@ export async function memberVisibleUnderCircle(
   if (!circle) return false;
   if (member.visibility !== 'SELECT') return visibleUnderCircle(member.visibility, false);
   return (
-    (await dbc.membershipCircle.findUnique({
+    (await prisma(dbc).membershipCircle.findUnique({
       where: { membershipId_circleId: { membershipId: member.id, circleId: circle.circleId } },
     })) !== null
   );
@@ -237,7 +241,7 @@ export async function hasActiveGrant(
  * with both directions' grants. Feeds page scoping.
  */
 export async function activeConnectionsOf(dbc: Dbc, householdId: string) {
-  const rows = await dbc.connection.findMany({
+  const rows = await prisma(dbc).connection.findMany({
     where: {
       status: 'ACTIVE',
       OR: [{ householdAId: householdId }, { householdBId: householdId }],
@@ -269,7 +273,8 @@ export async function activeConnectionsOf(dbc: Dbc, householdId: string) {
  * leaks). Returns `isOwn` for capability-gated affordances.
  */
 export async function loadAccessiblePantry(dbc: Dbc, user: SessionUser, pantryId: string) {
-  const pantry = await dbc.pantry.findUnique({
+  const client = prisma(dbc);
+  const pantry = await client.pantry.findUnique({
     where: { id: pantryId },
     include: { household: { select: { id: true, name: true } } },
   });
@@ -283,7 +288,7 @@ export async function loadAccessiblePantry(dbc: Dbc, user: SessionUser, pantryId
       'pantry',
       pantry,
       (circleId) =>
-        dbc.pantryCircle
+        client.pantryCircle
           .findUnique({ where: { pantryId_circleId: { pantryId: pantry.id, circleId } } })
           .then(Boolean),
     );

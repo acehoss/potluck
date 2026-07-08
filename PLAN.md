@@ -30,15 +30,77 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
   any public deployment.
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
-- **Phase 4 in flight** (2026-07-08): Rounds 0–2 DONE (focus group · placement model ·
-  transfer + receive splits) — see the round records below. Remaining: Round 3
-  (reconcile draft sessions per REWORK A1–A8). Small deferrals: a transfer-history
-  surface (transfer.listForHousehold exists, no screen renders it yet — Round 3's
-  activity/summary work is the natural home) · legacy adjustment clientKey replay
-  across the deploy boundary (accepted risk, Round 1 review).
+- **Phase 4 COMPLETE** (2026-07-08): all four rounds shipped — focus group ·
+  placement model · transfer + receive splits · reconcile draft sessions. Round
+  records below; decision record REWORK.md "Phase 4" (S1–S7 + A1–A8). Deferred
+  follow-ups: a transfer-history surface (transfer.listForHousehold exists, no
+  screen renders it) · A7's third shortage action "fill from another placement"
+  (reduce/cancel shipped; fill is a committer convenience) · Theo's low-permission
+  "this looks off" flag (A5 fast-follow) · per-row "being counted" badges on
+  inventory (the 412 messages are the contextual surface for now) · stale-session
+  push nudge (the banner carries age; lazy 24h auto-abandon is live) ·
+  reconcile.get can cosmetically show a 24h-stale DRAFT until any freeze check or
+  create flips it · legacy adjustment clientKey replay across the deploy boundary
+  (accepted risk, Round 1 review).
   Observation from Round 1 review (not a regression — pre-existing): pantry/shopping
   availability filters on `receivedCount > 0`, so a credit-corrected-to-zero lot hides
   from inventory even with physical stock; revisit when reconcile lands.
+
+## Phase 4 Round 3 — reconcile draft sessions (2026-07-08)
+
+The stock-take (REWORK S5/S6 as amended by Round-0 A1–A8). Team: Fable (schema ·
+migration · freeze in stock.ts · pure commit math + unit tests · review-gap server
+additions · e2e) + GPT-5.5/codex (reconcile router) + Opus 4.8 (UI, browser-verified
+twice incl. a real shortage commit) + codex review.
+
+- **Model** — ReconcileSession (one DRAFT per household; blind flag; lazy 24h
+  auto-abandon) · ReconcilePantry (scope + soft claim) · ReconcileLine (placement
+  scope with expectedCount/expectedReserved baselines; countedCount null = uncounted,
+  0 = explicit not-found) · `Stock.lastCountedAt` (match-confirms stamp, no no-op
+  Adjustment spam) · `Transfer.reconcileSessionId`/`Adjustment.reconcileSessionId`
+  (derived-vs-observed provenance) · `commitSummary` JSON (exact replay answers).
+  Migration `20260708210000_reconcile` (additive).
+- **Freeze (A2 cutoff)** — `assertStockMutable` in stock.ts: consume-reserved
+  (pickups) rides through — count+reserved move together so the free-stock baseline
+  is untouched; every free-stock mutation 412s ("This shelf is being counted").
+  Companion `assertPantriesNotUnderCount` closes the created-placement escape (codex
+  review High): restock finalize into, and transfer into, a counted pantry are
+  refused. Lazy expiry lives INSIDE the checks — a forgotten phone can never strand
+  a pantry, proven by the SQL-aged e2e case.
+- **Commit** — pure `reconcile-math.ts` (unit-tested 10 cases): count-where-found
+  conservation per lot → derived transfers (deterministic pairing, committer can
+  reject a lot's pairing back into two variances) + residual variances + shortage
+  detection. One tx, ordered: flip COMMITTED (freeze off) → shortage resolutions
+  (reduce/cancel order lines, requester notified category-safe) → derived Transfers
+  via moveStock → variance RECOUNT Adjustments → lastCountedAt stamps → final
+  assertion (every line's stock.count === counted AND reserved ≤ count, else roll
+  back). commitClientKey idempotent; every variance must be client-acknowledged with
+  the exact delta (D7 consent — "Counts changed" on drift).
+- **Router** — create/get/open/lotCandidates/addPantry/addLine/claimPantry/count/
+  removeLine/removePantry/commit/abandon. Counting + claiming need membership only
+  (A5 — the Teen can be handed the basement); create/scope/commit/abandon need
+  adjustInventory. `open` answers only participants + adjustInventory holders (A3 —
+  everyone else learns from the 412 at the moment they touch a frozen shelf).
+- **UI (Opus)** — "Count this pantry…" scope sheet (blind default ON per Inés);
+  session screen with per-pantry claim + progress; blind count walk (blank keypad
+  inputs, auto-advance, explicit "0 — not found", one-tap match in non-blind,
+  per-line autosave); "+ Found something" (product search → lotCandidates → count
+  where found); review screen (derived moves w/ per-lot reject, variance acks,
+  shortage reduce/cancel per open order line) → commit summary; participant-scoped
+  household banner with Open/End. The review preview imports the SAME
+  reconcile-math module the server runs (no hand-copied mirror).
+- **e2e** `e2e/reconcile.spec.ts` (10 both-engine tests; chromium drives Heise,
+  webkit drives In-Laws so the one-DRAFT rule never collides): freeze cutoff with a
+  real READY pickup riding through, one-DRAFT conflict, derived-move commit,
+  unacked-variance 412 + commit replay, finalize/transfer-into-counted-pantry 412s,
+  SQL-aged lazy expiry, and the full UI walk (scope → banner → blind count → review
+  → ack → commit summary).
+- **Gate — green:** unit 229/229 (10 new math cases) · tsc/eslint/lint:tokens clean ·
+  reconcile + transfers specs both engines · full both-engine e2e on the rebuilt
+  stack (final run recorded below) · codex review: High (created-placement escape)
+  fixed + e2e'd; expiry-rollback finding resolved via create's expire-then-proceed +
+  in-check flips (get()'s cosmetic stale display noted); replay summary persisted;
+  banner audience narrowed to A3. Deferrals hoisted to Outstanding work.
 
 ## Phase 4 Round 2 — transfer + per-line receive splits (2026-07-08)
 

@@ -18,6 +18,10 @@ import type { db } from './db';
 
 type Dbc = Prisma.TransactionClient | typeof db;
 
+function prisma(dbc: Dbc): Prisma.TransactionClient {
+  return dbc as unknown as Prisma.TransactionClient;
+}
+
 /** The six circle grant columns as a plain object. */
 export type CircleGrantColumns = {
   grantsPantry: boolean;
@@ -59,8 +63,9 @@ export function presetCircleData(householdId: string) {
 
 /** Seed the three preset circles for a household (idempotent per name). */
 export async function ensurePresetCircles(dbc: Dbc, householdId: string) {
+  const client = prisma(dbc);
   for (const data of presetCircleData(householdId)) {
-    await dbc.circle.upsert({
+    await client.circle.upsert({
       where: { householdId_name: { householdId, name: data.name } },
       update: {},
       create: data,
@@ -91,8 +96,9 @@ export async function circleIdForGrants(
   counterpartyName: string,
 ): Promise<string> {
   const presetName = presetNameForGrants(grants);
+  const client = prisma(dbc);
   if (presetName) {
-    const circle = await dbc.circle.findUnique({
+    const circle = await client.circle.findUnique({
       where: { householdId_name: { householdId: ownerHouseholdId, name: presetName } },
     });
     if (circle) return circle.id;
@@ -104,11 +110,11 @@ export async function circleIdForGrants(
   const columns = grantColumnsOf(grants);
   for (let attempt = 0; ; attempt++) {
     const name = attempt === 0 ? baseName : `${baseName} (${attempt + 1})`;
-    const existing = await dbc.circle.findUnique({
+    const existing = await client.circle.findUnique({
       where: { householdId_name: { householdId: ownerHouseholdId, name } },
     });
     if (!existing) {
-      const created = await dbc.circle.create({
+      const created = await client.circle.create({
         data: { householdId: ownerHouseholdId, name, position: 99, ...columns },
       });
       return created.id;

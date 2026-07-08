@@ -70,6 +70,7 @@ async function headerData() {
       householdName: m.household.name,
     })),
     canReceive: user.activeMembership.receiveStock,
+    canAdjust: user.activeMembership.adjustInventory,
     pantries,
   };
 }

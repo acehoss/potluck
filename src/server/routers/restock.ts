@@ -22,7 +22,7 @@ import {
 import { deleteImageFile, imageFileExists, isStoredImagePath, readImageFile } from '../images';
 import { getActiveRestockCredit, pickActiveRestockCredit } from '../ledger';
 import { checkRateLimit } from '../rate-limit';
-import { ensureStock, guardedRecountStock } from '../stock';
+import { assertPantriesNotUnderCount, ensureStock, guardedRecountStock } from '../stock';
 import { protectedProcedure, router } from '../trpc';
 
 /** Upper bound for money inputs: keeps values inside Prisma's Int range. */
@@ -938,6 +938,14 @@ export const restockRouter = router({
               throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Already finalized.' });
             }
             assertOwnerReceiving(restock, ctx.user);
+            // A reconcile freeze on any destination pantry blocks finalize —
+            // new placements would land uncounted under the count (A2).
+            await assertPantriesNotUnderCount(tx, [
+              ...new Set([
+                restock.pantryId,
+                ...restock.lots.flatMap((l) => l.allocations.map((a) => a.pantryId)),
+              ]),
+            ]);
             if (restock.lots.length === 0) {
               throw new TRPCError({
                 code: 'PRECONDITION_FAILED',
