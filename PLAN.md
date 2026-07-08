@@ -30,6 +30,49 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
   any public deployment.
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
+- **Phase 4 designed, not built** (2026-07-08): stock-placement layer (Lot stops
+  implying location), pantry-to-pantry transfer, per-line receive splits, reconcile
+  draft sessions with a blocking freeze. Decision record: REWORK.md "Phase 4" (S1–S7);
+  starts with a Round-0 focus group on the reconcile flow (S7 open questions).
+
+## Share circle-scoping — per-post audience override (2026-07-08)
+
+Aaron's ask: entity-level "visible only to these circles" overrides. Recon showed items/
+pantries/memberships ALREADY have the full ALL/SELECT/PRIVATE control (Phase 2 P4 —
+the pill in the detail headers); products deliberately skipped (pantry-level suffices).
+The genuinely missing piece was **individual shares** — grant-only until now. Team build
+(server GPT-5.5/codex · UI Opus 4.8 · e2e GPT-5.5 · Fable coordinating + codex review).
+
+- **Schema** — additive `20260708090000_share_circles`: `SharePost.visibility`
+  ("ALL" default | "SELECT") + `SharePostCircle` join (mirrors PantryCircle/ItemCircle).
+- **Semantics** — a viewer sees a SELECT post iff `shareVisible` AND the poster-side
+  circle on their connection is among the chosen set (same owner-circle direction as
+  items/pantries). Enforced at: feed, post-time notify fan-out, both claim paths
+  (out-of-scope = 404, never leaks), withdraw/respond FORBIDDEN-vs-404 branches, digest
+  "new shares" count, and the reshare chain-liveness walk.
+- **Reshares refused on scoped posts** — a reshare copy's audience is recomputed from
+  the resharer's connections, so origin scope can't carry; `canReshare` false + mint
+  rejects (CONFLICT). Reshare copies of ALL posts stay ALL. Composer pins hops to 0 in
+  SELECT mode and disables the pass-it-on select ("No — limited posts stay put").
+- **UI** — composer "Audience" section (radio: "All sharing circles" default / "Only
+  these circles…" + checkbox list of shareTo circles via the newly-flagged
+  `circle.names`; hidden when no shareTo circles; ≥1 required to post); "Some circles"
+  chip on the poster's own scoped posts; small print "Limited posts can't be reshared."
+- **Server extras from the slice** — circle delete guard now counts SharePostCircle
+  scope rows; `share-reach.ts` gained the pure scoped-visibility helpers (unit-tested)
+  so the digest never imports routers.
+- **Codex review found 3, all fixed at integration:** (1) HIGH `share.respond` could
+  confirm a claim on a reshare copy whose upstream chain had died (pre-existing B6/F4
+  gap, widened by scoping) — respond now re-checks `chainEdgesAlive`; (2) digest counted
+  dead-chain reshare copies — now prunes them (chain helpers moved to share-reach.ts);
+  (3) the e2e audience helper had a fallback that masked testid-contract drift —
+  testid moved to the row per contract, helper made strict.
+- **Gate — green:** unit 219/219 · tsc/eslint/lint:tokens clean · migration proven on a
+  scratch DB · full both-engine e2e **388 passed / 6 skipped / 0 failed** pre-polish and
+  re-run post-polish · 390px light+dark screenshots in `.playwright-mcp/share-circles/`.
+- Backlog note: **recipes** remain the one entity type without circle SELECT (binary
+  `private` flag only) — added here rather than REWORK since it's an observation, not a
+  decision.
 
 ## Media round follow-up — iOS photo picker + labels dropped (2026-07-07, Aaron's device feedback)
 

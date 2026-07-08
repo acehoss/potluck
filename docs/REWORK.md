@@ -667,3 +667,81 @@ Tailscale reverse proxy).
   `isSuppressed`/`subscriptionAllowed` with the real `NotificationPreference` lookup.
 - **Round D — deep-link routing** (N7): navigation-only magic tokens, push as the
   authenticated deep-link channel, email-routes-then-login-to-act, tap-switches-household.
+
+## Phase 4 — stock placements, transfer, reconcile (decided 2026-07-08)
+
+Origin: grill-me design session (Aaron + Claude, 2026-07-08). The schema/architecture
+layer is decided below; flow-level details marked for the focus group (S7) are OPEN
+until Round 0 runs. Nothing here is built yet.
+
+### Decisions
+
+- **S1. Stock-placement layer — the bandaid rip.** Lot stops implying location. Lot
+  stays the receive-event line (receipt lineage, frozen `unitCostCents`, bestBy, unit
+  photo — cost + provenance); a new placement table (working name `Stock`:
+  `{ id, lotId, pantryId, count, reservedCount }`) records where units are NOW. A lot
+  may have placements in N pantries. Every availability read/write — takes, order
+  reservations/pickup, share gift confirms, plan/shopping badges, pantry inventory,
+  adjustments — moves off `Lot.remainingCount`/`reservedCount` (and off the
+  lot→restock→pantry derivation) onto placements. Migration is data-preserving: one
+  placement per lot at `restock.pantryId`, carrying the counts. **Money invariants
+  untouched**: unitCost stays on Lot, a Take still prices from its lot, the ledger is
+  never involved. Motivating case: shelf-as-pantry (basement rack, per-shelf circle
+  visibility) + one receive landing in many pantries. Supersedes the session's earlier
+  `Lot.pantryId` denorm lean.
+- **S2. Attribution under placements.** Reservations live on the placement
+  (`Stock.reservedCount`); an OrderLine draws from a placement in the order's pantry;
+  Take keeps `lotId` (cost) and gains a pantryId snapshot (audit); Adjustment
+  re-anchors to placements; restock finalize materializes the initial placements.
+- **S3. Transfer.** Same-household only — cross-household movement stays orders/shares
+  (the moral line holds). Partial quantities are natural under S1: decrement source
+  placement, increment/create destination placement; no lot splits exist. Atomic
+  multi-line: the client builds a cart, one `transfer.create` applies all lines in a
+  single `dbTransaction`, writing `Transfer` + `TransferLine` (who/when/note, per-line
+  lot + qty + from + to), clientKey-idempotent, immutable — a mistake is corrected by
+  transferring back. No draft lifecycle (no counterparty, nothing to wait on). Movable
+  quantity = count − reserved (mirrors the recount guard). UX: A→B cart — open source
+  pantry → "Move items" → pick destination once → pick products/quantities (FIFO lot
+  default, expandable) — plus a per-lot "Move…" menu entry feeding the same cart.
+  Capability: `adjustInventory`.
+- **S4. Receive: full per-line split.** The line editor allocates quantities across
+  pantries ("6 basement / 4 kitchen"); the restock keeps a default pantry; finalize
+  creates placements from the allocations.
+- **S5. Reconcile = server-side draft session with a blocking freeze.** A
+  household-scoped ReconcileSession (DRAFT → COMMITTED | ABANDONED), multi-user — people
+  count different pantries/lots of one draft concurrently. Scope = pantries, then
+  product lots within them (select-all shortcuts), and scope can GROW mid-session (the
+  escalation path: quick shelf recheck → whole-house purge). Scoped placements are
+  frozen: no takes, order-cart adds, reservations, gift confirms, or out-of-session
+  transfers until commit/abandon. A household-wide nag banner reminds that stock is
+  unavailable until the session resolves. Nothing applies until commit.
+- **S6. Count-where-found; commit derives moves.** Counters record counts per
+  (lot, pantry) wherever units physically are — including a lot with zero expected in
+  that pantry (scan/search identifies it). Commit conserves units per lot across
+  in-scope pantries: matched deficit/surplus of the same lot becomes a derived
+  Transfer ("moved 5 kitchen→garage"); only the residual is a true variance (short 2 /
+  found 1), and every variance line must be acknowledged before commit (encouraging a
+  physical recheck, especially on count-ups). The summary lists moves and variances
+  separately. A lot found in an out-of-scope pantry prompts escalation (add the pantry
+  or just that line to scope). Every scoped line must be counted or explicitly removed
+  from scope (removal releases its lock); skipped-and-released lines appear in the
+  summary. Match-confirms should stamp a `lastCountedAt` rather than spam no-op
+  Adjustment rows.
+- **S7. OPEN — for the Round-0 focus group.** (a) Freeze vs open orders: lean = warn at
+  scoping that claimed stock will block pickups until commit (clean path: complete or
+  reject orders first; a small recount may ignore the warning). (b) What commit does
+  when counted stock drops below a pending order's needs. (c) Picking-discovers-drift
+  as a reconcile entry point — a short pick, or a pick filled from unexpected lots,
+  offers "start a recount of this product?". (d) Count-entry UX happy paths (count all
+  of a product by lot in one pantry / several pantries / everything in a pantry / whole
+  house). (e) Nag + notification specifics.
+
+### Round plan (each round green on both engines before the next)
+
+- **Round 0 — focus group** on the reconcile flow (S7) → decisions appended here.
+- **Round 1 — placement model**: migration + full query rework, zero UI delta. Gate:
+  e2e parity on both engines + a migration-verify script (pattern:
+  `scripts/verify-circles-migration.mjs`).
+- **Round 2 — transfer** (S3) + per-line receive splits (S4) — the model's first
+  visible payoff.
+- **Round 3 — reconcile sessions** (S5/S6 + resolved S7): scope/freeze/count/commit.
