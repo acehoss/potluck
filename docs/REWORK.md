@@ -745,3 +745,100 @@ until Round 0 runs. Nothing here is built yet.
 - **Round 2 — transfer** (S3) + per-line receive splits (S4) — the model's first
   visible payoff.
 - **Round 3 — reconcile sessions** (S5/S6 + resolved S7): scope/freeze/count/commit.
+
+### Round 0 — focus-group + independent-review synthesis (2026-07-08)
+
+Five personas (Marie coordinator · Dana requester · Theo teen counter · Inés retail-ops
+· Sam minimalist skeptic) + an independent GPT-5.5 design review. Unanimous verdicts
+reshaped the flow layer; S1–S4 (placements/transfer/receive) survived untouched — every
+reviewer endorsed the model. Amendments A1–A8 below are DECIDED and supersede the
+matching parts of S5/S6; S7 (a)–(e) are now resolved.
+
+**Focus-group consensus (all five, independently):** (1) the session must be opt-in
+escalation — today's per-lot quick recount stays the unchanged default path, or the
+counting habit dies ("ship it as 'every recount is now a session' and I'm out" — Sam;
+SPEC principle 5 cited by Marie); (2) reserved stock must ride through a count — a
+READY pickup blocked by someone's counting chore is the feature's disqualifying
+failure (Dana); (3) abandoned sessions are the top operational landmine — TTL +
+one-tap unfreeze, non-negotiable; (4) the household-wide nag banner inverts to
+contextual friction messaging; (5) counters enter product-level numbers — lots are
+derived at commit (Theo: "if you make me allocate to lots I will dump all 24 into
+whichever's on top").
+
+- **A1. Quick paths preserved.** Per-lot recount and a single-product quick recount
+  stay session-less, freeze-less, apply-immediately (as today). The ReconcileSession is
+  an explicit escalation ("count this pantry / these pantries / the house"). Ceremony
+  scales with scope; the 5-tap fix stays 5 taps.
+- **A2. Cutoff model — reserved stock is exempt from the freeze (hard invariant).**
+  Count scope = FREE stock (count − reserved). During a session, on frozen placements:
+  order pickup / picking / ready PROCEED (they decrement count and reserved together —
+  free stock, and therefore the count baseline, is undisturbed); new cart adds /
+  submissions / reservations, gift confirms, out-of-session recounts/write-offs/
+  transfers, restock-finalize-into, and restock-void are BLOCKED; order cancel /
+  edit-down that would RELEASE reservations into a frozen placement is BLOCKED (it
+  would silently grow free stock under the counter). The exemption survives mid-session
+  scope growth. Scoping screen still lists open orders in scope ("complete or reject
+  first" as suggestion, per Aaron's lean) — but the freeze never stands between a
+  requester and promised units. Enforcement via ONE central availability/freeze helper
+  used by every stock-mutating path (codex enumerated the choke points), plus
+  frozen-state display on reads.
+- **A3. Session lifecycle.** lastActivityAt heartbeat; stale after ~2h → quiet nudge to
+  the participants (never the whole household); lazy auto-abandon at 24h releases all
+  locks, nothing applies; any adjustInventory member can abandon; banner (participants
+  + owner only) carries who/since-when + one-tap "End & unfreeze". Others see "being
+  counted, back shortly" only at the moment they hit a frozen placement. No
+  cross-household leak of counting activity, ever; connected households are notified
+  only when their own order/claim is actually affected (category-safe wording,
+  deep-linked).
+- **A4. Count entry.** Product-level by default — one number per product per pantry;
+  the commit engine allocates to lots (oldest-first shrink / newest-first growth) and
+  the review screen shows the allocation (expandable per-lot entry stays available for
+  those who care, and for Aaron's count-by-lot-code path). BLIND entry is the session
+  default: blank field, no expected shown (Inés: "counters who see 'expected: 5' write
+  5"), per-session toggle to show "app says N" hint + one-tap match-confirm for
+  households that prefer speed (Marie). Keypad + scan-to-count + auto-advance, never
+  stepper-only. Sheet ordered as a location walk (stable, arrangeable), per-pantry
+  sub-walks with progress ("18/44") in multi-pantry scope, one-tap pantry claim
+  visibly locking it to a counter, live remaining-to-count. Explicit "counted zero /
+  not found" distinct from "not yet counted". Draft counts autosave line-by-line
+  (interruption loses nothing). Persistent "+ Found something" action: scan/search,
+  location defaults to the pantry being counted, works for lots with zero expected
+  there; in-flow create-pantry (the unlabeled basement rack). A found product with no
+  lot anywhere in the household still can't be conjured — that's a receive (unchanged).
+- **A5. Counting permission.** Entering draft counts requires household membership
+  only — commit requires adjustInventory. (Teen preset can be handed the basement rack;
+  the kid can never apply anything.) A low-permission "this looks off" flag from
+  normal browsing creates a task/notification for adjustInventory holders — may ship
+  as a fast-follow.
+- **A6. Commit mechanics.** Baseline (expectedCount, expectedReserved) snapshots onto
+  each scope line as it enters scope (mid-session growth safe). Commit = one
+  dbTransaction: write derived-Transfer audit rows + variance Adjustment rows, then SET
+  each placement to its counted value once (never composed from the public
+  recount/transfer mutations). commitClientKey on the session + deterministic child
+  keys. Derived moves are REVIEWED like variances, not silently applied — the committer
+  can reject a pairing, decomposing it back into two acknowledged variances (a
+  coincidental same-lot offset must not launder real shrink — Inés). Deterministic
+  deficit→surplus pairing per lot; derived transfers marked as inferred, distinct from
+  observed moves.
+- **A7. Commit vs pending orders (resolves S7b).** The truth is always recordable, and
+  `reservedCount ≤ count` survives commit: a counted line short of its reservations
+  puts commit into a shortage-resolution step — the committer explicitly chooses per
+  affected order line (reduce to available / cancel line / fill from another placement
+  of the same product), the requester is notified (category-safe, deep-linked, before
+  they travel), and the choice applies inside the same commit tx. Never silent, never
+  automatic, never the ledger (money still only moves at pickup). Variance is absorbed
+  from free stock first by construction (A2).
+- **A8. Pick-time drift (resolves S7c).** Serve the person first: the picker completes
+  the pick against reality; a dismissible "count looked off — recount this product?"
+  prompt then opens the QUICK single-product recount (A1), never a session. A pick
+  filled from an unexpected location is placement drift, not shrink — offer "record
+  the move" (a Transfer), feeding S3. Short-fill communication rides the existing
+  order flow + notify.
+
+**Round-plan deltas from the review:** Round 1 must migrate every lot-count consumer
+in one go — `Stock` + `OrderLine.stockId`, `Adjustment.stockId`, `Take.pantryId`
+snapshot, and SharePostLot→placement re-anchoring (a surplus post's gift decrements a
+specific shelf) — plus the central availability helper, a static no-legacy-reads guard
+(CI grep that fails on `remainingCount`/`reservedCount` reads outside migration/compat
+code), and the migration verifier. Round 3 additionally gates on A3 lifecycle + A7
+shortage resolution being in the build, not deferred.
