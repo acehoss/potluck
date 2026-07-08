@@ -36,7 +36,9 @@ export type StockMutationKind =
   | 'consume-reserved'
   | 'consume-free'
   | 'restore'
-  | 'recount';
+  | 'recount'
+  | 'transfer-out'
+  | 'transfer-in';
 
 export async function assertStockMutable(
   tx: Prisma.TransactionClient,
@@ -185,6 +187,39 @@ export async function guardedRecountStock(
     return { count: countAfter };
   });
   return result!;
+}
+
+/**
+ * Move `qty` FREE units of a placement to another pantry (REWORK S3): the one
+ * sanctioned way units change pantry outside receive. Never touches reserved
+ * units (movable = count − reservedCount), never money — the lot (and its
+ * frozen unitCost) rides along via the destination placement's lotId. Returns
+ * both placement ids so the caller can pin them on the TransferLine.
+ */
+export async function moveStock(
+  tx: Prisma.TransactionClient,
+  fromStockId: string,
+  toPantryId: string,
+  qty: number,
+): Promise<{ fromStockId: string; toStockId: string; lotId: string }> {
+  const from = await tx.stock.findUniqueOrThrow({
+    where: { id: fromStockId },
+    select: { id: true, lotId: true, pantryId: true },
+  });
+  if (from.pantryId === toPantryId) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Source and destination are the same pantry.' });
+  }
+  await assertStockMutable(tx, fromStockId, 'transfer-out');
+  await guardedUpdate(tx, fromStockId, (s) => {
+    if (availableOf(s) < qty) {
+      throw new TRPCError({ code: 'CONFLICT', message: 'Not enough left to move.' });
+    }
+    return { count: s.count - qty };
+  });
+  const dest = await ensureStock(tx, from.lotId, toPantryId);
+  await assertStockMutable(tx, dest.id, 'transfer-in');
+  await tx.stock.update({ where: { id: dest.id }, data: { count: { increment: qty } } });
+  return { fromStockId: from.id, toStockId: dest.id, lotId: from.lotId };
 }
 
 /**

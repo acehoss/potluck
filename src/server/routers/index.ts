@@ -23,6 +23,7 @@ import { shoppingRouter } from './shopping';
 import { restockRouter } from './restock';
 import { shareRouter } from './share';
 import { takeRouter } from './take';
+import { transferRouter } from './transfer';
 
 export const appRouter = router({
   activity: activityRouter,
@@ -50,6 +51,7 @@ export const appRouter = router({
   share: shareRouter,
   shopping: shoppingRouter,
   take: takeRouter,
+  transfer: transferRouter,
 });
 
 export type AppRouter = typeof appRouter;

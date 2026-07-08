@@ -37,6 +37,17 @@ type Household = { id: string; name: string };
 /** A lot plus its product name, for the lot menu and adjustment sheets. */
 type LotRef = { lot: ProductGroup['lots'][number]; productName: string };
 
+/** One staged line of the "Move items" cart (Phase 4 S3 transfer flow). */
+type MoveLine = {
+  stockId: string;
+  lotId: string;
+  productName: string;
+  code: string;
+  qty: number;
+  /** Movable cap = the lot's available (physical − reserved) units. */
+  max: number;
+};
+
 function ageLabel(purchasedAt: string) {
   const days = Math.floor((Date.now() - new Date(purchasedAt).getTime()) / 86_400_000);
   if (days < 31) return `${days}d old`;
@@ -70,6 +81,7 @@ export function InventoryView({
   scopeCircleIds,
   canManageVisibility,
   canEditProductPhotos,
+  movePantries,
 }: {
   pantry: { id: string; name: string; householdName: string };
   isOwn: boolean;
@@ -86,6 +98,9 @@ export function InventoryView({
   canManageVisibility: boolean;
   /** Own pantry + receiveStock — gates the product photo gallery edits. */
   canEditProductPhotos: boolean;
+  /** The household's OTHER pantries (own pantry + adjustInventory only); the
+   *  destinations for a move. Empty ⇒ no Move entry points at all. */
+  movePantries: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -105,6 +120,18 @@ export function InventoryView({
   const [lotMenu, setLotMenu] = useState<LotRef | null>(null);
   const [recountFor, setRecountFor] = useState<LotRef | null>(null);
   const [writeOffFor, setWriteOffFor] = useState<LotRef | null>(null);
+  // Move-items cart (Phase 4 S3): a focused mode where product/lot taps stage
+  // units for an atomic transfer to another owned pantry. Only reachable when
+  // the household owns this pantry, has adjustInventory, AND has somewhere to
+  // move to — all three collapse into `movePantries` being non-empty.
+  const canMove = movePantries.length > 0;
+  const [moveMode, setMoveMode] = useState(false);
+  const [moveCart, setMoveCart] = useState<MoveLine[]>([]);
+  const [moveSheetFor, setMoveSheetFor] = useState<{
+    group: ProductGroup;
+    initialLotId?: string;
+  } | null>(null);
+  const [moveNotice, setMoveNotice] = useState<string | null>(null);
 
   const visible = groups.filter((g) => g.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -176,6 +203,32 @@ export function InventoryView({
         </p>
       )}
 
+      {canMove && !moveMode && groups.length > 0 && (
+        <button
+          type="button"
+          data-testid="move-items-button"
+          onClick={() => {
+            setMoveNotice(null);
+            setMoveMode(true);
+          }}
+          className="flex min-h-11 items-center gap-1.5 self-start rounded-lg border border-border-strong px-3 py-2 text-sm font-medium text-text transition-colors hover:bg-surface-sunken"
+        >
+          <span aria-hidden>↔</span> Move items
+        </button>
+      )}
+
+      {moveNotice && (
+        <p role="status" data-testid="move-notice" className="text-sm font-medium text-success">
+          {moveNotice}
+        </p>
+      )}
+
+      {moveMode && (
+        <p data-testid="move-hint" className="text-sm text-text-muted">
+          Tap a product to stage it — then pick a destination below.
+        </p>
+      )}
+
       <main className="flex flex-col gap-3">
         {groups.length === 0 && (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
@@ -229,8 +282,8 @@ export function InventoryView({
                     the media e2e's name-matched click lands there, not here. */}
                 <button
                   type="button"
-                  aria-label="Add to order"
-                  onClick={() => setOrderFor(group)}
+                  aria-label={moveMode ? 'Add to move' : 'Add to order'}
+                  onClick={() => (moveMode ? setMoveSheetFor({ group }) : setOrderFor(group))}
                   className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left"
                 >
                   {group.photoPath ? (
@@ -322,7 +375,7 @@ export function InventoryView({
         })}
       </main>
 
-      {isOwn && (
+      {isOwn && !moveMode && (
         <button
           type="button"
           data-testid="receive-fab"
@@ -362,6 +415,21 @@ export function InventoryView({
       {lotMenu && (
         <LotMenuSheet
           lotRef={lotMenu}
+          onMove={
+            canMove
+              ? () => {
+                  const group = groups.find((g) =>
+                    g.lots.some((l) => l.id === lotMenu.lot.id),
+                  );
+                  if (group) {
+                    setMoveNotice(null);
+                    setMoveMode(true);
+                    setMoveSheetFor({ group, initialLotId: lotMenu.lot.id });
+                  }
+                  setLotMenu(null);
+                }
+              : undefined
+          }
           onClose={() => setLotMenu(null)}
           onRecount={() => {
             setRecountFor(lotMenu);
@@ -424,7 +492,7 @@ export function InventoryView({
         />
       )}
 
-      {cart && (
+      {cart && !moveMode && (
         <Link
           href={`/orders/${cart.orderId}`}
           data-testid="cart-bar"
@@ -435,6 +503,43 @@ export function InventoryView({
           </span>
           <span className="shrink-0 text-sm font-semibold text-accent-strong">Review →</span>
         </Link>
+      )}
+
+      {moveSheetFor && (
+        <MoveSheet
+          group={moveSheetFor.group}
+          initialLotId={moveSheetFor.initialLotId}
+          cartQtyByStock={Object.fromEntries(moveCart.map((l) => [l.stockId, l.qty]))}
+          onClose={() => setMoveSheetFor(null)}
+          onAdd={(line) => {
+            setMoveCart((cart) => [...cart.filter((l) => l.stockId !== line.stockId), line]);
+            setMoveSheetFor(null);
+          }}
+        />
+      )}
+
+      {moveMode && (
+        <MoveCartBar
+          fromPantryId={pantry.id}
+          lines={moveCart}
+          pantries={movePantries}
+          onChangeQty={(stockId, qty) =>
+            setMoveCart((cart) => cart.map((l) => (l.stockId === stockId ? { ...l, qty } : l)))
+          }
+          onRemove={(stockId) =>
+            setMoveCart((cart) => cart.filter((l) => l.stockId !== stockId))
+          }
+          onExit={() => {
+            setMoveMode(false);
+            setMoveCart([]);
+          }}
+          onDone={(summary) => {
+            setMoveMode(false);
+            setMoveCart([]);
+            setMoveNotice(summary);
+            router.refresh();
+          }}
+        />
       )}
     </div>
   );
@@ -594,6 +699,337 @@ function AddToOrderSheet({
 }
 
 /**
+ * Move sheet (Phase 4 S3): stage units of one product for a transfer. Mirrors
+ * the take/order sheet — oldest lot preselected (FIFO badge), an expandable
+ * lot picker, and a stepper capped at the lot's movable (available) units.
+ * "Add to move" stages the line in the cart bar; nothing is written until the
+ * whole cart is confirmed there.
+ */
+function MoveSheet({
+  group,
+  initialLotId,
+  cartQtyByStock,
+  onClose,
+  onAdd,
+}: {
+  group: ProductGroup;
+  initialLotId?: string;
+  cartQtyByStock: Record<string, number>;
+  onClose: () => void;
+  onAdd: (line: MoveLine) => void;
+}) {
+  const seedQty = (l: ProductGroup['lots'][number]) =>
+    Math.min(Math.max(cartQtyByStock[l.stockId] || 1, 1), l.remaining);
+  const initialLot = group.lots.find((l) => l.id === initialLotId) ?? group.lots[0];
+  const [lotId, setLotId] = useState(initialLot.id);
+  const [qty, setQty] = useState(() => seedQty(initialLot));
+  const lot = group.lots.find((l) => l.id === lotId) ?? group.lots[0];
+  const isFifo = lot.id === group.lots[0].id;
+  const staged = cartQtyByStock[lot.stockId] ?? 0;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="move-sheet"
+        className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <h2 className="text-lg font-semibold">Move: {group.name}</h2>
+
+        <label className="flex flex-col gap-1 text-sm font-medium text-text">
+          <span className="flex items-center gap-2">
+            Lot
+            {isFifo && (
+              <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">
+                oldest ✓
+              </span>
+            )}
+          </span>
+          <select
+            data-testid="move-lot"
+            value={lotId}
+            onChange={(e) => {
+              const next = group.lots.find((l) => l.id === e.target.value) ?? group.lots[0];
+              setLotId(next.id);
+              setQty(seedQty(next));
+            }}
+            className={sheetInputClass}
+          >
+            {group.lots.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.code} · {l.remaining} available
+              </option>
+            ))}
+          </select>
+          <span className="text-xs font-normal text-text-muted">
+            {lot.remaining} available to move
+            {staged > 0 && <> · {staged} already staged</>}
+          </span>
+        </label>
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-text">Units</span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Fewer"
+              disabled={qty <= 1}
+              onClick={() => setQty((q) => Math.max(1, q - 1))}
+              className={sheetStepperBtn}
+            >
+              −
+            </button>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={lot.remaining}
+              data-testid="move-sheet-qty"
+              aria-label="Units to move"
+              value={qty}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setQty(
+                  Number.isInteger(n) && n >= 1 ? Math.min(n, lot.remaining) : 1,
+                );
+              }}
+              className={`${sheetInputClass} w-20 text-center font-mono tabular-nums`}
+            />
+            <button
+              type="button"
+              aria-label="More"
+              disabled={qty >= lot.remaining}
+              onClick={() => setQty((q) => Math.min(lot.remaining, q + 1))}
+              className={sheetStepperBtn}
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={sheetSecondaryBtn}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="move-sheet-add"
+            disabled={qty < 1 || qty > lot.remaining}
+            onClick={() =>
+              onAdd({
+                stockId: lot.stockId,
+                lotId: lot.id,
+                productName: group.name,
+                code: lot.code,
+                qty,
+                max: lot.remaining,
+              })
+            }
+            className={sheetPrimaryBtn}
+          >
+            {staged > 0 ? 'Update move' : 'Add to move'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The persistent move cart (Phase 4 S3): a bottom panel over the whole
+ * move-mode session. Lists the staged lines (each with an editable qty capped
+ * at its movable units + remove), a destination picker over the household's
+ * OTHER pantries, an optional note, and a single Confirm that fires
+ * transfer.create atomically. The clientKey is minted once for the panel's
+ * life, so a double-tap or a retry after a lost response replays the original.
+ */
+function MoveCartBar({
+  fromPantryId,
+  lines,
+  pantries,
+  onChangeQty,
+  onRemove,
+  onExit,
+  onDone,
+}: {
+  fromPantryId: string;
+  lines: MoveLine[];
+  pantries: { id: string; name: string }[];
+  onChangeQty: (stockId: string, qty: number) => void;
+  onRemove: (stockId: string) => void;
+  onExit: () => void;
+  onDone: (summary: string) => void;
+}) {
+  const trpc = useTRPC();
+  const [clientKey] = useState(newClientKey);
+  const [destId, setDestId] = useState(pantries[0]?.id ?? '');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const create = useMutation(
+    trpc.transfer.create.mutationOptions({
+      onSuccess: (res) => {
+        const dest = pantries.find((p) => p.id === destId);
+        onDone(
+          `Moved ${res.movedUnits} ${res.movedUnits === 1 ? 'unit' : 'units'} to ${
+            dest?.name ?? 'pantry'
+          }.`,
+        );
+      },
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  const units = lines.reduce((s, l) => s + l.qty, 0);
+  const destName = pantries.find((p) => p.id === destId)?.name;
+  const overCap = lines.some((l) => l.qty < 1 || l.qty > l.max);
+  const canConfirm = lines.length > 0 && destId !== '' && !overCap && !create.isPending;
+
+  return (
+    <div
+      data-testid="move-cart-bar"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface-raised shadow-sm"
+    >
+      <div className="mx-auto flex w-full max-w-md flex-col gap-3 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-text">
+            {lines.length} {lines.length === 1 ? 'item' : 'items'} · {units}{' '}
+            {units === 1 ? 'unit' : 'units'}
+            {destName && <span className="font-normal text-text-muted"> → {destName}</span>}
+          </span>
+          <button
+            type="button"
+            data-testid="move-cancel"
+            aria-label="Cancel move"
+            onClick={onExit}
+            className="flex size-11 items-center justify-center rounded-lg text-lg text-text-muted transition-colors hover:bg-surface-sunken"
+          >
+            ✕
+          </button>
+        </div>
+
+        {lines.length === 0 ? (
+          <p className="text-sm text-text-muted">
+            No items staged yet — tap a product above to add it.
+          </p>
+        ) : (
+          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+            {lines.map((line) => (
+              <li
+                key={line.stockId}
+                className="flex items-center gap-2 rounded-lg border border-border px-2 py-1"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm text-text">
+                  {line.productName}{' '}
+                  <span className="font-mono text-xs text-text-muted">{line.code}</span>
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Fewer ${line.productName}`}
+                  disabled={line.qty <= 1}
+                  onClick={() => onChangeQty(line.stockId, Math.max(1, line.qty - 1))}
+                  className="flex size-9 items-center justify-center rounded-lg border border-border-strong text-base font-medium text-text hover:bg-surface-sunken disabled:opacity-40"
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={line.max}
+                  data-testid="move-line-qty"
+                  aria-label={`${line.productName} units to move`}
+                  value={line.qty}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    onChangeQty(
+                      line.stockId,
+                      Number.isInteger(n) && n >= 1 ? Math.min(n, line.max) : 1,
+                    );
+                  }}
+                  className={`${sheetInputClass} w-14 text-center font-mono tabular-nums`}
+                />
+                <button
+                  type="button"
+                  aria-label={`More ${line.productName}`}
+                  disabled={line.qty >= line.max}
+                  onClick={() => onChangeQty(line.stockId, Math.min(line.max, line.qty + 1))}
+                  className="flex size-9 items-center justify-center rounded-lg border border-border-strong text-base font-medium text-text hover:bg-surface-sunken disabled:opacity-40"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Remove ${line.productName}`}
+                  onClick={() => onRemove(line.stockId)}
+                  className="flex size-9 items-center justify-center rounded-lg text-base text-text-muted hover:bg-surface-sunken"
+                >
+                  🗑
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <label className="flex flex-col gap-1 text-xs font-medium text-text-muted">
+          Destination
+          <select
+            data-testid="move-destination"
+            value={destId}
+            onChange={(e) => setDestId(e.target.value)}
+            className={sheetInputClass}
+          >
+            {pantries.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <input
+          type="text"
+          value={note}
+          maxLength={200}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          data-testid="move-note"
+          className={sheetInputClass}
+        />
+
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="button"
+          data-testid="move-confirm"
+          disabled={!canConfirm}
+          onClick={() => {
+            setError(null);
+            create.mutate({
+              fromPantryId,
+              toPantryId: destId,
+              note: note.trim() || undefined,
+              clientKey,
+              lines: lines.map((l) => ({ stockId: l.stockId, quantity: l.qty })),
+            });
+          }}
+          className={sheetPrimaryBtn}
+        >
+          {create.isPending
+            ? 'Moving…'
+            : `Move ${units} ${units === 1 ? 'unit' : 'units'}${
+                destName ? ` → ${destName}` : ''
+              }`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Product photo sheet (media round §1): hero + thumb-strip gallery over
  * `product.get`. Owner (own pantry + receiveStock) gets add / set-main /
  * label / remove; cross-household viewers see it read-only. The gallery is a
@@ -693,12 +1129,16 @@ const sheetSecondaryBtn =
  */
 function LotMenuSheet({
   lotRef,
+  onMove,
   onClose,
   onRecount,
   onWriteOff,
   onPhotoSet,
 }: {
   lotRef: LotRef;
+  /** Present only when the household can move (own pantry + adjustInventory +
+   *  another pantry to move to); seeds the move cart with this lot. */
+  onMove?: () => void;
   onClose: () => void;
   onRecount: () => void;
   onWriteOff: () => void;
@@ -740,6 +1180,16 @@ function LotMenuSheet({
           <span className="font-mono">{lotRef.lot.code}</span> · {lotRef.productName}
         </h2>
         <p className="text-sm text-text-muted">{lotRef.lot.remaining} left</p>
+        {onMove && (
+          <button
+            type="button"
+            data-testid="move-lot-menu-item"
+            onClick={onMove}
+            className={itemClass}
+          >
+            Move to another pantry…
+          </button>
+        )}
         <button type="button" data-testid="menu-recount" onClick={onRecount} className={itemClass}>
           Recount
         </button>

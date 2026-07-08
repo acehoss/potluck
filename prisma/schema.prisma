@@ -102,6 +102,7 @@ model User {
   invitesCreated    Invite[]
   restocksCreated   Restock[]
   takes             Take[]
+  transfersCreated  Transfer[]
   ledgerSeen        LedgerSeen[]
   loans             Loan[]
   pushSubscriptions PushSubscription[]
@@ -486,6 +487,9 @@ model Pantry {
   orders    Order[]
   circles   PantryCircle[]
   stocks    Stock[]
+  transfersOut   Transfer[]      @relation("transfersOut")
+  transfersIn    Transfer[]      @relation("transfersIn")
+  lotAllocations LotAllocation[]
 }
 
 // ---- slice 2: receiving (blueprint 01) ------------------------------------
@@ -689,6 +693,8 @@ model Lot {
   orderLines   OrderLine[]
   sharePostLots SharePostLot[]
   stocks       Stock[]
+  transferLines TransferLine[]
+  allocations   LotAllocation[]
 
   @@unique([restockId, position])
   @@index([productId])
@@ -722,10 +728,80 @@ model Stock {
   orderLines    OrderLine[]
   adjustments   Adjustment[]
   sharePostLots SharePostLot[]
+  transferLinesFrom TransferLine[] @relation("fromStock")
+  transferLinesTo   TransferLine[] @relation("toStock")
 
   @@unique([lotId, pantryId])
   @@index([pantryId])
   @@index([lotId])
+}
+
+// ---- Phase 4 Round 2 (REWORK S3): pantry-to-pantry transfer -------------------
+
+// One physical A→B move of stock between two pantries of the SAME household —
+// the one sanctioned way units change pantry outside receive. Immutable once
+// created (a mistake is corrected by transferring back); never money, never a
+// reservation (movable quantity = count − reservedCount, guarded in
+// stock.moveStock). Round 3's reconcile commit will write derived transfers
+// through this same table, marked as inferred.
+model Transfer {
+  id           String   @id @default(cuid())
+  // Idempotency key: a replayed create returns the original transfer instead
+  // of moving the units twice.
+  clientKey    String?  @unique
+  householdId  String // owner of BOTH pantries, snapshotted (relation-free like ledger)
+  fromPantryId String
+  toPantryId   String
+  note         String?
+  createdById  String
+  createdAt    DateTime @default(now())
+
+  fromPantry Pantry @relation("transfersOut", fields: [fromPantryId], references: [id])
+  toPantry   Pantry @relation("transfersIn", fields: [toPantryId], references: [id])
+  createdBy  User   @relation(fields: [createdById], references: [id])
+  lines      TransferLine[]
+
+  @@index([householdId, createdAt])
+  @@index([fromPantryId])
+  @@index([toPantryId])
+}
+
+model TransferLine {
+  id          String @id @default(cuid())
+  transferId  String
+  lotId       String
+  fromStockId String
+  toStockId   String
+  quantity    Int // > 0
+
+  transfer  Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  lot       Lot      @relation(fields: [lotId], references: [id])
+  fromStock Stock    @relation("fromStock", fields: [fromStockId], references: [id])
+  toStock   Stock    @relation("toStock", fields: [toStockId], references: [id])
+
+  @@index([transferId])
+  @@index([lotId])
+}
+
+// ---- Phase 4 Round 2 (REWORK S4): per-line receive destinations ---------------
+
+// DRAFT-time allocation of a receipt line across pantries ("6 basement /
+// 4 kitchen"). No rows = the whole line lands in the restock's pantry at
+// finalize (the overwhelmingly common case). When rows exist for a lot they
+// must sum to its receivedCount at finalize, which materializes one placement
+// per allocation and then deletes the rows (they are draft-state only — the
+// placements ARE the durable answer).
+model LotAllocation {
+  id       String @id @default(cuid())
+  lotId    String
+  pantryId String
+  count    Int // > 0
+
+  lot    Lot    @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  pantry Pantry @relation(fields: [pantryId], references: [id])
+
+  @@unique([lotId, pantryId])
+  @@index([pantryId])
 }
 
 // ---- slice 4: adjustments (settlement is a LedgerEntry, blueprint 01 D5) ----

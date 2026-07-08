@@ -817,6 +817,10 @@ function LinesStep({
     startExcluded?: boolean;
   }>({ open: false, line: null, proposal: null });
   const [extractError, setExtractError] = useState<string | null>(null);
+  // Per-line destination split (Phase 4 S4): the line whose allocation editor
+  // is open. Only reachable when the household has ≥2 pantries.
+  const [allocFor, setAllocFor] = useState<Line | null>(null);
+  const canSplit = restock.pantries.length >= 2;
 
   // Pending proposals are derived from the query data — nothing to lose on
   // refresh/step-back, and nothing to re-spend an API call rehydrating.
@@ -1013,7 +1017,7 @@ function LinesStep({
           const unitCost = unitCostCents(lot.lineTotalCents, lot.purchasedCount);
           const heldBack = lot.receivedCount < lot.purchasedCount;
           return (
-            <li key={lot.id}>
+            <li key={lot.id} className="flex flex-col gap-1">
               <button
                 type="button"
                 data-testid="line-row"
@@ -1039,6 +1043,19 @@ function LinesStep({
                   )}
                 </p>
               </button>
+              {/* Destination affordance (Phase 4 S4): defaults to the restock's
+                  pantry; tap to split received units across owned pantries.
+                  Only when the household has somewhere to split TO. */}
+              {canSplit && (
+                <button
+                  type="button"
+                  data-testid="line-destination-chip"
+                  onClick={() => setAllocFor(lot)}
+                  className="flex min-h-9 items-center gap-1 self-start rounded-lg border border-border-strong px-2.5 py-1 text-sm font-medium text-text-muted transition-colors hover:bg-surface-sunken"
+                >
+                  {allocChipLabel(lot, restock.pantry.name)}
+                </button>
+              )}
             </li>
           );
         })}
@@ -1095,6 +1112,226 @@ function LinesStep({
           }}
         />
       )}
+
+      {allocFor && (
+        <AllocationSheet
+          line={allocFor}
+          restockPantry={{ id: restock.pantry.id, name: restock.pantry.name }}
+          pantries={restock.pantries}
+          onClose={async (changed) => {
+            if (changed) await refetch();
+            setAllocFor(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Chip label: the default restock pantry, one destination, or an N-way split. */
+function allocChipLabel(line: Line, restockPantryName: string) {
+  if (line.allocations.length === 0) return `→ ${restockPantryName}`;
+  if (line.allocations.length === 1) {
+    const a = line.allocations[0];
+    return `→ ${a.pantryName} ${a.count}`;
+  }
+  return `→ ${line.allocations.length} pantries`;
+}
+
+/**
+ * Per-line destination split (Phase 4 S4). Rows of [pantry · count] over the
+ * household's pantries; add/remove a row, a live sum vs the line's received
+ * count (server enforces the match at FINALIZE, so a mismatch is only warned
+ * here), and an "All to <restock pantry>" reset that clears the split (sends
+ * []). Save persists via setLineAllocations, then the wizard refetches.
+ */
+function AllocationSheet({
+  line,
+  restockPantry,
+  pantries,
+  onClose,
+}: {
+  line: Line;
+  restockPantry: { id: string; name: string };
+  pantries: { id: string; name: string }[];
+  onClose: (changed: boolean) => void;
+}) {
+  const trpc = useTRPC();
+  // Seed from the persisted split, or a single default row (whole line → the
+  // restock pantry) so there's always something to edit.
+  const [rows, setRows] = useState<{ pantryId: string; count: number }[]>(() =>
+    line.allocations.length
+      ? line.allocations.map((a) => ({ pantryId: a.pantryId, count: a.count }))
+      : [{ pantryId: restockPantry.id, count: line.receivedCount }],
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const save = useMutation(
+    trpc.restock.setLineAllocations.mutationOptions({
+      onSuccess: () => onClose(true),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  const usedIds = new Set(rows.map((r) => r.pantryId));
+  const hasUnused = pantries.some((p) => !usedIds.has(p.id));
+  const sum = rows.reduce((s, r) => s + r.count, 0);
+  const mismatch = sum !== line.receivedCount;
+
+  const setRow = (i: number, patch: Partial<{ pantryId: string; count: number }>) =>
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  const stepperBtn =
+    'flex size-10 items-center justify-center rounded-lg border border-border-strong text-lg font-medium text-text hover:bg-surface-sunken disabled:opacity-40';
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-scrim sm:items-center">
+      <div
+        data-testid="alloc-editor"
+        className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
+      >
+        <div>
+          <h2 className="text-lg font-semibold">Destinations: {line.product?.name ?? 'line'}</h2>
+          <p className="text-sm text-text-muted">
+            {line.receivedCount} received {line.receivedCount === 1 ? 'unit' : 'units'} — assign
+            where each lands.
+          </p>
+        </div>
+
+        <ul className="flex flex-col gap-2">
+          {rows.map((row, i) => {
+            // A pantry can appear in at most one row: offer this row's own
+            // pantry plus any not yet used elsewhere.
+            const options = pantries.filter((p) => p.id === row.pantryId || !usedIds.has(p.id));
+            return (
+              <li key={i} className="flex items-center gap-2">
+                <select
+                  data-testid="alloc-row-pantry"
+                  value={row.pantryId}
+                  onChange={(e) => setRow(i, { pantryId: e.target.value })}
+                  className={`${inputClass} min-w-0 flex-1`}
+                >
+                  {options.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  aria-label="Fewer"
+                  disabled={row.count <= 0}
+                  onClick={() => setRow(i, { count: Math.max(0, row.count - 1) })}
+                  className={stepperBtn}
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={10_000}
+                  data-testid="alloc-row-count"
+                  aria-label={`${row.pantryId} count`}
+                  value={row.count}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setRow(i, { count: Number.isInteger(n) && n >= 0 ? Math.min(n, 10_000) : 0 });
+                  }}
+                  className={`${inputClass} w-16 text-center font-mono tabular-nums`}
+                />
+                <button
+                  type="button"
+                  aria-label="More"
+                  disabled={row.count >= 10_000}
+                  onClick={() => setRow(i, { count: row.count + 1 })}
+                  className={stepperBtn}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  aria-label="Remove destination"
+                  disabled={rows.length <= 1}
+                  onClick={() => setRows((rs) => rs.filter((_, idx) => idx !== i))}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-lg text-base text-text-muted hover:bg-surface-sunken disabled:opacity-40"
+                >
+                  🗑
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            data-testid="alloc-add-pantry"
+            disabled={!hasUnused}
+            onClick={() => {
+              const next = pantries.find((p) => !usedIds.has(p.id));
+              if (next) setRows((rs) => [...rs, { pantryId: next.id, count: 0 }]);
+            }}
+            className={`${secondaryBtn} disabled:opacity-40`}
+          >
+            + Add pantry
+          </button>
+          <span
+            data-testid="alloc-sum"
+            className={`text-sm font-medium ${mismatch ? 'text-warn' : 'text-success'}`}
+          >
+            {sum} / {line.receivedCount}
+            {mismatch ? ' — must match to finalize' : ' ✓'}
+          </span>
+        </div>
+
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            data-testid="alloc-reset"
+            disabled={save.isPending}
+            onClick={() => {
+              setError(null);
+              save.mutate({ lotId: line.id, allocations: [] });
+            }}
+            className={secondaryBtn}
+          >
+            All to {restockPantry.name}
+          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onClose(false)}
+              className={`${secondaryBtn} flex-1`}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-testid="alloc-save"
+              disabled={save.isPending}
+              onClick={() => {
+                setError(null);
+                // Rows with count 0 are dropped (the server requires ≥1 per
+                // allocation); an all-zero split clears back to the default.
+                save.mutate({
+                  lotId: line.id,
+                  allocations: rows.filter((r) => r.count > 0),
+                });
+              }}
+              className={`${primaryBtn} flex-1`}
+            >
+              {save.isPending ? 'Saving…' : 'Apply'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

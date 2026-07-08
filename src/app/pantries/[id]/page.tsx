@@ -165,6 +165,18 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
   });
   const cartQtyByLot: Record<string, number> = {};
   for (const l of cart?.lines ?? []) cartQtyByLot[l.lotId] = l.quantity;
+
+  // Move-items destinations (Phase 4 S3): the household's OTHER pantries, but
+  // only for an owner with adjustInventory. Empty ⇒ the view shows no Move
+  // entry points (including the household-with-one-pantry case).
+  const movePantries =
+    isOwn && user.activeMembership.adjustInventory
+      ? await db.pantry.findMany({
+          where: { householdId: user.householdId, id: { not: pantry.id } },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true },
+        })
+      : [];
   const cartInfo =
     cart && cart.lines.length > 0
       ? {
@@ -188,6 +200,7 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       scopeCircleIds={scopeCircleIds}
       canManageVisibility={isOwn && user.activeMembership.manageHousehold}
       canEditProductPhotos={isOwn && user.activeMembership.receiveStock}
+      movePantries={movePantries}
     />
   );
 }

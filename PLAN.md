@@ -30,12 +30,48 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
   any public deployment.
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
-- **Phase 4 in flight** (2026-07-08): Round 0 (focus group) + Round 1 (placement
-  model) are DONE — see the round records below. Remaining: Round 2 (transfer cart +
-  per-line receive splits), Round 3 (reconcile draft sessions per REWORK A1–A8).
+- **Phase 4 in flight** (2026-07-08): Rounds 0–2 DONE (focus group · placement model ·
+  transfer + receive splits) — see the round records below. Remaining: Round 3
+  (reconcile draft sessions per REWORK A1–A8). Small deferrals: a transfer-history
+  surface (transfer.listForHousehold exists, no screen renders it yet — Round 3's
+  activity/summary work is the natural home) · legacy adjustment clientKey replay
+  across the deploy boundary (accepted risk, Round 1 review).
   Observation from Round 1 review (not a regression — pre-existing): pantry/shopping
   availability filters on `receivedCount > 0`, so a credit-corrected-to-zero lot hides
   from inventory even with physical stock; revisit when reconcile lands.
+
+## Phase 4 Round 2 — transfer + per-line receive splits (2026-07-08)
+
+The placement model's first visible payoff (REWORK S3/S4). Team: Fable (schema ·
+migration · `stock.moveStock` · e2e spec · integration) + GPT-5.5/codex (server
+routers) + Opus 4.8 (UI, browser-verified) + codex review.
+
+- **Transfer** — `Transfer`/`TransferLine` (immutable A→B audit; lines pin exact
+  source/destination placements), `transfer.create` (atomic multi-line, one
+  dbTransaction, clientKey replay validates actor+pantries+LINE FINGERPRINT — a
+  same-key different-payload retry conflicts instead of silently returning the
+  original; review finding, fixed + e2e'd), `transfer.listForHousehold` (data for a
+  later history surface). Movable = count − reservedCount via `stock.moveStock`
+  (guarded source decrement; destination via ensureStock). Same-household only
+  (foreign pantry reads 404), `adjustInventory`, from ≠ to, dupe stockIds rejected.
+- **Receive splits** — `LotAllocation` draft rows (`restock.setLineAllocations`,
+  draft-only, owner-gated); finalize validates Σ == receivedCount per line (error
+  names the line), materializes one placement per allocation, deletes the rows.
+  No allocations = whole line to the restock's pantry (unchanged common case).
+- **UI (Opus)** — inventory-view move mode: `move-items-button` toolbar entry +
+  per-lot "Move to another pantry…" menu item → quantity sheet → persistent cart bar
+  (destination picker, note, atomic confirm); entry points hidden for single-pantry
+  households. Receive wizard Review-lines step: per-line destination chip →
+  allocation editor (pantry+count rows, live sum warning, "All to X" reset).
+- **e2e** `e2e/transfers.spec.ts` (Fable-authored after a stalled codex e2e run):
+  gating, UI move flow + audit row, atomic overdraw rollback, clientKey replay +
+  mutated-payload conflict, foreign-destination 404, reservation cap, allocation
+  split through the real wizard. SQL teardown honors the new FK order (Transfer
+  before Stock; canceled Order rows still pin placements).
+- **Gate — green:** tsc/eslint/lint:tokens clean · unit 219/219 · transfers spec 2×
+  both engines · full both-engine e2e on the rebuilt stack **394 passed / 0 failed /
+  2 flaky (pre-existing, retry-green) / 6 skipped**. Codex review: 1 High (replay
+  fingerprint) found → fixed; everything else clean.
 
 ## Phase 4 Round 1 — stock placements (2026-07-08)
 

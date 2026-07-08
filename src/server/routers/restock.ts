@@ -116,6 +116,18 @@ const lineSchema = z.object({
   unitPhotoPath: z.string().min(1).max(300).optional(),
 });
 
+const lineAllocationSchema = z.object({
+  lotId: z.string().min(1),
+  allocations: z
+    .array(
+      z.object({
+        pantryId: z.string().min(1),
+        count: z.number().int().min(1).max(10_000),
+      }),
+    )
+    .max(8),
+});
+
 /**
  * Status checks and their dependent writes always run inside the same
  * dbTransaction (which holds the app-wide DB lock), so a concurrent finalize
@@ -367,6 +379,10 @@ export const restockRouter = router({
           include: {
             product: { select: { id: true, name: true } },
             stocks: { select: { id: true, pantryId: true, count: true, reservedCount: true } },
+            allocations: {
+              orderBy: { pantryId: 'asc' },
+              include: { pantry: { select: { name: true } } },
+            },
           },
         },
       },
@@ -383,6 +399,14 @@ export const restockRouter = router({
 
     const credit = await getActiveRestockCredit(restock.id);
     const extraction = parseStoredExtraction(restock.extractionJson);
+    const pantries =
+      restock.pantry.householdId === ctx.user.householdId
+        ? await db.pantry.findMany({
+            where: { householdId: ctx.user.householdId },
+            orderBy: { name: 'asc' },
+            select: { id: true, name: true },
+          })
+        : [];
     return {
       id: restock.id,
       status: restock.status,
@@ -433,9 +457,15 @@ export const restockRouter = router({
         stockId: l.stocks.find((s) => s.pantryId === restock.pantryId)?.id ?? null,
         bestBy: l.bestBy?.toISOString().slice(0, 10) ?? null,
         unitPhotoPath: l.unitPhotoPath,
+        allocations: l.allocations.map((a) => ({
+          pantryId: a.pantryId,
+          pantryName: a.pantry.name,
+          count: a.count,
+        })),
         // Null for an excluded (non-inventory) line.
         product: l.product,
       })),
+      pantries,
       credit: credit ? { amountCents: credit.amountCents } : null,
     };
   }),
@@ -744,6 +774,60 @@ export const restockRouter = router({
     return { lotId };
   }),
 
+  /**
+   * Draft-only destination split for one receive line. Empty allocations mean
+   * "land the whole line in the restock's default pantry"; non-empty rows are
+   * validated against receivedCount only at finalize so line edits can happen
+   * in either order without making the draft unusable.
+   */
+  setLineAllocations: protectedProcedure
+    .input(lineAllocationSchema)
+    .mutation(async ({ ctx, input }) => {
+      const seen = new Set<string>();
+      let total = 0;
+      for (const allocation of input.allocations) {
+        if (seen.has(allocation.pantryId)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Duplicate destination pantry.' });
+        }
+        seen.add(allocation.pantryId);
+        total += allocation.count;
+      }
+      if (total > 10_000) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Destination split is too large.' });
+      }
+
+      await dbTransaction(async (tx) => {
+        const lot = await tx.lot.findUnique({
+          where: { id: input.lotId },
+          select: { id: true, restockId: true, excluded: true },
+        });
+        if (!lot) throw new TRPCError({ code: 'NOT_FOUND', message: 'Line not found.' });
+        const restock = await getDraftOrThrow(tx, ctx.user, lot.restockId);
+        if (lot.excluded && input.allocations.length > 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Excluded lines cannot be split.' });
+        }
+        if (input.allocations.length) {
+          const owned = await tx.pantry.count({
+            where: { id: { in: [...seen] }, householdId: restock.pantry.householdId },
+          });
+          if (owned !== seen.size) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Pantry not found.' });
+          }
+        }
+        await tx.lotAllocation.deleteMany({ where: { lotId: lot.id } });
+        if (input.allocations.length) {
+          await tx.lotAllocation.createMany({
+            data: input.allocations.map((allocation) => ({
+              lotId: lot.id,
+              pantryId: allocation.pantryId,
+              count: allocation.count,
+            })),
+          });
+        }
+      });
+      return { ok: true };
+    }),
+
   deleteLine: protectedProcedure
     .input(z.object({ lotId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
@@ -836,7 +920,18 @@ export const restockRouter = router({
           return await dbTransaction(async (tx) => {
             const restock = await tx.restock.findUnique({
               where: { id: input.restockId },
-              include: { pantry: true, lots: true },
+              include: {
+                pantry: true,
+                lots: {
+                  orderBy: { position: 'asc' },
+                  include: {
+                    product: { select: { name: true } },
+                    allocations: {
+                      include: { pantry: { select: { householdId: true } } },
+                    },
+                  },
+                },
+              },
             });
             if (!restock) throw new TRPCError({ code: 'NOT_FOUND' });
             if (restock.status !== 'DRAFT') {
@@ -852,7 +947,7 @@ export const restockRouter = router({
 
             // Fold receipt tax/fees into each lot's landed cost (D1 freeze, now
             // tax-inclusive), then freeze the unit costs and stock placements.
-            const allocations = allocateReceipt(
+            const receiptAllocations = allocateReceipt(
               restock.lots.map((l) => ({
                 lineTotalCents: l.lineTotalCents,
                 purchasedCount: l.purchasedCount,
@@ -868,7 +963,7 @@ export const restockRouter = router({
             let lineSumCents = 0;
             for (let i = 0; i < restock.lots.length; i++) {
               const lot = restock.lots[i];
-              const a = allocations[i];
+              const a = receiptAllocations[i];
               lineSumCents += lot.lineTotalCents;
               // Excluded lines never become inventory and never earn a credit —
               // their tax/fee share is the purchaser's own cost.
@@ -884,10 +979,34 @@ export const restockRouter = router({
                 },
               });
               if (!lot.excluded) {
-                const stock = await ensureStock(tx, lot.id, restock.pantryId);
-                await guardedRecountStock(tx, stock.id, () => lot.receivedCount);
+                if (lot.allocations.some((allocation) => allocation.pantry.householdId !== restock.pantry.householdId)) {
+                  throw new TRPCError({
+                    code: 'PRECONDITION_FAILED',
+                    message: `Line ${lot.position}: destination pantry is no longer available.`,
+                  });
+                }
+                if (lot.allocations.length) {
+                  const splitCount = lot.allocations.reduce((sum, allocation) => sum + allocation.count, 0);
+                  if (splitCount !== lot.receivedCount) {
+                    const name = lot.product?.name ? ` (${lot.product.name})` : '';
+                    throw new TRPCError({
+                      code: 'PRECONDITION_FAILED',
+                      message: `Line ${lot.position}${name}: destination split (${splitCount}) doesn't match received count (${lot.receivedCount}).`,
+                    });
+                  }
+                  for (const allocation of lot.allocations) {
+                    const stock = await ensureStock(tx, lot.id, allocation.pantryId);
+                    await guardedRecountStock(tx, stock.id, () => allocation.count);
+                  }
+                } else {
+                  const stock = await ensureStock(tx, lot.id, restock.pantryId);
+                  await guardedRecountStock(tx, stock.id, () => lot.receivedCount);
+                }
               }
             }
+            await tx.lotAllocation.deleteMany({
+              where: { lotId: { in: restock.lots.map((lot) => lot.id) } },
+            });
 
             const varianceCents = reconcileVariance(
               restock.receiptTotalCents,
