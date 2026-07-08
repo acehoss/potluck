@@ -77,7 +77,6 @@ export function ItemDetailView({
   const addImage = useMutation(trpc.item.addImage.mutationOptions());
   const removeImage = useMutation(trpc.item.removeImage.mutationOptions());
   const setMainImage = useMutation(trpc.item.setMain.mutationOptions());
-  const setImageLabel = useMutation(trpc.item.setLabel.mutationOptions());
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -154,10 +153,6 @@ export function ItemDetailView({
           }}
           onSetMain={async (imageId) => {
             await setMainImage.mutateAsync({ imageId });
-            router.refresh();
-          }}
-          onSetLabel={async (imageId, label) => {
-            await setImageLabel.mutateAsync({ imageId, label });
             router.refresh();
           }}
           onRemove={async (imageId) => {

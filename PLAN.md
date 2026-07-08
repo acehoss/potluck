@@ -31,6 +31,21 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
 
+## Media round follow-up — iOS photo picker + labels dropped (2026-07-07, Aaron's device feedback)
+
+- **iOS photo library**: the item-create and gallery-add file inputs carried
+  `capture="environment"`, which on iOS forces the camera and hides the photo-library
+  option. Removed (the OS now offers Take Photo / Photo Library / Choose File).
+  Deliberately kept camera-first: receive-wizard receipt/unit photos, shares.
+- **Photo labels dropped** ("not as useful as I thought"): chips, the Label dropdown,
+  both `setLabel` mutations, and label inputs removed from UI/routers/e2e. The
+  `label` column stays in ProductImage/ItemImage (always null, commented DORMANT) so a
+  re-add is router+UI only, no migration. This also moots the label-chip-truncation
+  cosmetic from the media round.
+- **Gate — green**: tsc/eslint/lint:tokens clean, unit 216/216, full both-engine e2e on
+  a rebuilt stack **376 passed / 2 flaky (retry-green, pre-existing) / 6 skipped / 0
+  failed**.
+
 ## Media round — product/item galleries, attachments, linkified notes (2026-07-07)
 
 Multi-photo galleries for Products and loanable Items (main = position 0, optional preset

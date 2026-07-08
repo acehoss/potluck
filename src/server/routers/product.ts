@@ -9,7 +9,6 @@ import { deleteImageFile, imageFileExists, isStoredImagePath } from '../images';
 import { moveMediaToMain } from '../media-positions';
 import { protectedProcedure, router } from '../trpc';
 
-const productImageLabel = z.enum(['nutrition', 'ingredients', 'angle']).nullish();
 
 type ProductLotForPhoto = {
   receivedCount: number;
@@ -147,7 +146,6 @@ export const productRouter = router({
         images: product.images.map((image) => ({
           id: image.id,
           path: image.path,
-          label: image.label,
           position: image.position,
         })),
         derivedPhotoPath: newestUnitPhoto(photoLots),
@@ -159,7 +157,6 @@ export const productRouter = router({
       z.object({
         productId: z.string().min(1),
         path: z.string().min(1).max(300),
-        label: productImageLabel,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -183,7 +180,6 @@ export const productRouter = router({
           data: {
             productId: product.id,
             path: input.path,
-            label: input.label ?? null,
             position: last ? last.position + 1 : 0,
           },
         });
@@ -238,20 +234,4 @@ export const productRouter = router({
       return { ok: true };
     }),
 
-  setLabel: protectedProcedure
-    .input(z.object({ imageId: z.string().min(1), label: productImageLabel }))
-    .mutation(async ({ ctx, input }) => {
-      await dbTransaction(async (tx) => {
-        const image = await tx.productImage.findUnique({
-          where: { id: input.imageId },
-          include: { product: { select: { householdId: true } } },
-        });
-        if (!image || image.product.householdId !== ctx.user.householdId) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Image not found.' });
-        }
-        requireCapability(ctx.user, 'receiveStock');
-        await tx.productImage.update({ where: { id: image.id }, data: { label: input.label ?? null } });
-      });
-      return { ok: true };
-    }),
 });

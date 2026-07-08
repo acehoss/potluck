@@ -3,32 +3,19 @@
 import { useRef, useState } from 'react';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 
-/** Preset photo labels (media round): server stores the enum, UI shows copy. */
-export type PhotoLabel = 'nutrition' | 'ingredients' | 'angle';
-
 export type GalleryImage = {
   id: string;
   path: string;
-  label: PhotoLabel | null;
   position: number;
 };
 
-const LABELS: { value: PhotoLabel; text: string }[] = [
-  { value: 'nutrition', text: 'Nutrition facts' },
-  { value: 'ingredients', text: 'Ingredients' },
-  { value: 'angle', text: 'Another angle' },
-];
-
-export function photoLabelText(label: PhotoLabel): string {
-  return LABELS.find((l) => l.value === label)!.text;
-}
-
 /**
  * Shared hero + thumb-strip gallery (media round) for products and items.
- * Position 0 is the main photo. Owners get add / set-main / label / remove;
+ * Position 0 is the main photo. Owners get add / set-main / remove;
  * cross-household viewers see the gallery read-only. The parent owns the
  * mutations (and refreshes on success); this component owns the file capture,
- * downscale+upload, hero selection, and the arm-to-confirm remove.
+ * downscale+upload, and hero selection. (Per-photo preset labels shipped in
+ * the media round and were dropped 2026-07-07 — the DB column is dormant.)
  */
 export function MediaGallery({
   images,
@@ -41,7 +28,6 @@ export function MediaGallery({
   cap = 8,
   onAddImage,
   onSetMain,
-  onSetLabel,
   onRemove,
 }: {
   images: GalleryImage[];
@@ -55,7 +41,6 @@ export function MediaGallery({
   cap?: number;
   onAddImage: (path: string) => Promise<unknown>;
   onSetMain: (imageId: string) => Promise<unknown>;
-  onSetLabel: (imageId: string, label: PhotoLabel | null) => Promise<unknown>;
   onRemove: (imageId: string) => Promise<unknown>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -132,7 +117,7 @@ export function MediaGallery({
               <button
                 type="button"
                 data-testid={`${testIdPrefix}-thumb-${i}`}
-                aria-label={`Photo ${i + 1}${image.label ? ` — ${photoLabelText(image.label)}` : ''}`}
+                aria-label={`Photo ${i + 1}`}
                 aria-current={i === idx}
                 onClick={() => setSelected(i)}
                 className={`size-16 overflow-hidden rounded-lg border object-cover transition-colors ${
@@ -146,14 +131,6 @@ export function MediaGallery({
                   className="size-full object-cover"
                 />
               </button>
-              {image.label && (
-                <span
-                  data-testid="photo-label-chip"
-                  className="pointer-events-none absolute inset-x-0 bottom-0 truncate rounded-b-lg bg-scrim px-1 py-0.5 text-center text-[10px] font-medium text-accent-contrast"
-                >
-                  {photoLabelText(image.label)}
-                </span>
-              )}
             </li>
           ))}
         </ul>
@@ -162,11 +139,12 @@ export function MediaGallery({
       {canEdit && (
         <div className="flex flex-col gap-2">
           {/* Add — file input carries the testid; the button just triggers it. */}
+          {/* No `capture` attr: on iOS that forces the camera and hides the
+              photo-library option; without it the OS offers both. */}
           <input
             ref={fileRef}
             type="file"
             accept="image/*"
-            capture="environment"
             data-testid={`${testIdPrefix}-photo-add`}
             onChange={(e) => handleFile(e.target.files)}
             className="hidden"
@@ -206,27 +184,6 @@ export function MediaGallery({
                   Set as main
                 </button>
               )}
-              <label className="flex items-center gap-1 text-xs font-medium text-text-muted">
-                Label
-                <select
-                  data-testid={`${testIdPrefix}-photo-label-select`}
-                  value={current.label ?? ''}
-                  disabled={busy}
-                  onChange={(e) =>
-                    run(() =>
-                      onSetLabel(current.id, (e.target.value || null) as PhotoLabel | null),
-                    )
-                  }
-                  className="min-h-11 rounded-lg border border-border-strong bg-surface-raised px-2 py-2 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
-                >
-                  <option value="">None</option>
-                  {LABELS.map((l) => (
-                    <option key={l.value} value={l.value}>
-                      {l.text}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <button
                 type="button"
                 data-testid={`${testIdPrefix}-photo-remove`}

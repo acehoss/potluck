@@ -86,7 +86,6 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     images: item.images.map((image) => ({
       id: image.id,
       path: image.path,
-      label: image.label as ItemDetail['images'][number]['label'],
       position: image.position,
     })),
     attachments: item.attachments.map((a) => ({

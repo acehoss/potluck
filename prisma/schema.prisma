@@ -514,7 +514,7 @@ model ProductImage {
   id        String   @id @default(cuid())
   productId String
   path      String   // under IMAGES_DIR volume, kind "products"; position 0 is the main photo
-  label     String?  // "nutrition" | "ingredients" | "angle"; nullable user hint
+  label     String?  // DORMANT: preset-label UI shipped in the media round, dropped 2026-07-07 (not useful in practice); column kept (always null now) so a re-add needs no migration
   position  Int
   createdAt DateTime @default(now())
 
@@ -750,7 +750,7 @@ model ItemImage {
   id        String   @id @default(cuid())
   itemId    String
   path      String   // under IMAGES_DIR volume, kind "items"; position 0 is the main photo
-  label     String?  // "nutrition" | "ingredients" | "angle"; nullable user hint
+  label     String?  // DORMANT: preset-label UI shipped in the media round, dropped 2026-07-07 (not useful in practice); column kept (always null now) so a re-add needs no migration
   position  Int
   createdAt DateTime @default(now())
 

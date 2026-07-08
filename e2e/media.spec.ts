@@ -27,7 +27,7 @@ type Overview = {
 };
 type UploadResult = { path: string; name?: string };
 type ItemGet = { notes: string | null };
-type ItemImageInput = { path: string; label: 'nutrition' | 'ingredients' | 'angle' | null };
+type ItemImageInput = { path: string };
 
 let serial = 0;
 const key = (prefix: string, project: string) =>
@@ -226,11 +226,6 @@ async function addGalleryPhoto(
   return imageSrc(thumb);
 }
 
-async function setGalleryLabel(root: TestRoot, prefix: GalleryPrefix, label: string) {
-  await root.getByTestId(`${prefix}-photo-label-select`).selectOption({ label });
-  await expect(root.getByTestId('photo-label-chip').filter({ hasText: label })).toBeVisible();
-}
-
 async function setMainGalleryPhoto(root: TestRoot, prefix: GalleryPrefix, index: number) {
   const thumb = galleryThumb(root, prefix, index);
   await thumb.click();
@@ -286,7 +281,6 @@ test.describe('product gallery', () => {
     await expectImageSrc(galleryHero(sheet, 'product'), derivedSrc);
 
     await addGalleryPhoto(page, sheet, 'product', 0);
-    await setGalleryLabel(sheet, 'product', 'Nutrition facts');
     await addGalleryPhoto(page, sheet, 'product', 1);
     await expect(galleryThumbs(sheet, 'product')).toHaveCount(2);
 
@@ -308,7 +302,6 @@ test.describe('product gallery reach', () => {
     const { pantryId } = await receiveProductWithUnitPhoto(page, product);
     const ownerSheet = await openProductSheet(page, product);
     await addGalleryPhoto(page, ownerSheet, 'product', 0);
-    await setGalleryLabel(ownerSheet, 'product', 'Nutrition facts');
     await addGalleryPhoto(page, ownerSheet, 'product', 1);
     await expect(galleryThumbs(ownerSheet, 'product')).toHaveCount(2);
 
@@ -318,9 +311,7 @@ test.describe('product gallery reach', () => {
     await dana.goto(`/pantries/${pantryId}`);
     const danaSheet = await openProductSheet(dana, product);
     await expect(galleryHero(danaSheet, 'product')).toBeVisible();
-    await expect(
-      danaSheet.getByTestId('photo-label-chip').filter({ hasText: 'Nutrition facts' }),
-    ).toBeVisible();
+    await expect(galleryThumbs(danaSheet, 'product')).toHaveCount(2);
     await galleryThumb(danaSheet, 'product', 1).click();
     await expect(danaSheet.getByTestId('product-photo-add')).toHaveCount(0);
     await expect(danaSheet.getByTestId('product-photo-set-main')).toHaveCount(0);
@@ -336,7 +327,7 @@ test.describe('product gallery reach', () => {
 });
 
 test.describe('item gallery', () => {
-  test('item detail gallery reorders, labels, removes, and drives the list thumbnail', async ({
+  test('item detail gallery reorders, removes, and drives the list thumbnail', async ({
     page,
   }, testInfo) => {
     const P = testInfo.project.name;
@@ -356,7 +347,6 @@ test.describe('item gallery', () => {
     await addGalleryPhoto(page, page, 'item', 1);
     await expect(galleryThumbs(page, 'item')).toHaveCount(2);
     const mainSrc = await setMainGalleryPhoto(page, 'item', 1);
-    await setGalleryLabel(page, 'item', 'Ingredients');
 
     await openItems(page);
     const updatedRow = page.getByTestId('item-row').filter({ hasText: item });
@@ -459,10 +449,7 @@ test.describe('lending still works', () => {
     const first = await uploadImage(page.request, 'items');
     const second = await uploadImage(page.request, 'items');
     const itemId = await createItemApi(page.request, P, item, {
-      photos: [
-        { path: first, label: null },
-        { path: second, label: 'ingredients' },
-      ],
+      photos: [{ path: first }, { path: second }],
     });
     await attachManualApi(page.request, itemId);
 

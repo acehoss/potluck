@@ -25,10 +25,8 @@ import { protectedProcedure, router } from '../trpc';
 const MAX_CENTS = 100_000_000; // $1,000,000
 const MAX_IMAGES_PER_ITEM = 8;
 const MAX_ATTACHMENTS_PER_ITEM = 5;
-const itemImageLabel = z.enum(['nutrition', 'ingredients', 'angle']).nullish();
 const itemImageInput = z.object({
   path: z.string().min(1).max(300),
-  label: itemImageLabel,
 });
 
 /**
@@ -99,13 +97,12 @@ async function unlinkAttachmentIfUnreferenced(path: string) {
   if (!(await db.itemAttachment.findFirst({ where: { path } }))) await deleteImageFile(path);
 }
 
-function mediaRows<
-  T extends { id: string; path: string; label: string | null; position: number },
->(rows: readonly T[]) {
+function mediaRows<T extends { id: string; path: string; position: number }>(
+  rows: readonly T[],
+) {
   return rows.map((row) => ({
     id: row.id,
     path: row.path,
-    label: row.label,
     position: row.position,
   }));
 }
@@ -306,7 +303,6 @@ export const itemRouter = router({
             data: {
               itemId: created.id,
               path: photo.path,
-              label: photo.label ?? null,
               position,
             },
           });
@@ -363,7 +359,6 @@ export const itemRouter = router({
       z.object({
         itemId: z.string().min(1),
         path: z.string().min(1).max(300),
-        label: itemImageLabel,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -386,7 +381,6 @@ export const itemRouter = router({
           data: {
             itemId: item.id,
             path: input.path,
-            label: input.label ?? null,
             position: last ? last.position + 1 : 0,
           },
         });
@@ -437,23 +431,6 @@ export const itemRouter = router({
         for (const update of updates) {
           await tx.itemImage.update({ where: { id: update.id }, data: { position: update.position } });
         }
-      });
-      return { ok: true };
-    }),
-
-  setLabel: protectedProcedure
-    .input(z.object({ imageId: z.string().min(1), label: itemImageLabel }))
-    .mutation(async ({ ctx, input }) => {
-      requireCapability(ctx.user, 'lendBorrow');
-      await dbTransaction(async (tx) => {
-        const image = await tx.itemImage.findUnique({
-          where: { id: input.imageId },
-          include: { item: { select: { householdId: true } } },
-        });
-        if (!image || image.item.householdId !== ctx.user.householdId) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Image not found.' });
-        }
-        await tx.itemImage.update({ where: { id: image.id }, data: { label: input.label ?? null } });
       });
       return { ok: true };
     }),

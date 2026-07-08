@@ -10,7 +10,7 @@ import { newClientKey } from '@/lib/client-key';
 import { downscaleToJpeg, uploadImage } from '@/lib/downscale';
 import { formatCents, parseDollarsToCents } from '@/lib/money';
 import { useTRPC } from '@/lib/trpc';
-import { MediaGallery, type PhotoLabel } from '../../media-gallery';
+import { MediaGallery } from '../../media-gallery';
 import { VisibilityControl } from '../../visibility-control';
 
 export type ProductGroup = {
@@ -615,7 +615,6 @@ function ProductSheet({
   const addImage = useMutation(trpc.product.addImage.mutationOptions());
   const removeImage = useMutation(trpc.product.removeImage.mutationOptions());
   const setMain = useMutation(trpc.product.setMain.mutationOptions());
-  const setLabel = useMutation(trpc.product.setLabel.mutationOptions());
 
   const product = query.data;
 
@@ -644,10 +643,7 @@ function ProductSheet({
           </p>
         ) : (
           <MediaGallery
-            images={product.images.map((im) => ({
-              ...im,
-              label: im.label as PhotoLabel | null,
-            }))}
+            images={product.images}
             fallbackPath={product.derivedPhotoPath}
             alt={productName}
             canEdit={canEdit && product.mine}
@@ -660,10 +656,6 @@ function ProductSheet({
             }}
             onSetMain={async (imageId) => {
               await setMain.mutateAsync({ imageId });
-              await query.refetch();
-            }}
-            onSetLabel={async (imageId, label) => {
-              await setLabel.mutateAsync({ imageId, label });
               await query.refetch();
             }}
             onRemove={async (imageId) => {
