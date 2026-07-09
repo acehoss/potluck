@@ -52,6 +52,13 @@ export const db = base.$extends({
 /**
  * Interactive transaction that holds the app-level lock for its whole
  * duration, so no other request's query can interleave into it.
+ *
+ * DEPLOYMENT INVARIANT: exactly ONE app process per SQLite file. SQLite's own
+ * file locking keeps transactions ACID across processes, so a second process
+ * wouldn't corrupt data — but it WOULD double-run the in-process scheduler
+ * (duplicate digests/outbox sends) and contend for the write lock
+ * (SQLITE_BUSY errors this serialization exists to avoid). Horizontal scaling
+ * is the future Postgres backend's job, not SQLite's.
  */
 export function dbTransaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
   return withDbLock(() => base.$transaction(fn));

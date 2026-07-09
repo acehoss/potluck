@@ -139,7 +139,8 @@ export const shoppingRouter = router({
           pantryId: { in: [...pantryInfo.keys()] },
           lot: {
             excluded: false,
-            receivedCount: { gt: 0 },
+            // NO receivedCount filter — placements alone say what's on the
+            // shelf (see pantry page; Phase 4 Round 4).
             unitCostCents: { not: null },
             productId: { not: null },
             restock: {

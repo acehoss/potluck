@@ -47,6 +47,11 @@ function startDigestScheduler() {
           if (res.sent > 0) {
             console.log(`[digest-scheduler] sent ${res.sent} / considered ${res.considered}`);
           }
+          // Backstop drain for transactional notifications whose post-commit
+          // send was interrupted (Phase 4 Round 4 outbox) — late, never lost.
+          const { drainNotifyOutbox } = await import('./server/notify-outbox');
+          const drained = await drainNotifyOutbox();
+          if (drained > 0) console.log(`[digest-scheduler] outbox drained ${drained}`);
         } catch (err) {
           console.warn('[digest-scheduler] tick failed:', err instanceof Error ? err.message : err);
         } finally {

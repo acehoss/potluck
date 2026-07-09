@@ -53,6 +53,12 @@ first account is created by hand (registration is invite-only, so there's a
 chicken-and-egg for user #1). The container already sets `restart:
 unless-stopped`, so it survives host reboots and crashes.
 
+> **Run exactly ONE app container per database file.** SQLite keeps the data
+> safe under concurrency, but the app schedules digests and notification
+> sends in-process — a second container would send them twice and contend for
+> the write lock. Scaling out is what a future Postgres backend is for; with
+> SQLite there is nothing to gain from extra processes anyway.
+
 ### 0. Generate the production secrets
 
 Three secrets must be set in the host env (or the gitignored `.env`) **before

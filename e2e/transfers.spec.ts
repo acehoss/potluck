@@ -276,6 +276,49 @@ test.describe('pantry transfers + receive splits', () => {
     }
   });
 
+  test('credit-corrected lot stays visible while units remain placed', async ({ page }, testInfo) => {
+    // Round-4 fix: receivedCount is receipt/money data — correcting it to
+    // zero must not hide physical stock from the pantry (placements are the
+    // only source of shelf truth).
+    await login(page, 'aaron');
+    const api = page.request;
+    const pantryA = await ownPantryId(api);
+    const product = uniq('Corrected Figs', testInfo.project.name);
+    // Purchased by the CONNECTED household — correctCredit only exists where
+    // a cross-household credit was posted at finalize.
+    const ov = (await (await api.get('/api/trpc/household.overview')).json()).result.data as {
+      yourHouseholdId: string;
+      households: { id: string; name: string }[];
+    };
+    const inlawsId = ov.households.find((h) => h.name === 'In-Laws')!.id;
+    const created = await ok(api, 'restock.create', {
+      pantryId: pantryA,
+      retailer: product,
+      purchasedAt: new Date().toISOString().slice(0, 10),
+      purchaserHouseholdId: inlawsId,
+      receiptTotalCents: null,
+    });
+    const restockId = created.id as string;
+    await ok(api, 'restock.saveLine', {
+      restockId,
+      newProductName: product,
+      purchasedCount: 3,
+      receivedCount: 3,
+      lineTotalCents: 300,
+      bestBy: null,
+    });
+    await ok(api, 'restock.finalize', { restockId, acknowledgedVarianceCents: null });
+    const lot = ((await queryOk(api, 'restock.get', { id: restockId })).lots as { id: string }[])[0];
+    await ok(api, 'restock.correctCredit', {
+      restockId,
+      corrections: [{ lotId: lot.id, receivedCount: 0 }],
+    });
+    await page.goto(`/pantries/${pantryA}`);
+    await expect(
+      page.getByTestId('product-row').filter({ hasText: product }).getByTestId('product-total'),
+    ).toContainText('3');
+  });
+
   test('receive split: allocation editor splits a line across pantries at finalize', async ({
     page,
   }, testInfo) => {

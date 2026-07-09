@@ -13,6 +13,7 @@ import { protectedProcedure, router } from '../trpc';
 type ProductLotForPhoto = {
   receivedCount: number;
   unitPhotoPath: string | null;
+  stocks: { count: number }[];
   restock: {
     status: string;
     purchasedAt: Date;
@@ -20,10 +21,19 @@ type ProductLotForPhoto = {
   };
 };
 
+/**
+ * "This lot became inventory": received per the receipt, OR units physically
+ * placed right now — a credit correction to zero must not hide a lot whose
+ * stock is still on a shelf (Phase 4 Round 4, same rule as the pantry page).
+ */
+function everInventory(lot: ProductLotForPhoto): boolean {
+  return lot.receivedCount > 0 || lot.stocks.some((s) => s.count > 0);
+}
+
 function newestUnitPhoto(lots: readonly ProductLotForPhoto[]) {
   return (
     lots
-      .filter((lot) => lot.restock.status === 'FINALIZED' && lot.receivedCount > 0 && lot.unitPhotoPath)
+      .filter((lot) => lot.restock.status === 'FINALIZED' && everInventory(lot) && lot.unitPhotoPath)
       .sort((a, b) => b.restock.purchasedAt.getTime() - a.restock.purchasedAt.getTime())[0]
       ?.unitPhotoPath ?? null
   );
@@ -32,7 +42,7 @@ function newestUnitPhoto(lots: readonly ProductLotForPhoto[]) {
 async function visibleProductLots(user: SessionUser, lots: readonly ProductLotForPhoto[]) {
   const visible: ProductLotForPhoto[] = [];
   for (const lot of lots) {
-    if (lot.restock.status !== 'FINALIZED' || lot.receivedCount <= 0) continue;
+    if (lot.restock.status !== 'FINALIZED' || !everInventory(lot)) continue;
     const { pantry } = lot.restock;
     const canSee = await reachesResource(
       db,
@@ -118,6 +128,7 @@ export const productRouter = router({
           images: { orderBy: { position: 'asc' } },
           lots: {
             include: {
+              stocks: { select: { count: true } },
               restock: {
                 select: {
                   status: true,

@@ -43,6 +43,9 @@ type RLine = {
   openOrderLines: OpenOrderLine[];
   countedCount: number | null;
   countedByName: string | null;
+  // Units picked from this placement AFTER it was counted (Round 4): the
+  // count is stale — commit refuses it until the line is recounted.
+  takenSinceCount: number;
   unitPhotoPath: string | null;
 };
 
@@ -588,6 +591,11 @@ function CountLine({
         {!blind && (
           <p className="text-xs text-text-muted">app says {line.expectedCount}</p>
         )}
+        {isCounted && line.takenSinceCount > 0 && (
+          <p data-testid="recount-needed" className="text-xs font-medium text-danger">
+            picked up since — recount
+          </p>
+        )}
       </div>
 
       {!blind && !isCounted && (
@@ -737,7 +745,15 @@ function ReviewScreen({
       ? [{ orderLineId: ol.orderLineId, action: shortageChoice[ol.orderLineId] }]
       : [],
   );
-  const canCommit = canAdjust && allAcked && (!hasShortage || shortagesResolved) && !commit.isPending;
+  // Round 4: a pickup after a line was counted makes that count stale — the
+  // server refuses the commit, so surface it here and gate the button.
+  const staleLines = lines.filter((l) => l.countedCount !== null && l.takenSinceCount > 0);
+  const canCommit =
+    canAdjust &&
+    allAcked &&
+    (!hasShortage || shortagesResolved) &&
+    staleLines.length === 0 &&
+    !commit.isPending;
 
   return (
     <div data-testid="review-screen" className="mx-auto flex w-full max-w-2xl flex-col gap-5 p-4 pb-28 sm:p-6">
@@ -760,6 +776,26 @@ function ReviewScreen({
         <p role="alert" className="text-sm font-medium text-danger">
           {error}
         </p>
+      )}
+
+      {staleLines.length > 0 && (
+        <div
+          data-testid="stale-count-warning"
+          className="rounded-lg border border-border-strong bg-surface-sunken p-3 text-sm text-text"
+        >
+          <p className="font-medium">
+            {staleLines.length === 1 ? 'A line was' : `${staleLines.length} lines were`} picked from
+            after counting — recount before committing:
+          </p>
+          <ul className="mt-1 list-inside list-disc text-text-muted">
+            {staleLines.map((l) => (
+              <li key={l.lineId}>
+                {l.productName}
+                {l.lotCode ? ` · ${l.lotCode}` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* (a) Derived moves */}

@@ -5,7 +5,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { SessionUser } from '../auth';
 import { requireCapability } from '../authz';
 import { db, dbTransaction } from '../db';
-import { notify } from '../push';
+import { drainNotifyOutbox } from '../notify-outbox';
 import { reconcileMath, type ReconcileMathLine } from '../reconcile-math';
 import {
   ensureStock,
@@ -225,6 +225,7 @@ async function sessionPayload(tx: Tx, householdId: string, sessionId: string) {
           expectedReserved: true,
           countedCount: true,
           countedById: true,
+          countedAt: true,
           stock: {
             select: {
               pantryId: true,
@@ -319,6 +320,10 @@ async function sessionPayload(tx: Tx, householdId: string, sessionId: string) {
   }
 
   const pantryNameById = new Map(pantries.map((p) => [p.pantryId, p.name]));
+  // Round 4: flag lines whose placement was picked from AFTER they were
+  // counted — the walk shows "recount", the review refuses to ack them, and
+  // commit hard-rejects them regardless.
+  const takesFor = await takesSinceCount(tx, session.lines);
   const lines = session.lines
     .map((line) => {
       const lot = line.stock.lot;
@@ -342,6 +347,7 @@ async function sessionPayload(tx: Tx, householdId: string, sessionId: string) {
         openOrderLines: orderLinesByStockId.get(line.stockId) ?? [],
         countedCount: line.countedCount,
         countedByName: line.countedById ? nameByUserId.get(line.countedById) ?? null : null,
+        takenSinceCount: takesFor(line),
         unitPhotoPath: lot.unitPhotoPath,
       };
     })
@@ -569,20 +575,45 @@ async function replayedCommitSummary(
   };
 }
 
-async function notifyShortageOrders(
-  affectedOrders: ReadonlyMap<string, string>,
-  actorId: string,
-) {
-  for (const [orderId, requesterHouseholdId] of affectedOrders.entries()) {
-    void notify({
-      recipientHouseholdIds: [requesterHouseholdId],
-      excludeUserId: actorId,
-      category: 'pickups',
-      url: `/orders/${orderId}`,
-      title: 'An order changed',
-      body: 'A pantry recount affected your order.',
-    });
-  }
+/**
+ * Takes recorded against a (lot, pantry) AFTER a line was counted: the only
+ * stock movement the freeze admits is a reserved pickup, and each one logs a
+ * Take with the placement's pantry snapshot. A counted number older than such
+ * a take is STALE — committing it would "find" the picked-up units and
+ * restore them to the shelf. Both the payload (per-line flag for the UI) and
+ * commit (hard refusal) consult this.
+ */
+async function takesSinceCount(
+  tx: Tx,
+  lines: readonly {
+    countedAt: Date | null;
+    stock: { lotId: string; pantryId: string };
+  }[],
+): Promise<(line: { countedAt: Date | null; stock: { lotId: string; pantryId: string } }) => number> {
+  const counted = lines.filter((l) => l.countedAt !== null);
+  if (counted.length === 0) return () => 0;
+  const earliest = new Date(Math.min(...counted.map((l) => l.countedAt!.getTime())));
+  // gte, not gt — a take in the same millisecond as the count is ambiguous
+  // ordering, and ambiguity fails CLOSED (a spurious recount is cheap; a
+  // phantom restore is not). Takes now carry app-side ms timestamps; legacy
+  // second-precision rows only widen the flagged window, never narrow it.
+  const takes = await tx.take.findMany({
+    where: {
+      lotId: { in: [...new Set(counted.map((l) => l.stock.lotId))] },
+      pantryId: { in: [...new Set(counted.map((l) => l.stock.pantryId))] },
+      takenAt: { gte: earliest },
+    },
+    select: { lotId: true, pantryId: true, takenAt: true },
+  });
+  return (line) =>
+    line.countedAt === null
+      ? 0
+      : takes.filter(
+          (t) =>
+            t.lotId === line.stock.lotId &&
+            t.pantryId === line.stock.pantryId &&
+            t.takenAt.getTime() >= line.countedAt!.getTime(),
+        ).length;
 }
 
 export const reconcileRouter = router({
@@ -1005,6 +1036,7 @@ export const reconcileRouter = router({
             id: true,
             stockId: true,
             countedCount: true,
+            countedAt: true,
             stock: {
               select: {
                 id: true,
@@ -1016,6 +1048,17 @@ export const reconcileRouter = router({
             },
           },
         });
+        // Stale-count refusal (Round 4): a pickup between count and commit
+        // means the counted number predates units leaving the shelf —
+        // committing it would restore them as a phantom "found" variance.
+        const takesFor = await takesSinceCount(tx, rawLines);
+        const stale = rawLines.filter((line) => takesFor(line) > 0);
+        if (stale.length > 0) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: `${stale.length} line(s) were picked from after they were counted — recount them and review again.`,
+          });
+        }
         const lines: CommitLine[] = rawLines.map((line) => ({
           ...line,
           countedCount: line.countedCount!,
@@ -1043,6 +1086,17 @@ export const reconcileRouter = router({
         });
 
         await applyShortageResolutionPlans(tx, shortagePlans, now);
+
+        // Outbox rows ride the commit tx (Round 4): the requester's "your
+        // order changed" notice survives a crash between commit and send.
+        for (const [orderId, requesterHouseholdId] of affectedOrders.entries()) {
+          await tx.notifyOutbox.create({
+            data: {
+              kind: 'reconcile-shortage',
+              payload: JSON.stringify({ orderId, requesterHouseholdId, actorId: ctx.user.id }),
+            },
+          });
+        }
 
         for (const move of math.moves) {
           const transfer = await tx.transfer.create({
@@ -1139,7 +1193,7 @@ export const reconcileRouter = router({
 
         return { summary, affectedOrders };
       });
-      await notifyShortageOrders(result.affectedOrders, ctx.user.id);
+      if (result.affectedOrders.size > 0) await drainNotifyOutbox();
       return result.summary;
     }),
 

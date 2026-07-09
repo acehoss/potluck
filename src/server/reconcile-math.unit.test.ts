@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { reconcileMath, type ReconcileMathLine } from './reconcile-math';
 
 const line = (over: Partial<ReconcileMathLine> & Pick<ReconcileMathLine, 'stockId'>): ReconcileMathLine => ({
@@ -105,4 +107,19 @@ test('counted-zero everywhere: full shrink variance per placement', () => {
 
 test('negative counted throws (guarded upstream by zod, belt here)', () => {
   assert.throws(() => reconcileMath([line({ stockId: 's1', counted: -1 })]));
+});
+
+test('PURITY: the module is client-importable — no runtime imports, no server/env/clock access', () => {
+  // reconcile-view.tsx imports this module so the review preview matches the
+  // commit byte-for-byte. Anything below would break the client bundle or
+  // drag server code toward it; adding a dependency here means splitting the
+  // module, not weakening this test.
+  const source = readFileSync(fileURLToPath(new URL('./reconcile-math.ts', import.meta.url)), 'utf8');
+  const runtimeImports = source
+    .split('\n')
+    .filter((l) => /^\s*import\s/.test(l) && !/^\s*import\s+type\s/.test(l));
+  assert.deepEqual(runtimeImports, [], 'no runtime imports allowed');
+  for (const banned of ['require(', 'process.', 'node:', 'Date.now', 'Math.random', 'globalThis']) {
+    assert.ok(!source.includes(banned), `banned reference in reconcile-math.ts: ${banned}`);
+  }
 });

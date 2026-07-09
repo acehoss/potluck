@@ -171,6 +171,8 @@ async function giftFromLots(
         costCents: 0, // gifts are free — no ledger entry, ever (C1)
         shareClaimId: claim.id,
         clientKey: clientKey ? `${clientKey}:gift:${s.id}` : null,
+        // App-side ms timestamp — see order.pickup (reconcile stale guard).
+        takenAt: new Date(),
       },
     });
     gifted += qty;

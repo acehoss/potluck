@@ -30,21 +30,67 @@ deferred list"). Near-term items hoisted from round notes below and from the arc
   any public deployment.
 - **Cosmetic backlog:** a few 390px ragged wraps (pantry header now truncates; the rest
   deferred) · the pre-existing /ledger React #418 hydration warning.
-- **Phase 4 COMPLETE** (2026-07-08): all four rounds shipped — focus group ·
-  placement model · transfer + receive splits · reconcile draft sessions. Round
-  records below; decision record REWORK.md "Phase 4" (S1–S7 + A1–A8). Deferred
-  follow-ups: a transfer-history surface (transfer.listForHousehold exists, no
-  screen renders it) · A7's third shortage action "fill from another placement"
-  (reduce/cancel shipped; fill is a committer convenience) · Theo's low-permission
-  "this looks off" flag (A5 fast-follow) · per-row "being counted" badges on
-  inventory (the 412 messages are the contextual surface for now) · stale-session
-  push nudge (the banner carries age; lazy 24h auto-abandon is live) ·
-  reconcile.get can cosmetically show a 24h-stale DRAFT until any freeze check or
-  create flips it · legacy adjustment clientKey replay across the deploy boundary
-  (accepted risk, Round 1 review).
+- **Phase 4 COMPLETE + hardened** (2026-07-08): focus group · placement model ·
+  transfer + receive splits · reconcile draft sessions · Round 4 hardening
+  (stale-count guard, notification outbox, purity backstop, receivedCount
+  visibility fix, single-process docs). Round records below; decision record
+  REWORK.md "Phase 4" (S1–S7 + A1–A8). Remaining deferrals: a transfer-history
+  surface (transfer.listForHousehold exists, no screen renders it) · A7's third
+  shortage action "fill from another placement" (reduce/cancel shipped) ·
+  Theo's low-permission "this looks off" flag (A5 fast-follow) · per-row "being
+  counted" badges on inventory (the 412 messages are the contextual surface) ·
+  stale-session push nudge (banner carries age; lazy 24h auto-abandon live) ·
+  reconcile.get can cosmetically show a 24h-stale DRAFT until any freeze check
+  or create flips it · legacy adjustment clientKey replay across the deploy
+  boundary (accepted risk) · Prisma-7 delegate casts (`as unknown as
+  TransactionClient` in authz/circles/contacts/share-reach — runtime-safe,
+  type-unsafe; revisit on driver updates).
   Observation from Round 1 review (not a regression — pre-existing): pantry/shopping
   availability filters on `receivedCount > 0`, so a credit-corrected-to-zero lot hides
   from inventory even with physical stock; revisit when reconcile lands.
+
+## Phase 4 Round 4 — hardening (2026-07-08, Aaron's footgun triage)
+
+Post-Phase-4 triage of the risks surfaced in review. Fable + codex review.
+
+- **Stale-count guard (the phantom-restore fix).** A reserved pickup between a
+  line's count and the commit made the counted number stale — committing it
+  would "find" the picked units and restore them to the shelf. Commit now
+  refuses any line whose placement has a Take at-or-after its countedAt
+  (`takesSinceCount`); `reconcile.get` exposes per-line `takenSinceCount` so
+  the walk badges "picked up since — recount" and the review gates the commit
+  button. Take rows are stamped with app-side ms timestamps (the column's
+  CURRENT_TIMESTAMP default is second-precision — a same-second pickup could
+  dodge the comparison; codex review caught it) and the comparison fails
+  CLOSED on equal timestamps. e2e: count → pickup → 412 → recount → clean commit.
+- **Notification outbox.** `NotifyOutbox` rows ride the reconcile-commit tx
+  (kind `reconcile-shortage`); `drainNotifyOutbox` sends after commit, and the
+  digest scheduler tick drains leftovers — the "your order changed" notice
+  survives a crash between commit and send. Optimistic per-row claim (the
+  attempts bump doubles as a claim version) so concurrent drains never
+  double-send; attempts cap parks poisoned rows. Migration
+  `20260708230000_notify_outbox` (additive). Scope note in-module: delivery
+  reliability beyond the crash window remains notify()'s best-effort semantics.
+- **reconcile-math purity backstop.** The module is imported by client code
+  (preview === commit); a unit test now fails on any runtime import, require,
+  env/clock/randomness reference in its source. (It caught its own first
+  draft's doc comment — working as intended.)
+- **receivedCount is receipt data, not shelf truth.** Dropped
+  `receivedCount > 0` from the pantry-page and shopping availability filters,
+  and product detail/photo gating now treats "ever inventory" as
+  receivedCount > 0 OR units currently placed — a credit-corrected-to-zero lot
+  no longer hides physical stock anywhere. e2e: correct a cross-household
+  restock's line to 0 received, pantry still shows the 3 units.
+- **Single-process invariant documented** (README go-live callout +
+  dbTransaction doc): SQLite file locking keeps a second process SAFE for
+  data, but it would double-run the in-process scheduler and contend for the
+  write lock — one app container per database file; Postgres is the future
+  multi-process story. Backlogged: the Prisma-7 `as unknown as
+  TransactionClient` delegate casts (runtime-safe, type-unsafe; revisit if a
+  driver update restores delegate-union callability).
+- **Gate — green:** unit 230/230 (purity case new) · tsc/eslint/lint:tokens
+  clean · reconcile/transfers/slice4/orders/shares specs on the rebuilt stack ·
+  full both-engine suite (final run below).
 
 ## Phase 4 Round 3 — reconcile draft sessions (2026-07-08)
 

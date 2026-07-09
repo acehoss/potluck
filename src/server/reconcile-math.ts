@@ -1,4 +1,10 @@
 /**
+ * PURITY CONTRACT: this module is imported by CLIENT code (the reconcile
+ * review preview renders exactly what commit will compute) as well as the
+ * server. It must stay dependency-free — no imports, no db, no env access,
+ * no clock or randomness. The purity case in reconcile-math.unit.test.ts
+ * fails the suite if someone adds any of those.
+ *
  * Phase 4 Round 3 (REWORK S6/A6): the reconcile commit's conservation math,
  * pure so it is unit-testable. Counts are taken WHERE FOUND; at commit, for
  * each lot, matched deficits/surpluses across in-scope pantries decompose

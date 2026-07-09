@@ -41,7 +41,9 @@ export default async function PantryPage({ params }: { params: Promise<{ id: str
       lot: {
         restock: { status: 'FINALIZED', voidedAt: null },
         excluded: false,
-        receivedCount: { gt: 0 },
+        // NO receivedCount filter: physical presence is the placement's count
+        // alone. receivedCount is receipt/money data — a credit correction to
+        // zero must not hide units still on the shelf (Phase 4 Round 4).
         productId: { not: null },
         unitCostCents: { not: null },
       },

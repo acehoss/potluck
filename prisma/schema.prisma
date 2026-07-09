@@ -1310,3 +1310,21 @@ model CategoryAssignment {
 
   @@unique([householdId, normalizedName])
 }
+
+// ---- Phase 4 Round 4: transactional notification outbox -----------------------
+
+// Written INSIDE the transaction that makes a notification necessary (first
+// consumer: reconcile commit's shortage notices — "your order changed" must
+// not vanish if the process dies between commit and send). Drained right
+// after the tx and by the in-process scheduler as backstop; attempts caps the
+// retry so a permanently-failing row can't wedge the drain.
+model NotifyOutbox {
+  id        String    @id @default(cuid())
+  kind      String // "reconcile-shortage"
+  payload   String // JSON, kind-specific
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+  sentAt    DateTime?
+
+  @@index([sentAt])
+}

@@ -426,6 +426,10 @@ export const orderRouter = router({
               quantity: line.quantity,
               costCents,
               clientKey: input.clientKey ? `${input.clientKey}:${line.id}` : null,
+              // App-side ms timestamp: the column default is second-precision
+              // CURRENT_TIMESTAMP, too coarse for the reconcile stale-count
+              // guard's took-after-counted comparison (Round 4).
+              takenAt: new Date(),
             },
           });
           await tx.orderLine.update({ where: { id: line.id }, data: { takeId: take.id } });

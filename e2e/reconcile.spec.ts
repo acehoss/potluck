@@ -218,6 +218,65 @@ test('commit: count-where-found derives a move; residual variance needs an ack',
   }
 });
 
+test('stale count: a pickup after counting forces a recount before commit', async ({}, testInfo) => {
+  const P = testInfo.project.name;
+  const owner = await apiLogin(reconcilerOf(P));
+  const requester = await apiLogin(ordererOf(P));
+  let sessionId: string | undefined;
+  try {
+    const pantry = (await ok(owner, 'pantry.create', { name: uniq('Stale Pick', P) })).id as string;
+    const { lotId } = await receiveLotApi(owner, pantry, uniq('Stale Beans', P), 5);
+    const cart = await ok(requester, 'order.addToCart', { pantryId: pantry, lotId, quantity: 2 });
+    const orderId = cart.orderId as string;
+    await ok(requester, 'order.submit', { orderId });
+    await ok(owner, 'order.startPicking', { orderId });
+    await ok(owner, 'order.markReady', { orderId });
+
+    const session = await ok(owner, 'reconcile.create', { pantryIds: [pantry] });
+    sessionId = session.sessionId as string;
+    const line = (session.lines as SessionLine[]).find((l) => l.lotId === lotId)!;
+
+    // Counted with the reserved units still on the shelf…
+    await ok(owner, 'reconcile.count', { sessionId, lineId: line.lineId, counted: 5 });
+    // …then the pickup completes (the cutoff lets it through).
+    await ok(requester, 'order.pickup', { orderId, clientKey: `e2e-rc-sp-${P}-${RUN}` });
+
+    // Committing the stale 5 would restore the 2 picked-up units as a
+    // phantom "found" variance — the server refuses instead.
+    const staleCommit = await rpc(owner, 'reconcile.commit', {
+      sessionId,
+      commitClientKey: `e2e-rc-sc1-${P}-${RUN}`,
+      acknowledgedVariances: [{ lineId: line.lineId, delta: 2 }],
+      rejectedMoveLots: [],
+      shortageResolutions: [],
+    });
+    expect(staleCommit.status).toBe(412);
+    expect(JSON.stringify(staleCommit.body)).toContain('picked from after');
+
+    // The payload flags the line for the UI.
+    const refreshed = await queryOk(owner, 'reconcile.get', { sessionId });
+    const flagged = (refreshed.lines as (SessionLine & { takenSinceCount: number })[]).find(
+      (l) => l.lineId === line.lineId,
+    )!;
+    expect(flagged.takenSinceCount).toBeGreaterThan(0);
+
+    // A recount clears it and the commit lands with no variance.
+    await ok(owner, 'reconcile.count', { sessionId, lineId: line.lineId, counted: 3 });
+    const committed = await ok(owner, 'reconcile.commit', {
+      sessionId,
+      commitClientKey: `e2e-rc-sc2-${P}-${RUN}`,
+      acknowledgedVariances: [],
+      rejectedMoveLots: [],
+      shortageResolutions: [],
+    });
+    sessionId = undefined;
+    expect(committed.variances).toBe(0);
+  } finally {
+    if (sessionId) await rpc(owner, 'reconcile.abandon', { sessionId });
+    await abandonOpenSession(owner);
+  }
+});
+
 test('pantry freeze: finalize-into and transfer-into a counted pantry are refused', async ({}, testInfo) => {
   const P = testInfo.project.name;
   const owner = await apiLogin(reconcilerOf(P));
