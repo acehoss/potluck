@@ -1,7 +1,7 @@
 # Plan to Eat — product & data-model research (2026-07-03)
 
 Research for the mutual-aid rework's recipe book / meal planner / shopping list branch
-(see ../REWORK.md §G/§H). Based on Plan to Eat's help center (learn.plantoeat.com), blog,
+(see ../archive/mutual-aid-rework-2026-07.md §G/§H). Based on Plan to Eat's help center (learn.plantoeat.com), blog,
 extension-store listings, and third-party discussion. Where docs are silent (parsing
 internals, default mealtime names), that's flagged explicitly.
 

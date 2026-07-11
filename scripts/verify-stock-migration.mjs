@@ -1,6 +1,6 @@
 /**
  * Proof harness for the 20260708150000_stock_placements migration
- * (docs/REWORK.md Phase 4 S1/S2).
+ * (docs/archive/mutual-aid-rework-2026-07.md Phase 4 S1/S2).
  *
  * Builds a synthetic pre-placement world with the cases the data-preserving
  * migration must survive — a finalized lot with units and an open-order

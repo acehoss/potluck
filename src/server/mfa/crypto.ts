@@ -1,6 +1,6 @@
 /**
  * MFA secret encryption + login-challenge pending tokens (Phase 3 Round B;
- * docs/REWORK.md N8).
+ * docs/archive/mutual-aid-rework-2026-07.md N8).
  *
  * The TOTP secret is the long-lived shared key behind every code — a DB read
  * must NOT yield it, so it is stored AES-256-GCM-encrypted and only ever

@@ -1,4 +1,4 @@
--- Phase 3 Round A — mail substrate (docs/REWORK.md N1–N11). Additive only:
+-- Phase 3 Round A — mail substrate (docs/archive/mutual-aid-rework-2026-07.md N1–N11). Additive only:
 -- two new tables, no changes to any existing table, so every money invariant
 -- and the append-only ledger are untouched.
 --

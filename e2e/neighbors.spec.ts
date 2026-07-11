@@ -4,7 +4,7 @@ import { autoDismissFirstRun, login, openNeighbors, PASSWORD } from './helpers';
 
 /**
  * Phase-2 Round E — the IA flip. The root became the NEIGHBORS dashboard
- * (docs/REWORK.md P1/P2/P3): an attention strip (same source as Activity)
+ * (docs/archive/mutual-aid-rework-2026-07.md P1/P2/P3): an attention strip (same source as Activity)
  * ABOVE a shares section and one section per connected household, each carrying
  * that pair's balance (the /ledger entry point — the Ledger tab retired), a
  * lending line, and member cards into /households/[id]. Ledger/Orders/Items

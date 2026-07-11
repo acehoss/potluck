@@ -1,5 +1,5 @@
 /**
- * MFA persistence + verification services (Phase 3 Round B; docs/REWORK.md N8).
+ * MFA persistence + verification services (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N8).
  * The db-touching layer over the pure helpers in `./codes`, `./totp`, `./crypto`
  * — the routers call these; the pure pieces stay unit-testable on their own.
  */

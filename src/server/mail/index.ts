@@ -1,5 +1,5 @@
 /**
- * The mail delivery substrate (Phase 3 Round A; docs/REWORK.md N1–N11).
+ * The mail delivery substrate (Phase 3 Round A; docs/archive/mutual-aid-rework-2026-07.md N1–N11).
  *
  * Two DELIBERATELY SEPARATE pipelines so the two classes of mail can never be
  * confused at a call site:

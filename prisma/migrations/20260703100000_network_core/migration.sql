@@ -1,4 +1,4 @@
--- Potluck Round 1 slice 1 — network core (docs/REWORK.md):
+-- Potluck Round 1 slice 1 — network core (docs/archive/mutual-aid-rework-2026-07.md):
 --   Membership (user↔household, capability flags) replaces User.householdId;
 --   Connection (pairwise, two directional grant sets); User.username +
 --   Household.slug identity; Product.householdId (per-household namespaces);

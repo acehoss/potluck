@@ -1,5 +1,5 @@
 /**
- * Notification-preference resolution (Phase 3 Round C; docs/REWORK.md N4/N5/N6)
+ * Notification-preference resolution (Phase 3 Round C; docs/archive/mutual-aid-rework-2026-07.md N4/N5/N6)
  * — the db-bound half. The pure default table + `resolveChannelPrefs` live in
  * `./notify/defaults` (db-free, unit-testable); this module re-exports them and
  * adds the Prisma lookups the notify fan-out (`push.ts`) and the mail

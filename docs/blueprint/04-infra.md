@@ -17,7 +17,7 @@ Facts verified against `node_modules/next/dist/docs/` (Next 16.2.10), `npm view`
 > (§9) — and §4–§5 were brought current (the notify matrix supersedes the old
 > two-event push rule; `COOP_DATA`/`APP_BIND`/`APP_PORT` compose overrides;
 > entrypoint boot guards; migrations through `20260706120000_plan_shopping_tracking`).
-> Decision rationale lives in docs/REWORK.md § "Phase 3" (N1–N11).
+> Decision rationale lives in docs/archive/mutual-aid-rework-2026-07.md § "Phase 3" (N1–N11).
 
 ## 1. Image pipeline
 

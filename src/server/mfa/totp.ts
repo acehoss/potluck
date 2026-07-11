@@ -1,5 +1,5 @@
 /**
- * TOTP primitives (Phase 3 Round B; docs/REWORK.md N8) — a thin, deliberately
+ * TOTP primitives (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N8) — a thin, deliberately
  * small wrapper over otplib so the ±1-step skew window and the issuer/label
  * convention live in exactly one place. otplib's `authenticator` is a shared
  * singleton, so the window is set here at module load, once.

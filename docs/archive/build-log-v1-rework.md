@@ -1,10 +1,14 @@
 # Potluck — Build-plan archive (v1 → rework Rounds 1–4)
 
-Frozen history split out of [PLAN.md](../PLAN.md) on 2026-07-07: rework Rounds 1–4
+> **Historical record, frozen 2026-07-11.** Nothing in this file is current work.
+> Current behavior lives in [`../../SPEC.md`](../../SPEC.md); unshipped work lives in
+> [`../../ROADMAP.md`](../../ROADMAP.md).
+
+Frozen history split out of the active build log on 2026-07-07: rework Rounds 1–4
 (2026-07-03/04), the Potluck rework design note, the 2026-07-03 iteration rounds
 (orders/requests, receiving polish, pre-handoff hardening), and the original v1 slice
 notes (2026-07-02). Newest first. Nothing here is live work — the outstanding-work list
-sits at the top of PLAN.md and the canonical deferred list in [REWORK.md](./REWORK.md).
+sat at the top of that build log and in the rework decision record.
 
 ## Round 4 — meal planner + shopping (2026-07-04) — THE REWORK IS COMPLETE
 
@@ -500,10 +504,11 @@ instances), plus needs/surpluses sharing, a recipe book, and Plan-to-Eat-style m
 planning + shopping lists integrated with cross-network pantry orders.
 
 **The full design interview record and implementation seed is
-[docs/REWORK.md](./docs/REWORK.md)** — every decision (DECIDED by Aaron or ASSUMED
+[`mutual-aid-rework-2026-07.md`](./mutual-aid-rework-2026-07.md)** — every decision
+(DECIDED by Aaron or ASSUMED
 veto-able), the drafted capability/grant vocabularies, and the round plan. Supporting
-research: [docs/research/plan-to-eat.md](./docs/research/plan-to-eat.md) and
-[docs/research/federation.md](./docs/research/federation.md).
+research: [`../research/plan-to-eat.md`](../research/plan-to-eat.md) and
+[`../research/federation.md`](../research/federation.md).
 
 Headline decisions: full multi-membership with per-household capability flags (RBAC-lite,
 roles as presets) · connections carry **directional** grants each side controls

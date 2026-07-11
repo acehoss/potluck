@@ -1,6 +1,6 @@
 /**
  * Notification-category defaults — the PURE, db-free spine of Round C's channel
- * matrix (docs/REWORK.md N5). Kept in its own leaf (no `./db` import, so no
+ * matrix (docs/archive/mutual-aid-rework-2026-07.md N5). Kept in its own leaf (no `./db` import, so no
  * Prisma client is constructed on import) precisely so it can be unit-tested
  * with `tsx --test` and shared by both the notify fan-out (`push.ts`) and the
  * mail subscription gate (`mail/index.ts`). The db-bound lookups that build on

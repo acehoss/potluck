@@ -1,5 +1,5 @@
 /**
- * Proof harness for the 20260704150000_circles migration (docs/REWORK.md P4).
+ * Proof harness for the 20260704150000_circles migration (docs/archive/mutual-aid-rework-2026-07.md P4).
  *
  * Builds a synthetic pre-circles world with the pathological cases the
  * data-preserving migration must survive — distinct grant tuples, two

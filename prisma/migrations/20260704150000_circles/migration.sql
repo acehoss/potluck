@@ -1,4 +1,4 @@
--- Potluck Phase-2 Round B — circles (docs/REWORK.md P4):
+-- Potluck Phase-2 Round B — circles (docs/archive/mutual-aid-rework-2026-07.md P4):
 --   Circle (a household's named grant bundle — the six directional grants that
 --   used to live per-connection) + PantryCircle/ItemCircle/MembershipCircle
 --   SELECT-scope joins. Connection drops its 12 aGrants*/bGrants* columns for

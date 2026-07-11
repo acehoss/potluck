@@ -1,4 +1,4 @@
--- Phase 3 Round B — account-security flows (docs/REWORK.md N8/N10). Additive
+-- Phase 3 Round B — account-security flows (docs/archive/mutual-aid-rework-2026-07.md N8/N10). Additive
 -- only: five new User columns (all nullable or defaulted) plus four new tables.
 -- No existing table is rewritten and no money/ledger structure is touched, so
 -- every money invariant and the append-only ledger survive unchanged.

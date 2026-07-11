@@ -1,5 +1,5 @@
 /**
- * MFA backup codes (Phase 3 Round B; docs/REWORK.md N8). PURE except for the
+ * MFA backup codes (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N8). PURE except for the
  * argon2 hasher import (no db/env) so generation + hashing is unit-testable.
  *
  * 8–10 human-typeable one-time recovery codes, hashed with the PASSWORD hasher

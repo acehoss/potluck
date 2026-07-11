@@ -6,7 +6,7 @@ npx prisma migrate deploy
 # Image volume layout (blueprint 04 §1); sh has no brace expansion.
 mkdir -p /data/images/receipts /data/images/units /data/images/items /data/images/shares /data/images/recipes /data/images/avatars
 
-# MFA secret-encryption key (Phase 3 Round B; docs/REWORK.md N8/N10). The value
+# MFA secret-encryption key (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N8/N10). The value
 # below is a PUBLICLY KNOWN dev/e2e key — committed, so it must NEVER protect a
 # real deployment's TOTP secrets. Demo/e2e stacks (SEED_DEMO=1) get it injected
 # so the fixture accounts boot enrolled with zero setup; outside demo mode the
@@ -61,7 +61,7 @@ if [ "$SEED_DEMO" != "1" ]; then
   fi
 fi
 
-# Mail substrate boot guards (Phase 3 Round A; docs/REWORK.md N1–N11).
+# Mail substrate boot guards (Phase 3 Round A; docs/archive/mutual-aid-rework-2026-07.md N1–N11).
 # MAIL_MODE defaults to capture (record-only, never touches SMTP). Two guards:
 #   1. FATAL: a seeded/demo stack must NEVER send unfiltered to real recipients.
 #      SEED_DEMO=1 + MAIL_MODE=live + MAIL_PRODUCTION=1 (dev-filter disabled) is
@@ -82,7 +82,7 @@ if [ "$SEED_DEMO" != "1" ] && [ "$MAIL_MODE" = "capture" ]; then
   echo "         actually deliver." >&2
 fi
 
-# RFC-8058 one-click unsubscribe secret (Phase 3 Round C; docs/REWORK.md N5).
+# RFC-8058 one-click unsubscribe secret (Phase 3 Round C; docs/archive/mutual-aid-rework-2026-07.md N5).
 # The value below is the PUBLICLY KNOWN dev/e2e fallback baked into
 # src/server/mail/unsub.ts — committed, so it must NEVER sign a real
 # deployment's unsubscribe tokens (a public secret makes the HMAC forgeable, so

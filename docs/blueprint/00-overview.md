@@ -9,20 +9,22 @@ direction stated below.
 > **connections**, each Membership carries capability flags, and reads are connection-scoped
 > (the old "everyone sees everything" is gone — a pair's ledger is visible only to its two
 > households). SPEC.md was rewritten to match; 01–04 are **amended inline** below (decisions
-> 9/10 here; the marked sections in 02/04). Decision log: [../REWORK.md](../REWORK.md);
-> as-built behavior + gates: PLAN.md's "Round 1 slice N" sections (pointer at the foot of
+> 9/10 here; the marked sections in 02/04). Decision log: [../archive/mutual-aid-rework-2026-07.md](../archive/mutual-aid-rework-2026-07.md);
+> as-built behavior + gates: the archived build log's "Round 1 slice N" sections (pointer at the foot of
 > this file).
 
-> **After the Round-1 freeze (dated pointers — PLAN.md/REWORK.md own the detail).**
+> **After the Round-1 freeze (dated pointers — the archived build/rework records own the detail).**
 > **Rework Rounds 2–4 + Phase 2 (2026-07-04/05):** shares · recipes · planner+shopping,
 > then the workflow IA flip (tabs Neighbors · Plan · Home · More), **circles** as the
-> entire permissions model, and the contact layer — REWORK.md "Phase 2" (P1–P7).
+> entire permissions model, and the contact layer — archived rework record "Phase 2"
+> (P1–P7).
 > **Phase 3 (2026-07-05):** mail transport, email verification + password reset + MFA,
 > the notification preference matrix + digest, RFC-8058 `/unsub`, nav-only `/go` deep
-> links — REWORK.md "Phase 3" (N1–N11); decision 9 below is amended accordingly.
+> links — archived rework record "Phase 3" (N1–N11); decision 9 below is amended
+> accordingly.
 > **Rounds Q–T (2026-07-06):** device-feedback polish — history-aware back navigation,
 > recipe read + Cook views, URL-import photo download, plan↔shopping wiring, dvh tab
-> bar, contact vCard — PLAN.md's per-round records (newest first).
+> bar, contact vCard — archived build log's per-round records (newest first).
 
 ## Section index
 
@@ -83,9 +85,9 @@ direction stated below.
 
 **Potluck Round 1 (network core)** ships outside this v1 slice table. Its four network-core
 slices — schema/data migration → capability+grant authz & acting household → connection
-management UI → onboarding + instance admin — are recorded in **PLAN.md's "Round 1 slice N"
+management UI → onboarding + instance admin — are recorded in **docs/archive/build-log-2026-07.md's "Round 1 slice N"
 sections** (behavior as built + the e2e gates); SPEC §4 is the current domain contract and
-`docs/REWORK.md` the decision log.
+`docs/archive/mutual-aid-rework-2026-07.md` the decision log.
 
 Definition of done per slice: the Playwright anchors at the end of `02-ux-flows.md`, run
 against the compose stack on chromium (light) + webkit (dark).

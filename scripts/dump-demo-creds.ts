@@ -1,6 +1,6 @@
 /**
  * Print the demo accounts' credentials for one-time authenticator import
- * (Phase 3 Round B; docs/REWORK.md N10). For each seeded account it emits the
+ * (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N10). For each seeded account it emits the
  * username/email, the demo password, the `otpauth://` provisioning URI, and a
  * terminal QR — scan it (or import the URI) into 1Password/Authy and the codes
  * it produces match the fixture secret the demo stack boots with.

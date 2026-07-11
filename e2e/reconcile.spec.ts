@@ -147,7 +147,7 @@ test('commit: count-where-found derives a move; residual variance needs an ack',
   try {
     const pantryC = (await ok(owner, 'pantry.create', { name: uniq('Math C', P) })).id as string;
     const pantryD = (await ok(owner, 'pantry.create', { name: uniq('Math D', P) })).id as string;
-    const { lotId, stockId } = await receiveLotApi(owner, pantryC, uniq('Math Rice', P), 5);
+    const { lotId } = await receiveLotApi(owner, pantryC, uniq('Math Rice', P), 5);
 
     // Session 1: 2 units physically live in D — count where found.
     let session = await ok(owner, 'reconcile.create', { pantryIds: [pantryC, pantryD] });

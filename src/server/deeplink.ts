@@ -1,5 +1,5 @@
 /**
- * Navigation-only deep-link tokens (Phase 3 Round D; docs/REWORK.md N7).
+ * Navigation-only deep-link tokens (Phase 3 Round D; docs/archive/mutual-aid-rework-2026-07.md N7).
  *
  * A notification (push OR email) carries a `/go?t=<token>` link. The token is a
  * stateless HMAC over {path, householdId, exp} that the `/go` route verifies to

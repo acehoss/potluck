@@ -1,4 +1,4 @@
--- Digest cadence (docs/REWORK.md, digest-cadence round). Replace the boolean
+-- Digest cadence (docs/archive/mutual-aid-rework-2026-07.md, digest-cadence round). Replace the boolean
 -- `User.digestOptOut` with a three-way `digestCadence` ('off'|'daily'|'weekly')
 -- plus a per-user send time (`digestHour` 0–23 local, `digestWeekday` 0=Sun..6=
 -- Sat for the weekly cadence). Data-preserving: existing opted-OUT users become

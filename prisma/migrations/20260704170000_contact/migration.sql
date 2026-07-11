@@ -1,4 +1,4 @@
--- Potluck Phase-2 Round C — contact layer (docs/REWORK.md P5):
+-- Potluck Phase-2 Round C — contact layer (docs/archive/mutual-aid-rework-2026-07.md P5):
 --   User gains the person's card fields (photoPath "avatars" image · phone ·
 --   bio); Household gains its pickup logistics (address · pickupNotes). All
 --   nullable — a plain additive migration, no table rebuild. Member visibility
