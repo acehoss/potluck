@@ -283,6 +283,7 @@ export function PlanView({
       {editEntry && (
         <EditSheet
           entry={editEntry}
+          recipes={recipes}
           onClose={() => setEditEntry(null)}
           onDone={() => {
             setEditEntry(null);
@@ -608,23 +609,28 @@ function AddSheet({
   );
 }
 
-/** Edit one entry: move meal/day, rescale a recipe, or remove it. */
+/** Edit one entry: replace its content, move meal/day, or remove it. */
 function EditSheet({
   entry,
+  recipes,
   onClose,
   onDone,
 }: {
   entry: PlanEntry;
+  recipes: WeekRecipe[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [meal, setMeal] = useState<Meal>(entry.meal as Meal);
-  const [date, setDate] = useState(''); // filled by the caller's day; see below
+  const [date, setDate] = useState(''); // empty leaves the existing day unchanged
+  const [recipeId, setRecipeId] = useState(entry.recipeId ?? '');
   const [servings, setServings] = useState<number | null>(entry.servings);
+  const [entryText, setEntryText] = useState(entry.text ?? '');
   const [error, setError] = useState<string | null>(null);
-  const isRecipe = entry.kind === 'recipe' && entry.recipeId !== null;
+  const isRecipe = entry.kind === 'recipe';
+  const selectedRecipe = recipes.find((recipe) => recipe.id === recipeId);
 
   // "Add to shopping list" (per-entry). Independent of Save/Remove: it keeps the
   // sheet open, shows an inline count, and re-invalidates the week so the row's
@@ -652,12 +658,22 @@ function EditSheet({
   function save(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!isRecipe && !entryText.trim()) {
+      setError('Enter some text.');
+      return;
+    }
     update.mutate({
       entryId: entry.id,
       meal,
       // Only send date when the user picked one (empty = leave it).
       date: date || undefined,
-      servingsOverride: isRecipe && servings != null ? servings : undefined,
+      recipeId: isRecipe && recipeId ? recipeId : undefined,
+      servingsOverride: isRecipe
+        ? servings != null && servings !== selectedRecipe?.servings
+          ? servings
+          : null
+        : undefined,
+      text: isRecipe ? undefined : entryText.trim(),
     });
   }
 
@@ -675,7 +691,7 @@ function EditSheet({
         onSubmit={save}
         className="flex w-full max-w-md flex-col gap-4 rounded-t-xl border border-border bg-surface-raised p-4 shadow-sm sm:rounded-xl"
       >
-        <h2 className="truncate text-lg font-semibold">{title}</h2>
+        <h2 className="truncate text-lg font-semibold">Edit {title}</h2>
 
         {isRecipe && entry.recipeId && (
           <Link
@@ -703,6 +719,43 @@ function EditSheet({
           </select>
         </label>
 
+        {isRecipe ? (
+          <label className="flex flex-col gap-1 text-sm font-medium text-text">
+            Recipe
+            <select
+              data-testid="plan-entry-recipe"
+              value={recipeId}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                const next = recipes.find((recipe) => recipe.id === nextId);
+                setRecipeId(nextId);
+                setServings(next?.servings ?? null);
+                setError(null);
+              }}
+              className={inputClass}
+            >
+              {!recipeId && <option value="">Pick a recipe…</option>}
+              {recipes.map((recipe) => (
+                <option key={recipe.id} value={recipe.id}>
+                  {recipe.title}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label className="flex flex-col gap-1 text-sm font-medium text-text">
+            {entry.kind === 'item' ? 'Item' : 'Note'}
+            <input
+              type="text"
+              data-testid="plan-entry-text"
+              value={entryText}
+              maxLength={300}
+              onChange={(e) => setEntryText(e.target.value)}
+              className={inputClass}
+            />
+          </label>
+        )}
+
         <label className="flex flex-col gap-1 text-sm font-medium text-text">
           Move to day
           <input
@@ -714,7 +767,7 @@ function EditSheet({
           />
         </label>
 
-        {isRecipe && (
+        {isRecipe && recipeId && (
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium text-text">Servings</span>
             <div className="flex items-center gap-3">
@@ -753,7 +806,7 @@ function EditSheet({
           </div>
         )}
 
-        {isRecipe && (
+        {isRecipe && entry.recipeId && (
           <div className="flex flex-col gap-1">
             <button
               type="button"

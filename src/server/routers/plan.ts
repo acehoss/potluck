@@ -198,8 +198,8 @@ export const planRouter = router({
 
   /**
    * Edit an own-household entry: move it (date/meal — re-appends position in the
-   * target column), rescale it (servingsOverride; null clears the override), or
-   * retitle an item/note (text). Only fields present change.
+   * target column), replace/rescale a recipe, or retitle an item/note. Only
+   * fields present change.
    */
   updateEntry: protectedProcedure
     .input(
@@ -207,6 +207,7 @@ export const planRouter = router({
         entryId: z.string().min(1),
         date: dateSchema.optional(),
         meal: mealSchema.optional(),
+        recipeId: z.string().min(1).optional(),
         servingsOverride: z.number().int().min(1).max(999).nullish(),
         text: z.string().trim().min(1).max(300).optional(),
       }),
@@ -219,6 +220,12 @@ export const planRouter = router({
         if (!entry || entry.householdId !== H) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Plan entry not found.' });
         }
+        if (input.recipeId !== undefined && entry.kind === 'recipe') {
+          const recipe = await tx.recipe.findUnique({ where: { id: input.recipeId } });
+          if (!recipe || recipe.householdId !== H) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Recipe not found.' });
+          }
+        }
         const newDate = input.date ?? entry.date;
         const newMeal = input.meal ?? entry.meal;
         const moved = newDate !== entry.date || newMeal !== entry.meal;
@@ -230,6 +237,11 @@ export const planRouter = router({
         }
         // undefined = leave the override; null = clear it; a number = set it.
         if (input.servingsOverride !== undefined) data.servingsOverride = input.servingsOverride;
+        // Recipe entries may be repointed to another recipe in the household's
+        // own book. This also repairs a tombstone left by a deleted recipe.
+        if (input.recipeId !== undefined && entry.kind === 'recipe') {
+          data.recipe = { connect: { id: input.recipeId } };
+        }
         // Text only applies to item/note entries — a recipe entry stays text-null.
         if (input.text !== undefined && entry.kind !== 'recipe') data.text = input.text;
         await tx.planEntry.update({ where: { id: entry.id }, data });

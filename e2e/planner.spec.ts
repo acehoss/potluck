@@ -192,7 +192,7 @@ async function cleanShopping(api: Api, token: string) {
 
 // ---------------------------------------------------------------------------
 
-test('week CRUD (H1): three kinds grouped/ordered, move + servingsOverride, remove, bad date 400, foreign recipe 404', async ({}, testInfo) => {
+test('week CRUD (H1): three kinds grouped/ordered, edit content, move + servingsOverride, remove, bad date 400, foreign recipe 404', async ({}, testInfo) => {
   const P = testInfo.project.name;
   const aaron = await apiLogin('aaron');
   const dana = await apiLogin('dana');
@@ -200,10 +200,12 @@ test('week CRUD (H1): three kinds grouped/ordered, move + servingsOverride, remo
   const D1 = '2026-08-04';
 
   let recipeId: string | undefined;
+  let replacementRecipeId: string | undefined;
   let danaRecipeId: string | undefined;
   const entries: (string | undefined)[] = [];
   try {
     recipeId = (await ok(aaron, 'recipe.create', { title: uniq('Plan Me', P), servings: 4, ingredients: [] })).id;
+    replacementRecipeId = (await ok(aaron, 'recipe.create', { title: uniq('Plan Me Instead', P), servings: 2, ingredients: [] })).id;
 
     // All three kinds; two land in the SAME (date, meal) column to prove ordering.
     const r1 = (await ok(aaron, 'plan.addEntry', { date: D0, meal: 'breakfast', kind: 'recipe', recipeId })).id;
@@ -226,6 +228,18 @@ test('week CRUD (H1): three kinds grouped/ordered, move + servingsOverride, remo
     expect(eN1?.kind).toBe('note');
     expect(eR1!.position, 'first-added sits before second in the column').toBeLessThan(eI1!.position);
 
+    // The content of all three entry kinds is editable in place.
+    const editedItem = uniq('Plantains', P);
+    const editedNote = uniq('Freezer raid', P);
+    await ok(aaron, 'plan.updateEntry', { entryId: i1, text: editedItem });
+    await ok(aaron, 'plan.updateEntry', { entryId: n1, text: editedNote });
+    await ok(aaron, 'plan.updateEntry', { entryId: r1, recipeId: replacementRecipeId });
+    week = await planWeek(aaron, D0);
+    expect(findEntry(week, D0, 'breakfast', i1)?.text).toBe(editedItem);
+    expect(findEntry(week, D1, 'dinner', n1)?.text).toBe(editedNote);
+    expect(findEntry(week, D0, 'breakfast', r1)?.recipeId).toBe(replacementRecipeId);
+    expect(findEntry(week, D0, 'breakfast', r1)?.recipeTitle).toBe(uniq('Plan Me Instead', P));
+
     // Move r1 → D1 lunch (re-appended in the target column) and set an override.
     await ok(aaron, 'plan.updateEntry', { entryId: r1, date: D1, meal: 'lunch', servingsOverride: 3 });
     week = await planWeek(aaron, D0);
@@ -239,7 +253,7 @@ test('week CRUD (H1): three kinds grouped/ordered, move + servingsOverride, remo
     week = await planWeek(aaron, D0);
     const cleared = findEntry(week, D1, 'lunch', r1);
     expect(cleared?.servingsOverride).toBeNull();
-    expect(cleared?.servings).toBe(4);
+    expect(cleared?.servings).toBe(2);
 
     // Remove the item entry → gone from the grid.
     await ok(aaron, 'plan.removeEntry', { entryId: i1 });
@@ -259,9 +273,14 @@ test('week CRUD (H1): three kinds grouped/ordered, move + servingsOverride, remo
       (await rpc(aaron, 'plan.addEntry', { date: D0, meal: 'lunch', kind: 'recipe', recipeId: danaRecipeId })).status,
       "another household's recipe → 404",
     ).toBe(404);
+    expect(
+      (await rpc(aaron, 'plan.updateEntry', { entryId: r1, recipeId: danaRecipeId })).status,
+      "another household's recipe cannot replace a planned recipe → 404",
+    ).toBe(404);
   } finally {
     await removeEntriesQuietly(aaron, entries);
     await deleteRecipeQuietly(aaron, recipeId);
+    await deleteRecipeQuietly(aaron, replacementRecipeId);
     await deleteRecipeQuietly(dana, danaRecipeId);
   }
 });
@@ -594,6 +613,81 @@ function localToday() {
     n.getDate(),
   ).padStart(2, '0')}`;
 }
+
+test('Plan UI: replace a recipe and rewrite item/note entries', async ({ page }, testInfo) => {
+  const P = testInfo.project.name;
+  const today = localToday();
+  const originalRecipe = uniq('Edit Original', P);
+  const replacementRecipe = uniq('Edit Replacement', P);
+  const originalItem = uniq('Edit Item', P);
+  const replacementItem = uniq('Edited Item', P);
+  const originalNote = uniq('Edit Note', P);
+  const replacementNote = uniq('Edited Note', P);
+  const entryIds: string[] = [];
+  let originalRecipeId: string | undefined;
+  let replacementRecipeId: string | undefined;
+
+  await login(page, 'aaron');
+  try {
+    originalRecipeId = (
+      await ok(page.request, 'recipe.create', {
+        title: originalRecipe,
+        servings: 4,
+        ingredients: [],
+      })
+    ).id as string;
+    replacementRecipeId = (
+      await ok(page.request, 'recipe.create', {
+        title: replacementRecipe,
+        servings: 2,
+        ingredients: [],
+      })
+    ).id as string;
+    entryIds.push(
+      (await ok(page.request, 'plan.addEntry', {
+        date: today,
+        meal: 'dinner',
+        kind: 'recipe',
+        recipeId: originalRecipeId,
+      })).id,
+      (await ok(page.request, 'plan.addEntry', {
+        date: today,
+        meal: 'dinner',
+        kind: 'item',
+        text: originalItem,
+      })).id,
+      (await ok(page.request, 'plan.addEntry', {
+        date: today,
+        meal: 'dinner',
+        kind: 'note',
+        text: originalNote,
+      })).id,
+    );
+
+    await page.goto('/plan');
+
+    await page.getByTestId('plan-entry').filter({ hasText: originalRecipe }).click();
+    await page.getByTestId('plan-entry-recipe').selectOption(replacementRecipeId);
+    await page.getByTestId('plan-entry-meal').selectOption('lunch');
+    await page.getByTestId('plan-entry-save').click();
+    await expect(page.getByTestId('plan-entry-sheet')).toBeHidden();
+    await expect(page.getByTestId('plan-entry').filter({ hasText: replacementRecipe })).toBeVisible();
+
+    await page.getByTestId('plan-entry').filter({ hasText: originalItem }).click();
+    await page.getByTestId('plan-entry-text').fill(replacementItem);
+    await page.getByTestId('plan-entry-save').click();
+    await expect(page.getByTestId('plan-entry').filter({ hasText: replacementItem })).toBeVisible();
+
+    await page.getByTestId('plan-entry').filter({ hasText: originalNote }).click();
+    await page.getByTestId('plan-entry-text').fill(replacementNote);
+    await page.getByTestId('plan-entry-save').click();
+    await expect(page.getByTestId('plan-entry').filter({ hasText: replacementNote })).toBeVisible();
+  } finally {
+    await removeEntriesQuietly(page.request, entryIds);
+    await deleteRecipeQuietly(page.request, originalRecipeId);
+    await deleteRecipeQuietly(page.request, replacementRecipeId);
+  }
+});
 
 test('Plan surface (P3): an outgoing REQUESTED order renders under plan-outgoing-orders and deep-links to its detail', async ({
   page,
