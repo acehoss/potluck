@@ -20,7 +20,7 @@ import { apiLogin, login, openHome } from './helpers';
  * (/api/dev/push-sink/<id>) — the REAL web-push encryption + VAPID + HTTP
  * delivery runs, only the push service is stood in for. Browser-side
  * pushManager.subscribe (needs a push-service connection) is a documented
- * real-device task in PLAN.md.
+ * real-device task in ROADMAP.md.
  *
  * Both projects share one database: sink ids, endpoints, products, and notes
  * are unique per project + run.

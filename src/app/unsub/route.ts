@@ -1,5 +1,5 @@
 /**
- * RFC-8058 one-click unsubscribe (Phase 3 Round C; docs/REWORK.md N3/N5). Honors
+ * RFC-8058 one-click unsubscribe (Phase 3 Round C; docs/archive/mutual-aid-rework-2026-07.md N3/N5). Honors
  * the HMAC token minted into every subscription message's List-Unsubscribe
  * header (Round A). NO session required — the signed token IS the authorization
  * (constant-time HMAC verify in `verifyUnsubToken`); it can only ever turn a

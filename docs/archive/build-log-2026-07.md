@@ -1,8 +1,13 @@
 # Potluck — Build Plan
 
-Newest-first build records: one entry per round, appended when it ships. The scope
-contract is [SPEC.md](./SPEC.md) §7; the decision log is
-[docs/REWORK.md](./docs/REWORK.md).
+> **Historical record, frozen 2026-07-11.** This was the newest-first implementation
+> journal for the initial build and rework. It is not an active plan. Current behavior
+> lives in [`../../SPEC.md`](../../SPEC.md); unshipped work lives in
+> [`../../ROADMAP.md`](../../ROADMAP.md).
+
+Newest-first build records: one entry per round, appended when it shipped. The scope
+contract was `SPEC.md` §7; the corresponding decision log is
+[`mutual-aid-rework-2026-07.md`](./mutual-aid-rework-2026-07.md).
 
 **Definition of done** (unchanged since v1): the feature demonstrated working in a real
 browser against the real compose stack, Playwright e2e passing on both engines, notes
@@ -10,12 +15,12 @@ updated here. A round is never "complete" on the strength of unit tests alone.
 
 History older than Phase 2 — rework Rounds 1–4, the rework design note, the 2026-07-03
 iteration rounds, and the v1 slices — is archived verbatim in
-[docs/plan-archive.md](./docs/plan-archive.md).
+[`build-log-v1-rework.md`](./build-log-v1-rework.md).
 
 ## Outstanding work (hoisted 2026-07-07)
 
-The canonical deferred backlog lives in [docs/REWORK.md](./docs/REWORK.md) ("Canonical
-deferred list"). Near-term items hoisted from round notes below and from the archive:
+At the time, the canonical deferred backlog lived in the rework record. Near-term items
+were hoisted from round notes below and from the archive:
 
 - **Receive wizard notch inset** (Round Q follow-up): the headerless receive wizard
   still starts at y=0 on notch devices — its top wrapper needs the same
@@ -926,4 +931,3 @@ hand-driven browser demo (screenshots `.playwright-mcp/round-a/`). The full-suit
 proof rides the Round-B integration gate. e2e updates: slice5's landProposal always
 goes through Process; "no proposal ever offers one-tap Confirm"; new sheet-photo test;
 slice2's abandon flow moved to the explicit button + a ✕-persists-then-resume check.
-

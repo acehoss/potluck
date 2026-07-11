@@ -1,4 +1,4 @@
--- Potluck Phase-4 Round 1 — stock placements (docs/REWORK.md S1/S2 + Round-0 A-series):
+-- Potluck Phase-4 Round 1 — stock placements (docs/archive/mutual-aid-rework-2026-07.md S1/S2 + Round-0 A-series):
 --   Lot stops implying location. New Stock table = the units of one lot currently
 --   in one pantry (count + the soft order-hold reservedCount, both moved off Lot).
 --   Lot keeps receipt lineage + frozen cost; Restock.pantryId becomes the default

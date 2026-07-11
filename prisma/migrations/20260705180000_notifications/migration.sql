@@ -1,4 +1,4 @@
--- Phase 3 Round C — notification preferences + weekly digest (docs/REWORK.md
+-- Phase 3 Round C — notification preferences + weekly digest (docs/archive/mutual-aid-rework-2026-07.md
 -- N4/N5/N6). Additive only: five new User columns (all nullable or defaulted)
 -- plus one new table (NotificationPreference). No existing table is rewritten
 -- and no money/ledger structure is touched, so every money invariant and the

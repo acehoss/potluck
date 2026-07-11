@@ -1,12 +1,16 @@
 # Potluck
 
+[![CI](https://github.com/acehoss/potluck/actions/workflows/ci.yml/badge.svg)](https://github.com/acehoss/potluck/actions/workflows/ci.yml)
+
 A self-hosted web app (PWA) for **mutual aid between households**: each household is a
 node, pairwise connections carry per-side grants, and connected households share pantry
 goods and equipment **at cost** with a netted per-pair ledger. (Formerly "Private Coop" —
 renamed with the Round-1 network rework.)
 
 - **[SPEC.md](./SPEC.md)** — scope, domain model, flows, technical requirements
-- **[PLAN.md](./PLAN.md)** — build slices, status, progress notes
+- **[ROADMAP.md](./ROADMAP.md)** — the active, unshipped backlog
+- **[docs/decisions/](./docs/decisions/)** — durable product and architecture decisions
+- **[docs/archive/](./docs/archive/)** — frozen build and rework history
 
 ## Run it
 
@@ -33,6 +37,13 @@ npm run test:unit
 # Off-mode extraction e2e (boots its own EXTRACTION_MODE=off stack, then downs it)
 npm run e2e:off
 ```
+
+GitHub CI runs on every push to `main` and every pull request targeting `main`. It gates
+lint, semantic-token enforcement, TypeScript, unit tests, migration verifiers, the
+production build, the full Chromium/WebKit Playwright suite against the real Compose
+stack, and the separate extraction-off case. Hardware checks and opt-in live SMTP/IMAP
+remain manual because GitHub's beige Linux box owns neither a phone nor our mailbox
+credentials, mercifully.
 
 Demo logins (only when seeded): usernames `aaron`, `marie`, `dana`, `nia`, `theo`
 (emails like `aaron@demo.coop` also work), password `demo-password`. Three seeded

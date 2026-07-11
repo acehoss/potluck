@@ -1,5 +1,11 @@
 # Mutual-aid rework — vision & decision log
 
+> **Historical record, frozen 2026-07-11.** This captures the design and reasoning for
+> the initial mutual-aid rework and later phases; its status language is not current.
+> Current behavior lives in [`../../SPEC.md`](../../SPEC.md), active work in
+> [`../../ROADMAP.md`](../../ROADMAP.md), and new durable choices in
+> [`../decisions/`](../decisions/).
+
 **Status:** design locked 2026-07-03 (grilling complete). This doc is the implementation
 seed: a fresh session starts here. Every decision below is either **DECIDED** (Aaron
 answered) or **ASSUMED (veto-able)** (recommended default recorded for veto — treat as
@@ -174,7 +180,7 @@ Aaron answers so the reasoning trail survives.
   Credit-Commons-style per-connection hashchain for money agreement (mismatch freezes
   money on that edge pending human reconciliation), ValueFlows naming for event payloads.
   Not AP/Matrix/ATProto/Nostr as substrate — see
-  [research/federation.md](./research/federation.md). A read-only AP surface (e.g. public
+  [research/federation.md](../research/federation.md). A read-only AP surface (e.g. public
   surplus feed followable from Mastodon) stays a door.
 - **E2. Identity addressing — DECIDED via A2/E1.** `user@instance` and
   `household@instance` (WebFinger `acct:`); requires `User.username` + `Household.slug`,
@@ -226,7 +232,7 @@ Aaron answers so the reasoning trail survives.
   directions; prep/cook time; course/cuisine/tags (user-editable lists); photo; servings
   (+ separate yield) with proportional scaling; paste-recipe-text parser assist; only
   title required. Recipes belong to a household. Nutrition is OUT (door). See
-  [research/plan-to-eat.md](./research/plan-to-eat.md).
+  [research/plan-to-eat.md](../research/plan-to-eat.md).
 - **G2. Ingredient ↔ product linking — DECIDED (2026-07-03).** **Per-household name
   mapping.** Ingredient lines stay text; an `IngredientLink` table (household, normalized
   ingredient name → productId) is learned each time a user confirms a match and then
@@ -304,7 +310,8 @@ Aaron answers so the reasoning trail survives.
 engines.** Round 1 (five slices) shipped in the overnight autonomous session; Rounds 2–4
 shipped the following day as coordinated teammate rounds (server → UI ∥ e2e per round).
 Full per-round records — decisions, deviations, gates — are in
-[docs/plan-archive.md](./plan-archive.md) (split out of PLAN.md 2026-07-07).
+[`build-log-v1-rework.md`](./build-log-v1-rework.md) (split out of the active build log
+2026-07-07).
 Scope cuts taken in Round 4 per H3/H4's "if scope allows": menus/queue/leftovers/freezer,
 staples list, and multiple named stores are follow-ups, not shipped; categories with
 learned assignment shipped.
@@ -404,7 +411,7 @@ Friend (+pantry, lending, recipes), Family (everything + reshare).
 
 ## Research notes
 
-- **Plan to Eat deep dive** — done, see [research/plan-to-eat.md](./research/plan-to-eat.md).
+- **Plan to Eat deep dive** — done, see [research/plan-to-eat.md](../research/plan-to-eat.md).
   Headlines: structured ingredient lines (amount/unit/item/note) are the load-bearing
   model choice; shopping-list merging is conservative (same title+unit only, no cross-unit
   math) with a learned per-user ingredient→category/store map; menus are date-relative
@@ -413,7 +420,7 @@ Friend (+pantry, lending, recipes), Family (everything + reshare).
   transitive sharing; PTE deliberately KILLED their decrementing-pantry feature ("removing
   items from someone's shopping list without them knowing is never a good idea") in favor
   of a static Staples list + shop-at-home-first check-offs.
-- **Federation protocol survey** — done, see [research/federation.md](./research/federation.md).
+- **Federation protocol survey** — done, see [research/federation.md](../research/federation.md).
   Headlines: no existing protocol fits as substrate. ActivityPub = right identity parts
   (WebFinger, signed HTTP), wrong interaction model (async, receipt-less, no real access
   control) — and Forgejo's multi-year experimental slog is the cost datapoint. Matrix =

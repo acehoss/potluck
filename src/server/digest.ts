@@ -1,5 +1,5 @@
 /**
- * The digest (Phase 3 Round C + the digest-cadence round; docs/REWORK.md N6).
+ * The digest (Phase 3 Round C + the digest-cadence round; docs/archive/mutual-aid-rework-2026-07.md N6).
  * The home for all ambient/nice-to-know mail — the ONE place a Walt (email-
  * native, never installs the PWA, tunes out past ~5–6 mails/week) still hears
  * about the neighborhood. Scannable + subject front-loads the point ("you're

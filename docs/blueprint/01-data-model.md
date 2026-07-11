@@ -169,7 +169,7 @@ Migrations: `slice2_receiving` (Product, Restock, RestockImage, Lot) · `slice3_
 
 ## Round 1 deltas (network core, 2026-07-04)
 
-New models — see `prisma/schema.prisma` for full definitions; REWORK.md for rationale:
+New models — see `prisma/schema.prisma` for full definitions; docs/archive/mutual-aid-rework-2026-07.md for rationale:
 
 - **`Membership`** (user↔household, `@@unique([userId, householdId])`) replaces
   `User.householdId`. Eleven boolean capability flags (`src/server/capabilities.ts`;
@@ -215,7 +215,7 @@ never-connected households are unreachable and read as 404).
 
 Three connection-scoped feature families, all riding the same authz choke point,
 **all adding zero money paths** — see `prisma/schema.prisma` for full definitions,
-REWORK.md §§F/G/H for rationale.
+docs/archive/mutual-aid-rework-2026-07.md §§F/G/H for rationale.
 
 **Shares (Round 2, REWORK F).** A post is a NEED or a SURPLUS; **shares are gifts (C1)
 and never touch the ledger** — a tracked SURPLUS handoff records $0 Takes for the audit
@@ -333,7 +333,7 @@ connection itself is the gate** (P5).
 ## Phase 3 deltas (mail · auth · MFA · notifications, 2026-07-05; digest cadence 2026-07-06)
 
 Account-plumbing only — **no model in this phase touches money or the ledger**. See
-REWORK.md "Phase 3" (N1–N11) for the decision record.
+docs/archive/mutual-aid-rework-2026-07.md "Phase 3" (N1–N11) for the decision record.
 
 **Mail (Round A, N1/N3/N9).** Two pipelines behind one swappable transport:
 `sendTransactional` (never consults prefs/suppression, no unsubscribe, always sends) vs

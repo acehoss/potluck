@@ -1,5 +1,5 @@
 /**
- * Durable demo-only MFA fixtures (Phase 3 Round B; docs/REWORK.md N10).
+ * Durable demo-only MFA fixtures (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N10).
  *
  * PURE leaf — string constants + otplib only, NO db/next/prisma imports — so the
  * Playwright loader and the seed can both pull it by relative path without

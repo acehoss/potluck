@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
 
 /**
- * Two-step sign-in (MFA) card on More (Phase-3 Round B; docs/REWORK.md N8).
+ * Two-step sign-in (MFA) card on More (Phase-3 Round B; docs/archive/mutual-aid-rework-2026-07.md N8).
  * Every member manages their own second factor here: enroll an authenticator
  * app (QR + secret → confirm a live code → save one-time backup codes), also
  * opt into emailed codes (a code proves inbox control first), or turn TOTP back

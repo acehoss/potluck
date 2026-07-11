@@ -23,7 +23,7 @@ declare global {
  *
  * Camera failure is a first-class path (headless browsers, denied permission,
  * plain-http LAN): the sheet explains itself and the manual UPC search stays
- * the fallback. Scanning is verified on real phones (PLAN.md owner task).
+ * the fallback. Real-phone verification is tracked in ROADMAP.md.
  *
  * The camera effect runs ONCE per mount: `onDetected` is read through a ref,
  * so an unstable parent callback (or any parent re-render while the sheet is

@@ -1,6 +1,6 @@
 /**
  * Emailed MFA code — generation + the pure lifecycle state machine (Phase 3
- * Round B; docs/REWORK.md N8). A 6-digit convenience/enrollment code, hashed at
+ * Round B; docs/archive/mutual-aid-rework-2026-07.md N8). A 6-digit convenience/enrollment code, hashed at
  * rest with an HMAC keyed by the per-instance MFA key (a bare sha256 of a
  * 6-digit value is a 10^6 lookup; the keyed pepper makes a leaked hash useless
  * without the server secret). Short-TTL, attempt-capped, single-use.

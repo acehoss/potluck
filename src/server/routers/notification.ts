@@ -10,7 +10,7 @@ import {
 import { protectedProcedure, router } from '../trpc';
 
 /**
- * Notification preferences (Phase 3 Round C; docs/REWORK.md N4/N5/N6). The
+ * Notification preferences (Phase 3 Round C; docs/archive/mutual-aid-rework-2026-07.md N4/N5/N6). The
  * self-serve surface behind the /more preferences screen + first-run consent.
  * Reads/writes are always the ACTING user's OWN prefs — there is no
  * cross-user/household preference (a pref is per-person, spanning every

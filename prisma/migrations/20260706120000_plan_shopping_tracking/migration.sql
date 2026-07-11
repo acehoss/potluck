@@ -1,4 +1,4 @@
--- Plan/shopping tracking (round S, docs/REWORK.md). Add
+-- Plan/shopping tracking (round S, docs/archive/mutual-aid-rework-2026-07.md). Add
 -- PlanEntry.addedToShoppingAt — a nullable "was sent to the shopping list"
 -- marker, stamped by shopping.generate (range) and the new shopping.addFromEntry
 -- (single entry). Deliberately NOT a live link: shopping-list rows merge, get

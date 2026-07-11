@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  quality:
+    name: Static, unit, migration, and build checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CI: 'true'
+      DATABASE_URL: file:./ci.db
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint -- --max-warnings=0
+
+      - name: Enforce semantic color tokens
+        run: npm run lint:tokens
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Verify data-preserving migrations
+        run: |
+          node scripts/verify-circles-migration.mjs
+          node scripts/verify-stock-migration.mjs
+
+      - name: Build production app
+        run: npm run build
+
+  e2e:
+    name: E2E (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: full
+            extraction_mode: fixture
+          - suite: extraction-off
+            extraction_mode: off
+    env:
+      CI: 'true'
+      DATABASE_URL: file:./ci.db
+      APP_BIND: 127.0.0.1
+      SEED_DEMO: '1'
+      EXTRACTION_MODE: ${{ matrix.extraction_mode }}
+      MAIL_MODE: capture
+      DIGEST_SCHEDULER: 'off'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Install Playwright browsers and system dependencies
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Start isolated Compose stack
+        run: |
+          docker compose down -v --remove-orphans
+          docker compose up -d --wait --build
+
+      - name: Run full Playwright suite
+        if: matrix.suite == 'full'
+        run: npm run e2e -- --reporter=line,html
+
+      - name: Run extraction-off Playwright case
+        if: matrix.suite == 'extraction-off'
+        run: npx playwright test slice5 -g 'off mode' --reporter=line,html
+
+      - name: Capture Compose logs after failure
+        if: failure()
+        run: docker compose logs --no-color > compose.log 2>&1 || true
+
+      - name: Upload Playwright report and failure traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-${{ matrix.suite }}
+          path: |
+            playwright-report/
+            test-results/
+            compose.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans

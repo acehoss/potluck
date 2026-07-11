@@ -1,6 +1,6 @@
 /**
  * Barcode helpers (blueprint 04 §2). Pure functions, unit-tested — the camera
- * loop itself needs real hardware and is verified on-device (PLAN.md).
+ * loop itself needs real hardware and is tracked for on-device verification in ROADMAP.md.
  */
 
 /**

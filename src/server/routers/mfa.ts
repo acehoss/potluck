@@ -16,7 +16,7 @@ import { checkRateLimit } from '../rate-limit';
 import { protectedProcedure, router } from '../trpc';
 
 /**
- * MFA management (Phase 3 Round B; docs/REWORK.md N8). Mounted at `auth.mfa`.
+ * MFA management (Phase 3 Round B; docs/archive/mutual-aid-rework-2026-07.md N8). Mounted at `auth.mfa`.
  *
  * Canonical surface (coordinator lock) is ONE begin/confirm/disable triplet
  * parameterized by `method` ('totp' | 'email') — not a procedure per factor:

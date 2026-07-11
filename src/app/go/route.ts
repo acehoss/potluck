@@ -1,5 +1,5 @@
 /**
- * Deep-link landing route (Phase 3 Round D; docs/REWORK.md N7). A notification
+ * Deep-link landing route (Phase 3 Round D; docs/archive/mutual-aid-rework-2026-07.md N7). A notification
  * (push OR email) points here with `?t=<token>`; this route verifies the
  * nav-only token and does at most two things — switch the acting household and
  * redirect to the target screen.

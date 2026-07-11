@@ -6,7 +6,7 @@
 > gating authz) shipped in Round 1/Phase 2, and the remaining items are honored design
 > constraints.
 
-Research for the mutual-aid rework's federation branch (see ../REWORK.md §E). Question:
+Research for the mutual-aid rework's federation branch (see ../archive/mutual-aid-rework-2026-07.md §E). Question:
 which existing federation protocol (if any) fits the model — households as nodes, private
 pairwise connections with capabilities (pantry browsing + at-cost orders on an append-only
 integer-cents ledger, equipment lending, expiring hop-limited needs/surpluses posts,

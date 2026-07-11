@@ -10,7 +10,7 @@ import { apiLogin, login, PASSWORD } from './helpers';
 import { fixtureTotpCode, TESTID } from './auth-fixtures';
 
 /**
- * Phase-3 Round D — navigation-only deep links (docs/REWORK.md N7). A
+ * Phase-3 Round D — navigation-only deep links (docs/archive/mutual-aid-rework-2026-07.md N7). A
  * notification's CTA link routes the recipient to the specific screen AND
  * switches to the right acting household, but NEVER authenticates and NEVER
  * performs an action: logged-out hits bounce through a normal login (the target

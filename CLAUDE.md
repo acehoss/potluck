@@ -2,7 +2,42 @@
 
 Potluck (formerly "Private Coop"): a self-hosted web app (PWA) for mutual aid between households — nodes in a network of pairwise connections sharing pantry goods and equipment at cost, with a netted per-household-pair ledger.
 
-## Current state (2026-07-07)
+`CLAUDE.md` is the canonical agent guide. `AGENTS.md` is a symlink to this file so Claude
+and Codex receive the same project instructions. Edit this file, never replace the
+symlink with a divergent copy.
+
+## Framework warning
+
+This is **not** the Next.js you know. This version has breaking changes; APIs,
+conventions, and file structure may differ from training data. Read the relevant guide
+in `node_modules/next/dist/docs/` before writing Next.js code and heed deprecation
+notices.
+
+## Documentation layout
+
+- **[SPEC.md](./SPEC.md)** — the living description of what the production app does and
+  the invariants it must preserve.
+- **[ROADMAP.md](./ROADMAP.md)** — the only active backlog. It contains unshipped work
+  only; remove entries when they ship.
+- **[docs/decisions/](./docs/decisions/)** — short, durable records explaining why
+  consequential product or architecture choices were made.
+- **Git history** — the source of truth for what shipped. Use a concise changelog or
+  release notes if humans need a curated release view.
+- **[docs/archive/](./docs/archive/)** — frozen build journals and the original rework
+  decision log. They are historical evidence, never current status or task routing.
+
+Do not create another planning source. Update `SPEC.md` for as-built behavior,
+`ROADMAP.md` for unshipped work, and a decision record only when the reasoning is durable.
+
+## Current state (2026-07-11)
+
+**Phase 4 is complete and hardened.** Inventory now uses pantry-specific stock
+placements; same-household transfers and per-line receive allocation are live; reconcile
+uses server-side draft sessions with freeze guards, shortage handling, idempotent commit,
+and a notification outbox. Product/item media galleries, share circle scoping, iOS photo
+picker fixes, and the removal of photo-label UI also shipped after the state summary
+below. See the living spec for current behavior and the frozen July build log for the
+implementation record.
 
 **Rounds Q–T + follow-ups (2026-07-06) — device feedback, recipes UX, nav model.**
 **Round Q** — six real-device fixes plus the app's back-navigation primitive:
@@ -41,7 +76,8 @@ HMAC deep-link tokens + the `/go` route (a notification tap lands on the actiona
 AND switches the acting household; email links route-then-login-to-act, never authenticate)
 + login `next=` continuation. All capture-mode-gated on both engines; the live DreamHost
 send is proven (delivered), IMAP receipt-verify awaits an auth-throttle cooldown. Decision
-record: REWORK.md "Phase 3" (N1–N11); per-round records in PLAN.md. Migrations
+record: `docs/archive/mutual-aid-rework-2026-07.md` "Phase 3" (N1–N11); per-round records
+are in `docs/archive/build-log-2026-07.md`. Migrations
 `20260705100000_mail`, `20260705140000_auth`, `20260705180000_notifications` (Round D adds
 none — stateless token). Deferred cosmetic follow-up: unify the MFA router's per-factor
 aliases. Money invariants + append-only ledger untouched throughout.
@@ -56,8 +92,9 @@ per-household grant bundles replace per-connection grants; pantry/item/member
 visibility = ALL/SELECT[circles]/PRIVATE; `grantsFrom` resolves circles behind the
 unchanged authz API; grant loss reads 404), and the **contact layer** (profiles with
 photo/phone/bio, household address + pickup notes, /households/[id] member cards
-with tel:/sms:/vCard — connection IS the gate). Phase-2 decision record: REWORK.md
-"Phase 2" section (focus-group synthesis + P1–P7); per-round records in PLAN.md.
+with tel:/sms:/vCard — connection IS the gate). The Phase-2 decision record is the
+"Phase 2" section of `docs/archive/mutual-aid-rework-2026-07.md`; per-round records are
+in `docs/archive/build-log-2026-07.md`.
 
 **v1 + rework state (still true underneath):**
 Round 1 (network core, five slices) shipped in an overnight autonomous session
@@ -69,10 +106,11 @@ IngredientLink map, paste-to-parse + SSRF-guarded URL import), **Round 4** plann
 shopping (PlanEntry week planner, a persistent never-silently-removed ShoppingItem list
 with PTE-conservative merging, learned categories, cross-pantry availability badges
 feeding the existing order flow). Every round committed green on both engines against
-the real container; all migrations additive. See PLAN.md (newest first) for per-round
-records and docs/REWORK.md for the decision log.
+the real container; all migrations additive. Historical detail is in
+`docs/archive/build-log-2026-07.md` and
+`docs/archive/mutual-aid-rework-2026-07.md`.
 
-What the rework changed structurally (read PLAN.md + docs/REWORK.md before touching):
+What the rework changed structurally:
 - **Membership replaces `User.householdId`** — a user belongs to N households, each with
   11 capability flags (`src/server/capabilities.ts`); `getSessionUser()` resolves the
   sticky **acting household** (`potluck_household` cookie) behind the legacy `householdId`
@@ -105,13 +143,8 @@ Migrations: `20260703100000_network_core` (the big data-preserving one),
 append-only ledger survived untouched** — shares/recipes/planner add zero money paths
 (gifts post $0 takes, shopping's add-to-order calls the existing `order.addToCart`).
 
-Do not start large autonomous workflows without an explicit ask. The **canonical
-deferred list** lives in docs/REWORK.md (blockquote after the Round plan: minors + the
-waiting-on-an-adult handoff state; staples/stores/menus/queue; federation build-out;
-connection-scoped image serving; the /ledger React #418 hydration warning; …); the
-near-term items are hoisted to "Outstanding work" at the top of PLAN.md — resume from
-there. (Notifications and per-invite grant presets used to be on this list; both have
-shipped.)
+Do not start large autonomous workflows without an explicit ask. The only active backlog
+is `ROADMAP.md`; do not infer current work from the archived build and rework records.
 
 **SPEC.md, the blueprints, and README were re-synced to the running app 2026-07-07**
 (post-Rounds Q–T; SPEC was first rewritten at Round 1/R1S5). Rebrand notes: cookies are `potluck_session`/`potluck_household`
@@ -123,9 +156,12 @@ by upsert). The jar brand mark stayed — a new mark can ride the domain hunt.
 ## Read first
 
 - **[SPEC.md](./SPEC.md)** — the scope contract: domain model, flows, money invariants, out-of-scope guardrails. Deliberately small; keep it that way.
-- **[PLAN.md](./PLAN.md)** — newest-first per-round build records, with the outstanding-work list at the top. Append dated notes for any change. Pre-Phase-2 history (v1 slices, rework Rounds 1–4) is archived in [docs/plan-archive.md](./docs/plan-archive.md).
+- **[ROADMAP.md](./ROADMAP.md)** — unshipped work only; this is the task-routing source.
+- **[docs/decisions/](./docs/decisions/)** — durable rationale for consequential choices.
 - **[README.md](./README.md)** — how to run it, and the "Go live" deploy runbook (bootstrap the first household, TLS reverse proxy, secrets).
 - **[docs/blueprint/](./docs/blueprint/)** — 00 overview, 01 data model + money invariants, 02 UX flows, 03 design system, 04 infra. Authoritative for money/lifecycle questions.
+- **[docs/archive/](./docs/archive/)** — historical build/rework evidence; never treat its
+  stale status language as current.
 
 ## Run it
 
