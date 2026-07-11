@@ -329,6 +329,7 @@ test('vCard route: reach-gated, RFC-escaped, session-required, and private-membe
     expect(res.status()).toBe(200);
     expect(res.headers()['content-type']).toContain('text/vcard');
     const body = await res.text();
+    expect(body).toContain('N:;Dana;;;');
     expect(body).toContain('FN:Dana');
     // The TEL line is phoneHref-normalized (profile-polish round): dana's seed
     // "555-0188" is 7 digits (not a +1-able US number), so it emits bare digits.
